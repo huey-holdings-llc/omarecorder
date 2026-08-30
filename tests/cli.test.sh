@@ -159,6 +159,19 @@ for i in $(seq 1 20); do "$CLI" config set threads "$i" >/dev/null & done; wait
 V1=$(jq -r .version "$RUN/state.json")
 check "20 parallel config sets → 20 version bumps" test $((V1 - V0)) -ge 20
 "$CLI" config set threads 0 >/dev/null
+# the state lock: a waiting writer gets its turn; one that cannot must fail, never write unlocked
+( flock 9; sleep 3 ) 9>>"$RUN/state.lock" &
+LOCKER=$!; sleep 0.3
+check "state_set waits for a held lock" "$CLI" config set threads 7
+wait "$LOCKER" 2>/dev/null
+eq "and its write landed" "$("$CLI" config get threads)" "7"
+( flock 9; sleep 4 ) 9>>"$RUN/state.lock" &
+LOCKER=$!; sleep 0.3
+V_BEFORE=$(jq -r .version "$RUN/state.json")
+fails "state_set refuses when the lock never frees (OMARECORDER_LOCK_WAIT=1)" env OMARECORDER_LOCK_WAIT=1 "$CLI" config set threads 8
+wait "$LOCKER" 2>/dev/null
+eq "state.json untouched by the refused write" "$(jq -r .version "$RUN/state.json")" "$V_BEFORE"
+"$CLI" config set threads 0 >/dev/null
 # crash recovery for a "both" take that died before the mix
 IDB="2026-01-05_010203"; DB="$OMARECORDER_DIR/$IDB Both crash"; mkdir -p "$DB"
 cp "$TMP/quiet.wav" "$DB/mic.wav"; cp "$TMP/quiet.wav" "$DB/system.wav"

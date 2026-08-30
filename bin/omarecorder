@@ -146,20 +146,33 @@ read_state() { # always normalized to {recording, jobs, version}
 save_state() { write_json "$STATE_FILE" "$(jq -c '.version = ((.version // 0) + 1)' <<<"$1")"; }
 # Every read-modify-write of state.json runs under one flock so concurrent
 # CLI calls (UI actions, workers, keybindings) never lose each other's update.
-with_lock() { mkdir -p "$RUN_DIR"; ( flock -w 5 9 || log "state lock timeout"; "$@" ) 9>>"$STATE_LOCK"; }
+# If the lock cannot be taken the call fails; it never runs unlocked (two
+# read-modify-writes racing would lose one of them). Nothing holds the lock for
+# long: reconcile does its ffmpeg work outside it. OMARECORDER_LOCK_WAIT: tests.
+with_lock() {
+  mkdir -p "$RUN_DIR"
+  ( flock -w "${OMARECORDER_LOCK_WAIT:-30}" 9 || { log "state lock timeout: $*"; exit 1; }; "$@" ) 9>>"$STATE_LOCK"
+}
 _bump_state() { save_state "$(read_state)"; }
 _state_set() { save_state "$(jq -c "$@" <<<"$(read_state)")"; }
 bump_state() { with_lock _bump_state; }
 # state_set [jq args...] <filter>: apply a jq filter to the state and save it
 state_set() { with_lock _state_set "$@"; }
-reconcile_state() { with_lock _reconcile_state; }
+# reconcile_state: drop dead recordings/jobs from the state (short, under the
+# lock), then repair whatever take was orphaned (ffmpeg passes, outside the lock).
+reconcile_state() {
+  local ddir; ddir=$(with_lock _reconcile_state)
+  [[ -n "$ddir" ]] && recover_take "$ddir"
+  return 0
+}
 
 pid_alive() { kill -0 "$1" 2>/dev/null; }
 
 # oneshot units report "activating" while they run — treat that as alive.
 unit_active() { [[ "$(systemctl --user show -p ActiveState --value "$1" 2>/dev/null)" =~ ^(active|activating|reloading|deactivating)$ ]]; }
 
-# Drop dead recordings/jobs from state (called by status & before mutations).
+# The locked half of reconcile: state only, no ffmpeg. Prints the folder of a
+# recording whose recorder died so the caller can repair it after the lock is gone.
 _reconcile_state() {
   local st changed=0
   st=$(read_state)
@@ -170,17 +183,7 @@ _reconcile_state() {
       local ddir mpid; ddir=$(jq -r '.recording.dir // empty' <<<"$st"); mpid=$(jq -r '.recording.meter_pid // empty' <<<"$st")
       stop_meter "$mpid"
       st=$(jq -c '.recording=null' <<<"$st"); changed=1; log "reconcile: cleared dead recording"
-      if [[ -n "$ddir" && -d "$ddir" ]]; then
-        # A "both" take that died before the mix has only mic.wav + system.wav.
-        if [[ ! -f "$ddir/audio.wav" && -f "$ddir/mic.wav" && -f "$ddir/system.wav" ]]; then
-          repair_wav "$ddir/mic.wav" || true; repair_wav "$ddir/system.wav" || true; mix_both "$ddir" || true
-        fi
-        if [[ -f "$ddir/audio.wav" ]]; then
-          repair_wav "$ddir/audio.wav" || true; finalize_audio "$ddir"; analyze_levels "$ddir"
-          local rttl; rttl=$(jq -r '.title // empty' "$ddir/meta.json"); rttl="${rttl:-$(basename "$ddir")}"
-          notify "Recording recovered · $rttl" "The recorder stopped unexpectedly; $(fmt_hms "$(jq -r '.duration_s // 0' "$ddir/meta.json")") of audio was saved."
-        fi
-      fi
+      [[ -n "$ddir" && -d "$ddir" ]] && printf '%s\n' "$ddir"
     fi
   fi
   local keep='[]' j
@@ -193,6 +196,22 @@ _reconcile_state() {
   st=$(jq -c --argjson k "$keep" '.jobs=$k' <<<"$st")
   [[ $changed == 1 ]] && save_state "$st"
   return 0
+}
+
+# recover_take <dir>: a take whose recorder died (power loss, shell killed).
+# Repair the WAV header, mix a "both" take, measure it, tell the user. Runs
+# outside the state lock; only the final bump touches state.json.
+recover_take() {
+  local ddir="$1"
+  # A "both" take that died before the mix has only mic.wav + system.wav.
+  if [[ ! -f "$ddir/audio.wav" && -f "$ddir/mic.wav" && -f "$ddir/system.wav" ]]; then
+    repair_wav "$ddir/mic.wav" || true; repair_wav "$ddir/system.wav" || true; mix_both "$ddir" || true
+  fi
+  [[ -f "$ddir/audio.wav" ]] || return 0
+  repair_wav "$ddir/audio.wav" || true; finalize_audio "$ddir"; analyze_levels "$ddir"
+  local rttl; rttl=$(jq -r '.title // empty' "$ddir/meta.json"); rttl="${rttl:-$(basename "$ddir")}"
+  notify "Recording recovered · $rttl" "The recorder stopped unexpectedly; $(fmt_hms "$(jq -r '.duration_s // 0' "$ddir/meta.json")") of audio was saved."
+  bump_state
 }
 
 # ------------------------------------------------------------ recordings ----
@@ -830,7 +849,7 @@ _dl_worker() {
   # only watches state.json; nothing polls the model directory).
   while pid_alive "$child"; do
     sleep 2; b=0; [[ -f "$f" ]] && b=$(file_size "$f"); [[ -f "$f.part" ]] && b=$(file_size "$f.part")
-    state_set --arg m "$name" --argjson b "$b" '.jobs |= map(if .type=="download" and .model==$m then .bytes_done=$b else . end)'
+    state_set --arg m "$name" --argjson b "$b" '.jobs |= map(if .type=="download" and .model==$m then .bytes_done=$b else . end)' || true
   done
   if wait "$child" && model_installed "$name"; then
     notify "Model ready · $(model_label "$name")" "You can pick it in the Library now"; log "download ok $name"
@@ -947,7 +966,7 @@ _tx_worker() {
   for piece in "${plan[@]}"; do
     i=$((i + 1)); s=${piece% *}; e=${piece#* }
     state_set --arg id "$id" --argjson n "$i" --argjson N "$n" \
-      '.jobs |= map(if .type=="transcribe" and .id==$id then .progress={chunk:$n, chunks:$N} else . end)'
+      '.jobs |= map(if .type=="transcribe" and .id==$id then .progress={chunk:$n, chunks:$N} else . end)' || true
     if (( n > 1 )); then
       cwav="$RUN_DIR/tx-$id.chunk.wav"
       ffmpeg -v error -y -ss "$s" -to "$e" -i "$input" -c copy "$cwav" || { rc=1; break; }
@@ -967,7 +986,7 @@ _tx_worker() {
   done
   rm -f "$tmpwav" "$RUN_DIR/tx-$id.chunk.wav" "$ctxt"
   if (( rc != 0 )); then
-    state_set --arg id "$id" '.jobs |= map(select(.id != $id))'
+    state_set --arg id "$id" '.jobs |= map(select(.id != $id))' || true
     local why; why=$(grep -iE 'error|failed|cannot|not found' "$errlog" 2>/dev/null | tail -1 | cut -c1-120)
     mkdir -p "$STATE_DIR"; mv -f "$errlog" "$STATE_DIR/tx-$id.err" 2>/dev/null || true
     if (( i > 1 )) && [[ -s "$acc" ]]; then   # some pieces made it: keep them, say so
@@ -987,7 +1006,7 @@ _tx_worker() {
   local rtf; rtf=$(jq -n --argjson d "$done_audio" --argjson e "$elapsed" '(($d / $e) * 100 | round) / 100')
   update_meta "$dir" '.transcript = {model:$m, language:$l, created:$c, elapsed_s:$e, rtf:$r, chunks:$N, chunks_done:$N, partial:false}' \
     --arg m "$model" --arg l "$lang" --arg c "$(now_iso)" --argjson e "$elapsed" --argjson r "$rtf" --argjson N "$n"
-  state_set --arg id "$id" '.jobs |= map(select(.id != $id))'
+  state_set --arg id "$id" '.jobs |= map(select(.id != $id))' || true
   log "transcribe ok $id model=$model pieces=$n elapsed=${elapsed}s rtf=$rtf"
   notify "Transcript ready · $ttl" "$(model_label "$model") took $(fmt_hms "${elapsed%.*}"). Click to open" -- "$SELF" open "$id"
 }
