@@ -325,6 +325,21 @@ check "export --raw uses the raw text" bash -c "\"$CLI\" export '$IDT' --dir '$T
 check "list backfills tidy for an old transcript" bash -c "rm -f '$DT2/transcript.tidy.md'; \"$CLI\" list >/dev/null; test -s '$DT2/transcript.tidy.md'"
 "$CLI" delete "$IDT" --yes >/dev/null
 
+echo "== busy guards"
+IDG=$("$CLI" import "$TMP/quiet.wav" --title "Guard Test")
+jq -cn --arg id "$IDG" '{recording:null,jobs:[{type:"transcribe",id:$id,model:"base.en",started_at:0}],version:1}' > "$RUN/state.json"
+fails "rename refused while transcribing" "$CLI" rename "$IDG" "New Name"
+fails "delete refused while transcribing" "$CLI" delete "$IDG" --yes
+fails "second transcribe refused" "$CLI" transcribe "$IDG" --model base.en
+eq "and the existing job survives the refusal" "$(jq -r '.jobs|length' "$RUN/state.json")" "1"
+"$CLI" cancel "$IDG" >/dev/null
+check "show exits 0 without a transcript" "$CLI" show "$IDG"
+fails "cancel rejects a malformed id" "$CLI" cancel "../escape"
+fails "play rejects trailing garbage" "$CLI" play "$IDG" garbage
+"$CLI" delete "$IDG" --yes >/dev/null
+mkdir -p "$TMP/novox"; printf '#!/bin/sh\nexit 1\n' > "$TMP/novox/voxtype"; chmod +x "$TMP/novox/voxtype"
+check "setup check survives a voxtype that fails" bash -c "PATH=\"$TMP/novox:\$PATH\" \"$CLI\" setup check --json | jq -e '.version' >/dev/null"
+
 echo "== models / estimate"
 check "models --json lists base.en" bash -c "$CLI models --json | jq -e '.[] | select(.name==\"base.en\")'"
 eq "estimate uses default rtf" "$($CLI estimate "$ID1" --model base.en | jq -r '.rtf, .source' | paste -sd,)" "10,default"
@@ -343,6 +358,7 @@ if command -v voxtype >/dev/null && [[ -f "${VOXTYPE_MODELS_DIR:-$HOME/.local/sh
   check "transcript mentions 'right'" bash -c "grep -qi right '$D3/transcript.md'"
   eq "meta.transcript.model" "$(jq -r .transcript.model "$D3/meta.json")" "base.en"
   check "transcription also writes transcript.tidy.md" test -s "$D3/transcript.tidy.md"
+  check "and records the tidy stats in meta" bash -c "jq -e '.transcript.tidy.paragraphs >= 1' '$D3/meta.json'"
   check "short clip does not train the estimate" bash -c "! test -f '$XDG_STATE_HOME/omarecorder/bench.json'"
   check "elapsed_s recorded with sub-second precision" bash -c "jq -e '.transcript.elapsed_s > 0' '$D3/meta.json'"
   ID6=$($CLI import "$TMP/speech60.wav" --title "Speech 60s")
@@ -356,11 +372,9 @@ if command -v voxtype >/dev/null && [[ -f "${VOXTYPE_MODELS_DIR:-$HOME/.local/sh
   check "range header" bash -c "head -1 '$D3/transcript.md' | grep -q 'range=0-3'"
   check "previous transcript kept on re-run" bash -c "head -1 '$D3/transcript.prev.md' | grep -q 'range=0-end'"
 
-  echo "== transcribe (planner failure)"
-  cp "$D3/transcript.md" "$TMP/t3.before"
-  "$CLI" cancel "$ID3" >/dev/null 2>&1; env OMARECORDER_CHUNK_S=abc "$CLI" transcribe "$ID3" --model base.en >/dev/null 2>&1
-  check "a failed piece plan leaves the transcript untouched" cmp -s "$D3/transcript.md" "$TMP/t3.before"
-  check "and does not write '(no speech detected)'" bash -c "! grep -q 'no speech detected' '$D3/transcript.md'"
+  echo "== transcribe (bad OMARECORDER_CHUNK_S falls back)"
+  check "non-numeric OMARECORDER_CHUNK_S still transcribes" env OMARECORDER_CHUNK_S=abc "$CLI" transcribe "$ID3" --model base.en
+  eq "with the default single piece" "$(jq -r '.transcript.chunks' "$D3/meta.json")" "1"
   eq "and leaves no job behind" "$("$CLI" status --json | jq -r '.jobs|length')" "0"
 
   echo "== transcribe (chunked, OMARECORDER_CHUNK_S=25 on the 60 s clip)"
@@ -392,11 +406,12 @@ if command -v voxtype >/dev/null && [[ -f "${VOXTYPE_MODELS_DIR:-$HOME/.local/sh
   echo "== transcribe (detached systemd-run unit)"
   if command -v systemd-run >/dev/null && systemctl --user show -p Version >/dev/null 2>&1; then
     rm -f "$D3/transcript.md"
-    check "detached transcribe starts" env OMARECORDER_SYNC=0 "$CLI" transcribe "$ID3" --model base.en
+    check "detached transcribe starts" env OMARECORDER_SYNC=0 OMARECORDER_CHUNK_S=5 "$CLI" transcribe "$ID3" --model base.en
     eq "job registered with its unit" "$("$CLI" status --json | jq -r '.jobs[0].unit')" "omarecorder-tx-$ID3"
     for _ in $(seq 1 120); do [[ "$("$CLI" status --json | jq -r '.jobs|length')" == "0" ]] && break; sleep 0.5; done
     eq "job drained when the unit finished" "$("$CLI" status --json | jq -r '.jobs|length')" "0"
     check "transcript written by the unit" test -s "$D3/transcript.md"
+    check "OMARECORDER_CHUNK_S reached the unit (12 s at 5 s pieces = 3)" bash -c "jq -e '.transcript.chunks >= 2' '$D3/meta.json'"
     check "unit is gone (collected)" bash -c "! systemctl --user show -p ActiveState --value 'omarecorder-tx-$ID3' | grep -qE '^(active|activating)$'"
   else
     skip "no user systemd manager"
