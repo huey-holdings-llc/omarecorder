@@ -483,6 +483,7 @@ cmd_import() {
   while [[ $# -gt 0 ]]; do
     case "$1" in --move) move=1; shift ;; --title) title="$2"; shift 2 ;; -*) die "unknown option: $1" ;; *) src="$1"; shift ;; esac
   done
+  src="${src/#\~/$HOME}"
   [[ -f "$src" ]] || die "file not found: $src"
   mkdir -p "$ROOT"
   local id; id=$(date -r "$src" +%Y-%m-%d_%H%M%S)

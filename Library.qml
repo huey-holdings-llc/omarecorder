@@ -286,7 +286,7 @@ Item {
                   displayTitle: root.svc ? root.svc.displayTitle(modelData) : ""
                   live: !!(root.svc && modelData.id === root.svc.activeId)
                   elapsedText: root.svc ? root.svc.elapsedText : ""
-                  jobElapsedText: root.svc ? root.svc.fmtHms(root.svc.jobElapsed(root.svc.jobFor(modelData.id))) : ""
+                  jobElapsedText: root.svc ? root.svc.jobProgressText(root.svc.jobFor(modelData.id)) + root.svc.fmtHms(root.svc.jobElapsed(root.svc.jobFor(modelData.id))) : ""
                   clipped: !!(root.svc && root.svc.isClipped(modelData))
                   urgent: root.urgent
                   durationText: root.svc ? root.svc.fmtDuration(modelData.duration_s) : ""
@@ -343,6 +343,7 @@ Item {
                     + (root.selected.transcript ? " · transcribed with " + root.selected.transcript.model : "")
                     + (root.selected.exported_to ? " · in Obsidian" : "")
                     + (root.svc.isClipped(root.selected) ? " · ⚠ clipped" : "")
+                    + (root.svc.isPartial(root.selected) ? " · partial transcript" : "")
                     + (root.playingId === root.selected.id ? " · ▶ playing" : ""))
                   : ""
                 textFormat: Text.PlainText
@@ -350,6 +351,16 @@ Item {
                 font.family: root.fontFamily
                 font.pixelSize: Style.font.caption
                 elide: Text.ElideRight
+              }
+
+              LevelMeter {
+                visible: root.selectedLive
+                width: parent.width
+                peakDb: root.svc ? root.svc.peakDb : -99
+                clip: !!(root.svc && root.svc.clipping)
+                foreground: root.foreground
+                urgent: root.urgent
+                fontFamily: root.fontFamily
               }
 
               // ---- actions ----
@@ -418,7 +429,7 @@ Item {
                 visible: !!root.selectedJob
                 width: parent.width
                 text: root.selectedJob && root.svc
-                  ? "Transcribing with " + root.selectedJob.model + " · " + root.svc.fmtHms(root.svc.jobElapsed(root.selectedJob))
+                  ? "Transcribing with " + root.selectedJob.model + " · " + root.svc.jobProgressText(root.selectedJob) + root.svc.fmtHms(root.svc.jobElapsed(root.selectedJob))
                     + " elapsed · ≈ " + root.svc.fmtDuration(root.svc.estimateSeconds(root.selected.duration_s, root.selectedJob.model)) + " expected"
                   : ""
                 color: Color.accent
@@ -427,6 +438,18 @@ Item {
               }
 
               PanelSeparator { width: parent.width; foreground: root.foreground }
+
+              Text {
+                visible: !root.selectedJob && root.svc && root.selected && (root.svc.isPartial(root.selected) || root.svc.isStale(root.selected))
+                width: parent.width
+                text: root.svc && root.selected && root.svc.isPartial(root.selected)
+                  ? "Partial — stopped after " + root.selected.transcript.chunks_done + "/" + root.selected.transcript.chunks + " pieces. Re-transcribe to finish."
+                  : "The audio was trimmed after this transcript was made — re-transcribe to match."
+                color: Color.accent
+                wrapMode: Text.Wrap
+                font.family: root.fontFamily
+                font.pixelSize: Style.font.caption
+              }
 
               // Transcript tools sit above the text, outside the scroll area, so
               // they stay put however far down a long transcript you are.

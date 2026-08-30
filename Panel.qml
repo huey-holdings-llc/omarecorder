@@ -30,10 +30,11 @@ Panel {
   // Idle shows a microphone (what the button does), recording the red record
   // glyph plus the timer, transcribing an hourglass.
   readonly property string barGlyph: recording ? "󰑊" : (transcribing ? "󰔟" : "󰍬")
-  readonly property string barLabel: recording && !vertical ? "  " + svc.elapsedText : ""
+  // While the input clips the bar says so instead of the timer (the glyph is already urgent-coloured).
+  readonly property string barLabel: recording && !vertical ? "  " + (svc.clipping ? "CLIP" : svc.elapsedText) : ""
   readonly property string stateText: !ready ? "Service unavailable"
-    : recording ? "Recording " + svc.elapsedText + " · " + svc.sourceLabel(svc.activeRecording.source)
-    : transcribing ? "Transcribing " + svc.transcribeElapsedText + " · " + svc.activeJobTitle
+    : recording ? "Recording " + svc.elapsedText + (svc.activeRecording ? " · " + svc.sourceLabel(svc.activeRecording.source) : "") + (svc.clipping ? " · ⚠ clipping" : "")
+    : transcribing ? "Transcribing " + svc.jobProgressText(svc.activeJob) + svc.transcribeElapsedText + " · " + svc.activeJobTitle
     : (svc.downloading ? "Downloading model…" : "Idle")
 
   property bool settingsOpen: false
@@ -68,6 +69,11 @@ Panel {
     if (r.has_transcript) svc.openTranscript(r.id); else svc.transcribe(r.id)
   }
   function toggleRecording() { if (ready) svc.toggleRecording() }
+  // Import = a path field in the popup. (A QtQuick FileDialog crashes
+  // Quickshell on Omarchy 4 — both in-shell and in its own process — so no
+  // graphical picker until that is fixed upstream.)
+  property bool importOpen: false
+  function importAudio() { if (!ready) return; importOpen = !importOpen; if (importOpen) Qt.callLater(function() { importField.forceActiveFocus() }) }
   function openLibrary() { if (ready) { root.close(); svc.openLibrary() } }
 
   IpcHandler {
@@ -80,6 +86,7 @@ Panel {
     function record(): string { root.toggleRecording(); return root.recording ? "stopping" : "starting" }
     function status(): string { return root.stateText }
     function library(): void { root.openLibrary() }
+    function importAudio(): void { root.importAudio() }
   }
 
   // WidgetButton (not BarIconButton) so the bar slot grows with the timer
@@ -111,7 +118,7 @@ Panel {
     PanelKeyCatcher {
       id: keyCatcher
       anchors.fill: parent
-      blocked: settingsSection.visible && settingsSection.activeFocus
+      blocked: (settingsSection.visible && settingsSection.activeFocus) || importField.activeFocus
       onMoveRequested: function(dx, dy) { root.moveCursor(dy) }
       onActivateRequested: root.activateCursor()
       onCloseRequested: root.close()
@@ -120,6 +127,7 @@ Panel {
         if (t === "r" || t === "R") root.toggleRecording()
         else if (t === "l" || t === "L") root.openLibrary()
         else if (t === "s" || t === "S") root.settingsOpen = !root.settingsOpen
+        else if (t === "i" || t === "I") root.importAudio()
       }
 
       Flickable {
@@ -158,6 +166,16 @@ Panel {
                 font.pixelSize: Style.font.display
               }
             }
+          }
+
+          LevelMeter {
+            visible: root.recording
+            width: parent.width
+            peakDb: root.ready ? root.svc.peakDb : -99
+            clip: root.ready && root.svc.clipping
+            foreground: root.foreground
+            urgent: root.urgent
+            fontFamily: root.fontFamily
           }
 
           Text {
@@ -233,7 +251,7 @@ Panel {
                 displayTitle: root.ready ? root.svc.displayTitle(modelData) : ""
                 live: root.ready && modelData.id === root.svc.activeId
                 elapsedText: root.ready ? root.svc.elapsedText : ""
-                jobElapsedText: root.ready ? root.svc.fmtHms(root.svc.jobElapsed(root.svc.jobFor(modelData.id))) : ""
+                jobElapsedText: root.ready ? root.svc.jobProgressText(root.svc.jobFor(modelData.id)) + root.svc.fmtHms(root.svc.jobElapsed(root.svc.jobFor(modelData.id))) : ""
                 clipped: root.ready && root.svc.isClipped(modelData)
                 urgent: root.urgent
                 durationText: root.ready ? root.svc.fmtDuration(modelData.duration_s) : ""
@@ -249,13 +267,23 @@ Panel {
             width: parent.width
             spacing: Style.spacing.sm
             Button {
-              width: parent.width - gear.width - parent.spacing
+              width: parent.width - gear.width - importButton.width - parent.spacing * 2
               text: "Open library  (l)"
               iconText: "󰈔"
               foreground: root.foreground
               fontFamily: root.fontFamily
               enabled: root.ready
               onClicked: root.openLibrary()
+            }
+            PanelActionButton {
+              id: importButton
+              anchors.verticalCenter: parent.verticalCenter
+              iconText: "󰋺"
+              tooltipText: "Import an audio file (i)"
+              foreground: root.foreground
+              fontFamily: root.fontFamily
+              enabled: root.ready
+              onClicked: root.importAudio()
             }
             PanelActionButton {
               id: gear
@@ -265,6 +293,22 @@ Panel {
               foreground: root.settingsOpen ? Color.accent : root.foreground
               fontFamily: root.fontFamily
               onClicked: root.settingsOpen = !root.settingsOpen
+            }
+          }
+
+          Column {
+            visible: root.importOpen && root.ready
+            width: parent.width
+            spacing: Style.spacing.xxs
+            Text { text: "Import an audio file (path, Enter)"; color: root.dim; font.family: root.fontFamily; font.pixelSize: Style.font.caption }
+            TextField {
+              id: importField
+              width: parent.width
+              placeholderText: "~/Downloads/meeting.m4a"
+              foreground: root.foreground
+              font.family: root.fontFamily
+              onAccepted: { if (text.trim().length) { root.svc.importFile(text.trim()); text = ""; root.importOpen = false }; keyCatcher.forceActiveFocus() }
+              Keys.onEscapePressed: { root.importOpen = false; keyCatcher.forceActiveFocus() }
             }
           }
 

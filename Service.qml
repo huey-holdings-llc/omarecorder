@@ -33,6 +33,9 @@ QtObject {
   property var config: ({})
   property var setup: ({ ok: true })
   property string lastError: ""
+  property var level: null            // {peak_db, clip, t} while recording (watched file)
+  readonly property bool clipping: !!(level && level.clip)
+  readonly property real peakDb: level && typeof level.peak_db === "number" ? level.peak_db : -99
   property bool listBusy: false
   property int elapsed: 0
   property int now: Math.floor(Date.now() / 1000)   // ticks once a second while anything runs
@@ -49,6 +52,10 @@ QtObject {
   // Jobs in state.json carry started_at only (elapsed_s is a `status` extra).
   function jobElapsed(j) { return j && j.started_at ? Math.max(0, now - j.started_at) : 0 }
   readonly property string transcribeElapsedText: fmtHms(jobElapsed(activeJob))
+  // "2/4 · " while a long take is transcribed in pieces; "" otherwise.
+  function jobProgressText(j) { return j && j.progress && j.progress.chunks > 1 ? j.progress.chunk + "/" + j.progress.chunks + " · " : "" }
+  function isPartial(rec) { return !!(rec && rec.transcript && rec.transcript.partial) }
+  function isStale(rec) { return !!(rec && rec.transcript && rec.transcript.stale) }
   readonly property string activeJobTitle: activeJob ? displayTitle(recordingById(activeJob.id) || { id: activeJob.id, created: "" }) || activeJob.id : ""
   readonly property string defaultModel: config && config.defaultModel ? config.defaultModel : "base.en"
   readonly property string defaultSource: config && config.defaultSource ? config.defaultSource : "mic"
@@ -127,7 +134,7 @@ QtObject {
   function rename(id, title) { run(["rename", id, title]) }
   function remove(id) { run(["delete", id, "--yes"]) }
   function download(model) { run(["model", "download", model]) }
-  function importFile(path) { run(["import", path]) }
+  function importFile(path) { run(["import", path], function(code) { if (code === 0) root.refreshList() }) }
   function play(id) { run(["play", id]) }
   function stopPlay() { run(["stop-play"]) }
   function openTranscript(id) { Quickshell.execDetached([cli, "open", id]) }
@@ -166,6 +173,18 @@ QtObject {
 
   // Ticks the elapsed clocks only. Everything else is event-driven: the CLI
   // bumps state.json (watched above) whenever anything changes.
+  // The meter file exists only while recording; watching it costs nothing idle.
+  property FileView levelView: FileView {
+    path: root.recording ? root.levelFile : ""
+    watchChanges: true
+    blockLoading: false
+    printErrors: false
+    onFileChanged: reload()
+    onLoaded: { try { root.level = JSON.parse(text()) } catch (e) {} }
+    onLoadFailed: root.level = null
+    onPathChanged: if (!path) root.level = null
+  }
+
   property Timer elapsedTimer: Timer {
     interval: 1000; repeat: true; running: root.recording || root.transcribing || root.downloading
     onTriggered: root.updateElapsed()
