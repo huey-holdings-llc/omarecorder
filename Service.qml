@@ -32,6 +32,7 @@ QtObject {
 
   readonly property bool recording: !!(state && state.recording)
   readonly property var activeRecording: recording ? state.recording : null
+  readonly property string activeId: activeRecording ? activeRecording.id : ""
   readonly property var jobs: (state && state.jobs) ? state.jobs : []
   readonly property bool transcribing: jobs.some(function(j) { return j.type === "transcribe" })
   readonly property bool downloading: jobs.some(function(j) { return j.type === "download" })
@@ -58,6 +59,10 @@ QtObject {
     if (isNaN(d.getTime())) return String(iso).slice(0, 16).replace("T", " ")
     return Qt.formatDateTime(d, "MMM d, HH:mm")
   }
+  // Untitled recordings show a friendly name instead of the raw folder id.
+  function displayTitle(rec) { if (!rec) return ""; return rec.title ? rec.title : "Recording · " + fmtDate(rec.created) }
+  function sourceLabel(src) { return src === "mic" ? "microphone" : src === "system" ? "system audio" : src === "both" ? "microphone + system" : (src || "") }
+  function isClipped(rec) { return !!(rec && rec.levels && rec.levels.clipped) }
   function fmtBytes(b) { b = b || 0; if (b > 1e9) return (b / 1e9).toFixed(1) + " GB"; if (b > 1e6) return Math.round(b / 1e6) + " MB"; return Math.round(b / 1e3) + " KB" }
 
   function jobFor(id) { for (var i = 0; i < jobs.length; i++) if (jobs[i].type === "transcribe" && jobs[i].id === id) return jobs[i]; return null }

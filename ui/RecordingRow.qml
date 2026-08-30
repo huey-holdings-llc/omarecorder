@@ -14,16 +14,26 @@ CursorSurface {
   property bool showActions: true
   property string durationText: ""
   property string dateText: ""
+  property string displayTitle: ""     // friendly title from Service.displayTitle
+  property bool live: false            // this recording is in progress right now
+  property string elapsedText: ""      // live elapsed, HH:MM:SS
+  property bool clipped: false
+  property color urgent: Color.urgent
 
   signal clicked()
   signal transcribeRequested()
   signal openRequested()
 
   readonly property bool transcribed: !!(rec && rec.has_transcript)
+  readonly property bool untitled: !(rec && rec.title)   // title already carries the date
   readonly property bool working: job !== null
-  readonly property string statusGlyph: working ? "󰔟" : (transcribed ? "󰄬" : "󰑊")
-  readonly property color statusColor: working ? accent : (transcribed ? foreground : dimColor)
-  readonly property string titleText: rec && rec.title ? rec.title : (rec && rec.id ? rec.id : "")
+  readonly property string statusGlyph: live ? "󰑊" : working ? "󰔟" : (transcribed ? "󰄬" : "󰍬")
+  readonly property color statusColor: live ? urgent : working ? accent : (transcribed ? foreground : dimColor)
+  readonly property string titleText: displayTitle ? displayTitle : (rec && rec.title ? rec.title : (rec && rec.id ? rec.id : ""))
+  readonly property string subtitleText: live
+    ? "Recording… " + elapsedText
+    : working ? "Transcribing with " + job.model + "…"
+    : ((untitled ? "" : dateText) + (durationText ? (untitled ? "" : " · ") + durationText : "") + (clipped ? " · ⚠ clipped" : "") + (transcribed ? " · " + rec.transcript.model : ""))
 
   width: parent ? parent.width : Style.space(300)
   height: Math.max(Style.space(40), col.implicitHeight + Style.spacing.rowPaddingX)
@@ -68,10 +78,8 @@ CursorSurface {
       }
       Text {
         width: parent.width
-        text: root.working
-          ? "Transcribing with " + root.job.model + "…"
-          : (root.dateText + (root.durationText ? " · " + root.durationText : "") + (root.transcribed ? " · " + root.rec.transcript.model : ""))
-        color: root.dimColor
+        text: root.subtitleText
+        color: root.live ? root.urgent : root.dimColor
         font.family: root.fontFamily
         font.pixelSize: Style.font.caption
         elide: Text.ElideRight
@@ -82,19 +90,25 @@ CursorSurface {
       id: actions
       anchors.verticalCenter: parent.verticalCenter
       spacing: Style.spacing.xs
-      visible: root.showActions
-      PanelActionButton {
-        visible: root.transcribed
-        iconText: "󰈙"
-        tooltipText: "Open transcript"
+      visible: root.showActions && !root.live && !root.working
+      // The primary action is a word, not a glyph: "Transcribe" for a fresh
+      // take, "Open" once a transcript exists (re-run stays behind an icon).
+      Button {
+        text: root.transcribed ? "Open" : "Transcribe"
+        iconText: root.transcribed ? "󰈙" : "󰗊"
+        fontSize: Style.font.caption
+        iconSize: Style.font.iconSmall
+        horizontalPadding: Style.spacing.sm
+        verticalPadding: Style.spacing.xxs
+        tooltipText: root.transcribed ? "Open the transcript in your editor" : "Transcribe with the default model"
         foreground: root.foreground
         fontFamily: root.fontFamily
-        onClicked: root.openRequested()
+        onClicked: root.transcribed ? root.openRequested() : root.transcribeRequested()
       }
       PanelActionButton {
-        visible: !root.working
-        iconText: root.transcribed ? "󰑐" : "󰗊"
-        tooltipText: root.transcribed ? "Transcribe again" : "Transcribe"
+        visible: root.transcribed
+        iconText: "󰑐"
+        tooltipText: "Transcribe again"
         foreground: root.foreground
         fontFamily: root.fontFamily
         onClicked: root.transcribeRequested()

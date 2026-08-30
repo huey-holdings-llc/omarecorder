@@ -27,7 +27,7 @@ Item {
   function estimateText(m) {
     if (!m || !durationS) return ""
     var s = Math.ceil(durationS / (m.rtf || 3))
-    return "≈ " + (svc ? svc.fmtDuration(s) : s + "s") + (m.rtf_source === "measured" ? "" : "?")
+    return "≈ " + (svc ? svc.fmtDuration(s) : s + "s") + (m.rtf_source === "measured" ? "" : " (est.)")
   }
   function optionLabel(m) {
     var head = m.label ? m.label + " · " + m.name : m.name

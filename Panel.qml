@@ -27,10 +27,12 @@ Panel {
   readonly property bool vertical: bar ? bar.vertical : false
   readonly property int recentCount: Math.max(0, Math.min(10, parseInt(setting("recentCount", 5)) || 5))
 
-  readonly property string barGlyph: recording ? "󰑊" : (transcribing ? "󰔟" : "󰑊")
-  readonly property string barLabel: recording && !vertical ? " " + svc.elapsedText : ""
+  // Idle shows a microphone (what the button does), recording the red record
+  // glyph plus the timer, transcribing an hourglass.
+  readonly property string barGlyph: recording ? "󰑊" : (transcribing ? "󰔟" : "󰍬")
+  readonly property string barLabel: recording && !vertical ? "  " + svc.elapsedText : ""
   readonly property string stateText: !ready ? "Service unavailable"
-    : recording ? "Recording " + svc.elapsedText + " · " + svc.activeRecording.source
+    : recording ? "Recording " + svc.elapsedText + " · " + svc.sourceLabel(svc.activeRecording.source)
     : transcribing ? "Transcribing…"
     : (svc.downloading ? "Downloading model…" : "Idle")
 
@@ -48,6 +50,10 @@ Panel {
     if (ready) svc.refresh()
     Qt.callLater(function() { keyCatcher.forceActiveFocus() })
   }
+  // Settings live at the bottom of a capped popup: bring them into view.
+  onSettingsOpenChanged: if (settingsOpen) Qt.callLater(function() {
+    if (panelFlick) panelFlick.contentY = Math.max(0, panelFlick.contentHeight - panelFlick.height)
+  })
 
   function moveCursor(dy) {
     if (recent.length === 0) return
@@ -57,6 +63,7 @@ Panel {
   function activateCursor() {
     if (!cursorActive || cursorIndex < 0 || cursorIndex >= recent.length) return
     var r = recent[cursorIndex]
+    if (r.id === svc.activeId) return
     if (r.has_transcript) svc.openTranscript(r.id); else svc.transcribe(r.id)
   }
   function toggleRecording() { if (ready) svc.toggleRecording() }
@@ -74,13 +81,15 @@ Panel {
     function library(): void { root.openLibrary() }
   }
 
-  BarIconButton {
+  // WidgetButton (not BarIconButton) so the bar slot grows with the timer
+  // label instead of overflowing into neighbouring widgets.
+  WidgetButton {
     id: button
     anchors.fill: parent
     bar: root.bar
     text: root.barGlyph + root.barLabel
     active: root.recording
-    dimmed: !root.recording && !root.transcribing
+    fontSize: root.recording ? Style.font.bodySmall : Style.bar.iconFont
     tooltipText: root.stateText + (root.recording ? "\nRight-click to stop" : "\nRight-click to record")
     onPressed: function(buttonCode) {
       if (buttonCode === Qt.RightButton) root.toggleRecording()
@@ -226,6 +235,11 @@ Panel {
                 dimColor: root.dim
                 fontFamily: root.fontFamily
                 current: root.cursorActive && root.cursorIndex === index
+                displayTitle: root.ready ? root.svc.displayTitle(modelData) : ""
+                live: root.ready && modelData.id === root.svc.activeId
+                elapsedText: root.ready ? root.svc.elapsedText : ""
+                clipped: root.ready && root.svc.isClipped(modelData)
+                urgent: root.urgent
                 durationText: root.ready ? root.svc.fmtDuration(modelData.duration_s) : ""
                 dateText: root.ready ? root.svc.fmtDate(modelData.created) : ""
                 onClicked: { root.cursorActive = true; root.cursorIndex = index; root.openLibrary() }
