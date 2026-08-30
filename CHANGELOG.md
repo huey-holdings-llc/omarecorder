@@ -3,36 +3,112 @@
 All notable changes to this project are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow SemVer.
 
-## [Unreleased]
+## [1.0.0] - 2026-08-30
 
-### Fixed
-- `show --json` failed with "jq: Argument list too long" on a long transcript
-  (139 KB); the text is now passed to jq as a raw file.
+First public release — on the Omarchy plugin marketplace. Everything below was
+built on top of 0.1.1 in one sprint: the v0.2 roadmap, one v0.3 item (Obsidian),
+a security pass, and a documentation rewrite in which every claim was checked
+against the code.
 
-Third persona pass (an efficiency-minded enthusiast): say each fact once.
+### Added
+- **Chunked transcription.** Takes longer than 30 minutes (`OMARECORDER_CHUNK_S`)
+  are transcribed in equal pieces inside the one `systemd-run --user` unit, seams
+  snapped to the nearest silence. `transcript.md` is republished after every
+  piece, the Library shows "2/4 · 00:12", and **Cancel keeps the finished pieces**
+  (`meta.transcript.partial`, "partial transcript" in the lists, a notice above
+  the text). The speed estimate still learns from a cancelled run. This is also
+  the mitigation for whisper's repetition loops on long inputs.
+- **Live input meter.** While recording, an `ffmpeg -f pulse … astats` reader
+  writes `$XDG_RUNTIME_DIR/omarecorder/level` four times a second; the popup and
+  the Library show a level bar, and the bar widget reads **CLIP** instead of the
+  timer while the input sits on the rails (held 1.5 s). Independent of the shell;
+  it dies with the recorder.
+- **Waveform strip, scrubber and trim.** `waveform.png` (800×64) is drawn on
+  stop/import (and once, lazily, for recordings made before 1.0). In the Library
+  the strip is a scrubber (click, `Space`, `←`/`→` ±5 s; in-process QtMultimedia
+  playback, loaded only while the Library is open). `F3` / the scissors enter trim
+  mode with two drag handles, **Preview**, and **Trim** (confirmed). `omarecorder
+  trim <id> --from s --to s [--replace] | --restore`: lossless `-c copy`, the first
+  original kept as `audio.orig.wav`, transcript flagged stale until re-transcribed.
+- **Send to Obsidian.** `omarecorder export <id>` writes a note (YAML frontmatter
+  + transcript) into the folder where Obsidian itself files new notes (read from
+  the vault's `.obsidian/app.json` — never overridden), then opens it via
+  `obsidian://`. `omarecorder vaults` lists vaults; Settings gets a vault picker;
+  config `obsidianVault` / `exportDir`; without Obsidian the note lands next to
+  the recording.
+- **Import from the popup** (`i`): a path field → `omarecorder import`.
+- `omarecorder copy <id>` (transcript → clipboard), `delete --permanent`,
+  `import` accepts `~`, `setup check --json` reports `tools[]` / `missing[]` with
+  the package for each tool; the Setup card lists them.
+- Download progress is published into the state file by the download worker.
+- `tests/lint.sh` (shellcheck, manifest schema, QML hygiene, README sections) and
+  a GitHub Actions workflow that runs it plus the CLI tests in an Arch container.
+- `AGENTS.md` for second-model code review.
 
 ### Changed
-- Popup hero: names the job ("Transcribing 00:24:36 · Sons of Suds…") with an
-  hourglass icon; the take being recorded is no longer repeated in Recent; the
-  hero toggle switch is gone (the Start/Stop button with its `r` hint remains).
-- Recent rows show the transcription's elapsed time; the Library shows it once
-  (progress line) and the Cancel button is just "Cancel".
-- Settings no longer duplicate the popup's Source control.
-- Library: rename hint shown once; re-transcribe preselects the model that made
-  the visible transcript; "▶ playing" in the meta line while playback runs.
-- Library: "open in editor" and "copy transcript" moved from the icon strip to
-  the top-left of the transcript box, outside the scroll area, with a brief
-  "Copied" confirmation.
-- Library action row: no "Model" label row; the picker is sized to its longest
-  option ("Accurate · large-v3-turbo · ≈ 52m", "Balanced · small.en · 466 MB
-  download"); "Re-transcribe"; list rows no longer repeat the model (the detail
-  meta line keeps it); list narrowed to 300 px so the detail pane breathes.
-- Model choice is just the three presets — Fast (base.en), Balanced (small.en),
-  Accurate (large-v3-turbo); missing ones still show "download N MB".
-- Clipping detection skips the first 2 s (the ADC rails briefly when capture
-  starts) and decides on the share of samples at the rail (`levels.clipped_pct`,
-  > 0.05 %) rather than flatness alone. README now recommends 30–40 % input for
-  laptop mics (measured on an ALC285: 55 % still clipped, 30 % peaks at −1 dB).
+- **No polling, for real.** The shell no longer re-runs `list --json` every
+  second while a job runs; every update arrives through the watched state file,
+  the level file and the transcript file.
+- `state.json` read-modify-write runs under `flock`; workers receive
+  `XDG_RUNTIME_DIR`/`HOME`; the transcription worker only ever signals its own
+  child, never the process group.
+- `delete` says what it does: it moves to the trash with `gio` and **refuses**
+  when that is impossible; `--permanent` is the only path to `rm -rf`. Without a
+  terminal it requires `--yes`.
+- "both": crash recovery mixes `mic.wav` + `system.wav`; a failed mix is a
+  reported error, never a 0-second "saved".
+- whisper's stderr goes to a per-job file (kept only on failure as
+  `~/.local/state/omarecorder/tx-<id>.err`); the log rotates at 1 MB and is no
+  longer mined for failure messages.
+- The version is read from `manifest.json` (one source). Manifest gains
+  `homepage`.
+- Tests: 67 → 200+ assertions; a missing engine/model/mic is a failure unless
+  `OMARECORDER_TEST_ALLOW_SKIP=1`; new coverage for hostile titles, `--from/--to`,
+  delete safety, file modes, concurrency, `both` crash recovery, chunking and
+  cancel, the meter parser and a live meter, `system`/`both` sources, the real
+  systemd path, trim/restore, vaults/export.
+- Popup hero names the job ("Transcribing 00:24:36 · Sons of Suds…"); the take
+  being recorded is no longer repeated in Recent; the hero toggle switch is gone.
+- Recent rows show the transcription's elapsed time; the Library shows it once.
+- Settings no longer duplicate the popup's Source control; rename hint shown
+  once; re-transcribe preselects the model that made the visible transcript.
+- Library: "open in editor" / "copy transcript" / "send to Obsidian" sit at the
+  top-left of the transcript box, outside the scroll area, with "Copied" / "Sent"
+  confirmations; the action row is compact (three presets, "Re-transcribe").
+- Clipping detection skips the first 2 s and decides on the share of samples at
+  the rail (`levels.clipped_pct` > 0.05 %). README recommends 30–40 % input for
+  laptop mics.
+
+### Fixed
+- `show --json` failed with "Argument list too long" on a long transcript.
+- Newlines in a title were deleted instead of becoming spaces; two same-second
+  recordings could share an id; `import` swallowed unknown flags; `config get`
+  of an unknown key printed `null`; `recordingsDir` accepted any string.
+- `meta.json` could be blanked by a failing measurement (empty JSON is refused;
+  values go through `--arg`/`--argjson`).
+- A first import on a fresh profile skipped the waveform (`$STATE_DIR` did not
+  exist yet).
+- A home directory with a space broke every CLI call from the shell.
+
+### Security
+- **Command injection** via a recording title in "Copy transcript"
+  (`bash -c "sed … <path> | wl-copy"`; an imported file with a hostile name was
+  enough). The clipboard copy is a CLI command called with an argv array; no
+  shell string is built from data anywhere.
+- **No `/tmp` fallback** for runtime state: `$XDG_RUNTIME_DIR` (or
+  `/run/user/UID`) only, `0700`; the CLI refuses to run without one.
+- **Private files**: `umask 077` — recordings, transcripts, notes, config, state.
+- `--from`/`--to` (transcribe, play, trim) validated as non-negative numbers and
+  passed as arguments, never word-split into ffmpeg/mpv.
+- User strings render as plain text in every QML `Text` (titles, meta line,
+  errors, dialogs).
+- `stop-play` only signals a pid whose `comm` is `mpv`/`pw-play`.
+
+### Removed
+- The graphical file picker that was planned for popup import: a QtQuick
+  `FileDialog` crashes Quickshell on Omarchy 4 (in-shell and in its own
+  process). Back once that is fixed upstream.
+- From the roadmap: `whisper-cpp` and `sherpa-onnx` engines — new packages.
 
 ## [0.1.1] - 2026-08-30
 
@@ -85,6 +161,3 @@ a professional audio recordist — the first-time user's notes weighed more).
   open/copy transcript, open folder, delete with confirmation, transcript view.
 * Design spec: `docs/superpowers/specs/2026-08-29-omarecorder-design.md`.
 
-## [1.0.0] - 2026-08-30
-
-(placeholder — collapsed from Unreleased before the tag)

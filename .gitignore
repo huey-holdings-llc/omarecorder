@@ -4,3 +4,4 @@ tests/tmp/
 !preview.png
 .spike/
 .claude/
+!docs/screenshots/*.png
