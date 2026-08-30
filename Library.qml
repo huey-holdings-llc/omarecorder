@@ -338,7 +338,7 @@ Item {
                 text: root.selected && root.svc
                   ? (root.selectedLive ? "Recording now · " + root.svc.elapsedText + " · " + root.svc.sourceLabel(root.selected.source)
                     : root.svc.fmtDate(root.selected.created) + " · " + root.svc.fmtDuration(root.selected.duration_s) + " · " + root.svc.fmtBytes(root.selected.size_bytes)
-                    + root.svc.sourceNote(root.selected.source)
+                    + " · " + root.svc.sourceLabel(root.selected.source)
                     + (root.selected.transcript ? " · transcribed with " + root.selected.transcript.model : "")
                     + (root.svc.isClipped(root.selected) ? " · ⚠ clipped" : "")
                     + (root.playingId === root.selected.id ? " · ▶ playing" : ""))
