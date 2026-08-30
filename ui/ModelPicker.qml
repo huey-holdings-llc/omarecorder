@@ -12,7 +12,6 @@ Item {
   property real durationS: 0
   property color foreground: Color.foreground
   property string fontFamily: Style.font.family
-  property bool hasCursor: false
 
   signal changed(string model)
 
@@ -66,7 +65,6 @@ Item {
     options: root.buildOptions()
     foreground: root.foreground
     fontFamily: root.fontFamily
-    hasCursor: root.hasCursor
     onChanged: function(v) { root.value = v; root.changed(v) }
   }
 }
