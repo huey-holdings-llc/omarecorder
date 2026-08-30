@@ -29,6 +29,7 @@ QtObject {
   property var state: ({ recording: null, jobs: [], version: 0 })
   property var recordings: []
   property var models: []
+  property var vaults: []      // Obsidian vaults from `omarecorder vaults --json` (open one first)
   property var config: ({})
   property var setup: ({ ok: true })
   property string lastError: ""
@@ -86,9 +87,10 @@ QtObject {
   }
 
   // ---- loaders ----
-  function refresh() { refreshList(); refreshModels(); refreshConfig(); refreshSetup() }
+  function refresh() { refreshList(); refreshModels(); refreshConfig(); refreshSetup(); refreshVaults() }
   function refreshList() { if (!listProc.running) { listBusy = true; listProc.running = true } }
   function refreshModels() { if (!modelsProc.running) modelsProc.running = true }
+  function refreshVaults() { if (!vaultsProc.running) vaultsProc.running = true }
   function refreshConfig() { if (!configProc.running) configProc.running = true }
   function refreshSetup() { if (!setupProc.running) setupProc.running = true }
 
@@ -132,6 +134,8 @@ QtObject {
   function openFolder(id) { Quickshell.execDetached([cli, "folder", id]) }
   // The CLI does the copy (argv only — no shell string is ever built from a title).
   function copyTranscript(id, onDone) { run(["copy", id], onDone) }
+  // The CLI picks the vault/folder (config, then the open vault) and opens the note in Obsidian.
+  function exportToObsidian(id, onDone) { run(["export", id], onDone) }
   function setConfig(key, value) { run(["config", "set", key, String(value)], function() { refreshConfig() }) }
   function openLibrary() { Quickshell.execDetached(["omarchy-shell", "shell", "toggle", pluginId]) }
 
@@ -179,6 +183,11 @@ QtObject {
     command: [root.cli, "models", "--json"]
     stdout: StdioCollector { id: modelsOut; waitForEnd: true }
     onExited: function(code) { if (code === 0) { try { root.models = JSON.parse(modelsOut.text) } catch (e) {} } }
+  }
+  property Process vaultsProc: Process {
+    command: [root.cli, "vaults", "--json"]
+    stdout: StdioCollector { id: vaultsOut; waitForEnd: true }
+    onExited: function(code) { if (code === 0) { try { root.vaults = JSON.parse(vaultsOut.text) } catch (e) {} } }
   }
   property Process configProc: Process {
     command: [root.cli, "config", "get", "--json"]

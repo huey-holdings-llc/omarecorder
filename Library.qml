@@ -341,6 +341,7 @@ Item {
                     : root.svc.fmtDate(root.selected.created) + " · " + root.svc.fmtDuration(root.selected.duration_s) + " · " + root.svc.fmtBytes(root.selected.size_bytes)
                     + " · " + root.svc.sourceLabel(root.selected.source)
                     + (root.selected.transcript ? " · transcribed with " + root.selected.transcript.model : "")
+                    + (root.selected.exported_to ? " · in Obsidian" : "")
                     + (root.svc.isClipped(root.selected) ? " · ⚠ clipped" : "")
                     + (root.playingId === root.selected.id ? " · ▶ playing" : ""))
                   : ""
@@ -454,6 +455,21 @@ Item {
                   font.pixelSize: Style.font.caption
                 }
                 Timer { id: copiedFlash; interval: 1500 }
+                PanelActionButton {
+                  iconText: "󰈝"
+                  tooltipText: "Send to Obsidian"
+                  foreground: root.foreground; fontFamily: root.fontFamily
+                  onClicked: if (root.svc && root.selected) root.svc.exportToObsidian(root.selected.id, function(code) { if (code === 0) sentFlash.restart() })
+                }
+                Text {
+                  anchors.verticalCenter: parent.verticalCenter
+                  visible: sentFlash.running
+                  text: "Sent"
+                  color: Color.accent
+                  font.family: root.fontFamily
+                  font.pixelSize: Style.font.caption
+                }
+                Timer { id: sentFlash; interval: 1500 }
               }
 
               TranscriptView {
