@@ -242,7 +242,10 @@ resolve_mic() {
   if [[ -n "$def" && "$def" != *.monitor ]] && pactl list short sources 2>/dev/null | awk '{print $2}' | grep -qx "$def"; then echo "$def"; return 0; fi
   pactl list short sources 2>/dev/null | awk '$2 !~ /\.monitor$/ {print $2; exit}'
 }
-resolve_system() { local s; s=$(pactl get-default-sink 2>/dev/null || true); [[ -n "$s" ]] && echo "$s.monitor"; }
+# The sink itself: pw-record captures its monitor with stream.capture.sink=true.
+# (There is no "<sink>.monitor" node in PipeWire; that name only exists in the
+# PulseAudio layer, and pw-record given it silently falls back to the microphone.)
+resolve_system() { pactl get-default-sink 2>/dev/null || true; }
 
 # ------------------------------------------------------------ record -------
 cmd_record() {
@@ -276,20 +279,21 @@ record_start() {
   local dir="$ROOT/$id"; [[ -n "$title" ]] && dir="$ROOT/$id $title"
   mkdir -p "$dir"
 
-  local -a inputs=() # "target|file"
+  local -a inputs=() # "kind|target|file", kind = mic (a source) or sink (its monitor)
   local mic sys
   case "$source" in
-    mic) mic=$(resolve_mic); [[ -n "$mic" ]] || { rmdir "$dir"; die "no microphone source found"; }; inputs+=("$mic|$dir/audio.wav") ;;
-    system) sys=$(resolve_system); [[ -n "$sys" ]] || { rmdir "$dir"; die "no output sink found"; }; inputs+=("$sys|$dir/audio.wav") ;;
+    mic) mic=$(resolve_mic); [[ -n "$mic" ]] || { rmdir "$dir"; die "no microphone source found"; }; inputs+=("mic|$mic|$dir/audio.wav") ;;
+    system) sys=$(resolve_system); [[ -n "$sys" ]] || { rmdir "$dir"; die "no output sink found"; }; inputs+=("sink|$sys|$dir/audio.wav") ;;
     both) mic=$(resolve_mic); sys=$(resolve_system)
       [[ -n "$mic" && -n "$sys" ]] || { rmdir "$dir"; die "need both a microphone and an output sink"; }
-      inputs+=("$mic|$dir/mic.wav" "$sys|$dir/system.wav") ;;
+      inputs+=("mic|$mic|$dir/mic.wav" "sink|$sys|$dir/system.wav") ;;
   esac
 
-  local pids='[]' files='[]' in target file pid
+  local pids='[]' files='[]' in kind target file pid
   for in in "${inputs[@]}"; do
-    target="${in%%|*}"; file="${in#*|}"
-    setsid pw-record --target "$target" --rate "$RATE" --channels 1 --format s16 "$file" >/dev/null 2>&1 < /dev/null &
+    kind="${in%%|*}"; in="${in#*|}"; target="${in%%|*}"; file="${in#*|}"
+    local -a props=(); [[ "$kind" == "sink" ]] && props=(-P '{ stream.capture.sink = true }')
+    setsid pw-record --target "$target" "${props[@]}" --rate "$RATE" --channels 1 --format s16 "$file" >/dev/null 2>&1 < /dev/null &
     pid=$!
     local i=0
     while (( i < 30 )) && pid_alive "$pid" && [[ ! -f "$file" ]]; do sleep 0.1; i=$((i+1)); done
@@ -313,7 +317,7 @@ record_start() {
   # dies with the first recorder (watchdog in _meter_loop) and never affects the take.
   local meter_pid=null
   if have ffmpeg; then
-    local mtarget="${mic:-}"; [[ "$source" == "system" ]] && mtarget="$sys"
+    local mtarget="${mic:-}"; [[ "$source" == "system" ]] && mtarget="$sys.monitor"   # ffmpeg -f pulse knows the .monitor name
     write_json "$LEVEL_FILE" '{"peak_db":-99,"clip":false,"t":0}'
     setsid "$SELF" _meter "$mtarget" "$(jq -r '.[0]' <<<"$pids")" >/dev/null 2>&1 < /dev/null &
     meter_pid=$!

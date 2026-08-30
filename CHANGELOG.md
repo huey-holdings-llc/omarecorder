@@ -80,6 +80,10 @@ against the code.
   laptop mics.
 
 ### Fixed
+- "System audio" recorded the microphone. `pw-record --target <sink>.monitor` silently
+  falls back to the default source because PipeWire has no node by that name; the
+  recorder now targets the sink with `stream.capture.sink=true` and the tests check
+  the live PipeWire links. "Mic + system audio" had been two copies of the mic.
 - `show --json` failed with "Argument list too long" on a long transcript.
 - Newlines in a title were deleted instead of becoming spaces; two same-second
   recordings could share an id; `import` swallowed unknown flags; `config get`
