@@ -22,6 +22,13 @@ check() { # check <desc> <cmd...>  — passes when command exits 0
   local d="$1"; shift; if "$@" >/dev/null 2>&1; then ok "$d"; else bad "$d" "cmd: $*"; fi
 }
 eq() { [[ "$2" == "$3" ]] && ok "$1" || bad "$1" "got '$2' expected '$3'"; }
+fails() { # fails <desc> <cmd...> — passes when command exits non-zero
+  local d="$1"; shift; if "$@" >/dev/null 2>&1; then bad "$d" "unexpectedly succeeded: $*"; else ok "$d"; fi
+}
+# A missing fixture/engine is a failure unless the caller opted into skipping
+# (CI has no voxtype/mic): OMARECORDER_TEST_ALLOW_SKIP=1.
+skip() { if [[ "${OMARECORDER_TEST_ALLOW_SKIP:-0}" == "1" ]]; then echo "  (skipped: $1)"; else bad "skipped: $1"; fi; }
+MANIFEST_VERSION=$(jq -r .version "$HERE/../manifest.json")
 
 # Fixtures: short speech clip (ships with alsa-utils) and a 12 s version of it
 SPEECH=/usr/share/sounds/alsa/Front_Right.wav
@@ -38,12 +45,12 @@ touch -d "2026-01-02 03:04:05" "$TMP/tone48.wav"
 touch -d "2026-01-03 03:04:05" "$TMP/speech.wav" 2>/dev/null
 
 echo "== basics"
-eq "version" "$($CLI version)" "0.1.1"
+eq "version" "$("$CLI" version)" "$MANIFEST_VERSION"
 check "help exits 0" "$CLI" help
 eq "config default source" "$($CLI config get defaultSource)" "mic"
 check "config set" "$CLI" config set defaultSource both
 eq "config persisted" "$($CLI config get defaultSource)" "both"
-check "config rejects bad value" bash -c "! $CLI config set defaultSource bogus"
+fails "config rejects bad value" "$CLI" config set defaultSource bogus
 $CLI config set defaultSource mic >/dev/null
 eq "status idle" "$($CLI status)" "idle"
 eq "status --json shape" "$($CLI status --json | jq -c '[.recording, (.jobs|length)]')" "[null,0]"
@@ -77,7 +84,7 @@ echo "== list / show"
 eq "list newest first" "$($CLI list --json | jq -r '.[0].id')" "${ID2:-$ID1}"
 eq "list has_transcript false" "$($CLI list --json | jq -r '.[-1].has_transcript')" "false"
 eq "show --json dir" "$($CLI show "$ID1" --json | jq -r .dir)" "$D1"
-check "show unknown id fails" bash -c "! $CLI show 2000-01-01_000000"
+fails "show unknown id fails" "$CLI" show 2000-01-01_000000
 
 echo "== rename"
 $CLI rename "$ID1" "Renamed / Title  here" >/dev/null
@@ -89,13 +96,88 @@ eq "meta title updated" "$(jq -r .title "$D1B/meta.json")" "Renamed - Title here
 V2=$(jq -r .version "$XDG_RUNTIME_DIR/omarecorder/state.json")
 check "state version bumped by mutations" test "$V2" -gt "$V1"
 
+echo "== security / robustness"
+# Titles are data: shell metacharacters must round-trip untouched and never execute.
+EVIL='notes $(touch pwned-marker) `touch pwned-marker2`; rm -rf x <b>bold'
+cd "$TMP" || exit 1   # a stray relative touch would land here
+IDE=$("$CLI" import "$TMP/quiet.wav" --title "$EVIL")
+check "hostile title imported" test -n "$IDE"
+eq "hostile title stored verbatim" "$("$CLI" show "$IDE" --json | jq -r .title)" "$EVIL"
+check "no command executed from title" bash -c "! test -e '$TMP/pwned-marker' && ! test -e '$TMP/pwned-marker2'"
+"$CLI" rename "$IDE" "$EVIL x" >/dev/null
+eq "hostile rename round-trips" "$("$CLI" show "$IDE" --json | jq -r .title)" "$EVIL x"
+printf '<!-- omarecorder model=base.en -->\nhello world\n' > "$("$CLI" show "$IDE" --json | jq -r .dir)/transcript.md"
+eq "copy --print strips header, keeps text" "$("$CLI" copy "$IDE" --print)" "hello world"
+check "still nothing executed" bash -c "! test -e '$TMP/pwned-marker' && ! test -e '$TMP/pwned-marker2'"
+LONG=$(printf 'a%.0s' $(seq 1 120))
+"$CLI" rename "$IDE" "$LONG" >/dev/null
+eq "title capped at 80 chars" "$("$CLI" show "$IDE" --json | jq -r '.title | length')" "80"
+eq "newline in title collapsed" "$("$CLI" rename "$IDE" $'line1\nline2' >/dev/null; "$CLI" show "$IDE" --json | jq -r .title)" "line1 line2"
+# --from/--to are numbers or nothing
+fails "transcribe rejects negative --from" "$CLI" transcribe "$IDE" --model base.en --from -3
+fails "transcribe rejects non-numeric --from" "$CLI" transcribe "$IDE" --model base.en --from abc
+fails "transcribe rejects --to <= --from" "$CLI" transcribe "$IDE" --model base.en --from 5 --to 2
+fails "transcribe rejects option-looking --to" "$CLI" transcribe "$IDE" --model base.en --to "-y"
+fails "play rejects non-numeric --from" "$CLI" play "$IDE" --from "0 -y"
+eq "no job registered after rejected args" "$("$CLI" status --json | jq -r '.jobs|length')" "0"
+# meta.json survives a broken measurement
+DE=$("$CLI" show "$IDE" --json | jq -r .dir)
+cp "$DE/meta.json" "$TMP/meta.before"
+printf 'RIFF' > "$DE/audio.wav"   # truncated wav: ffprobe gives no duration
+"$CLI" analyze "$IDE" >/dev/null 2>&1 || true
+check "meta.json intact after failed analysis" jq -e .id "$DE/meta.json"
+cp "$TMP/quiet.wav" "$DE/audio.wav"
+# delete is never silent and never rm -rf behind a "trash" label
+fails "delete without --yes and no tty refuses" "$CLI" delete "$IDE"
+check "recording still there" test -d "$DE"
+( PATH="$TMP/nogio:$PATH"; mkdir -p "$TMP/nogio"; printf '#!/bin/sh\nexit 1\n' > "$TMP/nogio/gio"; chmod +x "$TMP/nogio/gio"
+  "$CLI" delete "$IDE" --yes >/dev/null 2>&1; echo $? > "$TMP/rc" )
+check "delete refuses when trash is unavailable" test "$(cat "$TMP/rc")" -ne 0
+check "recording survives failed trash" test -d "$DE"
+check "delete --permanent works without trash" "$CLI" delete "$IDE" --yes --permanent
+check "permanent delete removed folder" bash -c "! test -d '$DE'"
+# files are private
+IDP=$("$CLI" import "$TMP/quiet.wav" --title Private); DP=$("$CLI" show "$IDP" --json | jq -r .dir)
+eq "audio.wav is 0600" "$(stat -c %a "$DP/audio.wav")" "600"
+eq "meta.json is 0600" "$(stat -c %a "$DP/meta.json")" "600"
+eq "recording folder is 0700" "$(stat -c %a "$DP")" "700"
+eq "runtime dir is 0700" "$(stat -c %a "$XDG_RUNTIME_DIR/omarecorder")" "700"
+"$CLI" delete "$IDP" --yes >/dev/null
+# runtime state never falls back to /tmp
+( unset XDG_RUNTIME_DIR; "$CLI" status >/dev/null 2>&1; echo $? > "$TMP/rc" )
+check "no XDG_RUNTIME_DIR: uses /run/user or fails, never /tmp" bash -c "! test -d /tmp/omarecorder"
+# config validation
+fails "config get unknown key fails" "$CLI" config get bogus
+fails "config set recordingsDir rejects missing dir" "$CLI" config set recordingsDir "$TMP/does-not-exist"
+fails "import rejects unknown flag" "$CLI" import --bogus "$TMP/quiet.wav"
+# concurrent state writers do not lose bumps
+V0=$(jq -r .version "$XDG_RUNTIME_DIR/omarecorder/state.json")
+for i in $(seq 1 20); do "$CLI" config set threads "$i" >/dev/null & done; wait
+V1=$(jq -r .version "$XDG_RUNTIME_DIR/omarecorder/state.json")
+check "20 parallel config sets → 20 version bumps" test $((V1 - V0)) -ge 20
+"$CLI" config set threads 0 >/dev/null
+# crash recovery for a "both" take that died before the mix
+IDB="2026-01-05_010203"; DB="$OMARECORDER_DIR/$IDB Both crash"; mkdir -p "$DB"
+cp "$TMP/quiet.wav" "$DB/mic.wav"; cp "$TMP/quiet.wav" "$DB/system.wav"
+jq -cn --arg id "$IDB" --arg dir "$DB" '{id:$id,title:"Both crash",source:"both",created:"2026-01-05T01:02:03+0000",duration_s:null,size_bytes:0,sample_rate:16000,transcript:null,notes:""}' > "$DB/meta.json"
+jq -cn --arg id "$IDB" --arg dir "$DB" '{recording:{id:$id,source:"both",dir:$dir,started_at:0,pids:[999999],files:[]},jobs:[],version:1}' > "$XDG_RUNTIME_DIR/omarecorder/state.json"
+eq "status clears the dead recording" "$("$CLI" status)" "idle"
+check "both crash recovery produced audio.wav" test -s "$DB/audio.wav"
+eq "recovered both take has duration" "$(jq -r .duration_s "$DB/meta.json")" "3"
+"$CLI" delete "$IDB" --yes >/dev/null
+# setup check reports what is missing, with the package to install
+check "setup check lists tools" bash -c "\"$CLI\" setup check --json | jq -e '.tools | length > 5'"
+mkdir -p "$TMP/nowl"; ln -s /usr/bin/* "$TMP/nowl/" 2>/dev/null; rm -f "$TMP/nowl/wl-copy"
+( PATH="$TMP/nowl" "$CLI" setup check --json > "$TMP/setup.json" 2>/dev/null || true )
+eq "missing wl-copy reported with package" "$(jq -r '.missing[] | select(.tool=="wl-copy") | .package' "$TMP/setup.json")" "wl-clipboard"
+
 echo "== models / estimate"
 check "models --json lists base.en" bash -c "$CLI models --json | jq -e '.[] | select(.name==\"base.en\")'"
 eq "estimate uses default rtf" "$($CLI estimate "$ID1" --model base.en | jq -r '.rtf, .source' | paste -sd,)" "10,default"
-check "estimate rejects unknown model" bash -c "! $CLI estimate '$ID1' --model nope"
+fails "estimate rejects unknown model" "$CLI" estimate "$ID1" --model nope
 
 echo "== transcribe"
-if command -v voxtype >/dev/null && [[ -f "$HOME/.local/share/voxtype/models/ggml-base.en.bin" && -f "$TMP/speech12.wav" ]]; then
+if command -v voxtype >/dev/null && [[ -f "${VOXTYPE_MODELS_DIR:-$HOME/.local/share/voxtype/models}/ggml-base.en.bin" && -f "$TMP/speech12.wav" ]]; then
   ID3=$($CLI import "$TMP/speech12.wav" --title "Speech 12s")
   D3="$OMARECORDER_DIR/$ID3 Speech 12s"
   eq "12 s fixture duration" "$(jq -r .duration_s "$D3/meta.json")" "12"
@@ -108,7 +190,7 @@ if command -v voxtype >/dev/null && [[ -f "$HOME/.local/share/voxtype/models/ggm
   eq "meta.transcript.model" "$(jq -r .transcript.model "$D3/meta.json")" "base.en"
   check "short clip does not train the estimate" bash -c "! test -f '$XDG_STATE_HOME/omarecorder/bench.json'"
   check "elapsed_s recorded with sub-second precision" bash -c "jq -e '.transcript.elapsed_s > 0' '$D3/meta.json'"
-  ID6=$($CLI import "$TMP/speech60.wav" --title "Speech 60s"); D6="$OMARECORDER_DIR/$ID6 Speech 60s"
+  ID6=$($CLI import "$TMP/speech60.wav" --title "Speech 60s")
   check "transcribe 60 s clip" "$CLI" transcribe "$ID6" --model base.en
   check "bench.json learned rtf from 60 s clip" bash -c "jq -e '.[\"base.en\"].rtf > 0' '$XDG_STATE_HOME/omarecorder/bench.json'"
   eq "estimate now measured" "$($CLI estimate "$ID3" --model base.en | jq -r .source)" "measured"
@@ -119,7 +201,7 @@ if command -v voxtype >/dev/null && [[ -f "$HOME/.local/share/voxtype/models/ggm
   check "range header" bash -c "head -1 '$D3/transcript.md' | grep -q 'range=0-3'"
   check "previous transcript kept on re-run" bash -c "head -1 '$D3/transcript.prev.md' | grep -q 'range=0-end'"
 else
-  echo "  (skipped: voxtype/base.en/fixture not available)"
+  skip "voxtype/base.en/fixture not available"
 fi
 
 echo "== record (real mic, 2 s)"
@@ -127,8 +209,8 @@ if pactl list short sources 2>/dev/null | grep -qv '\.monitor'; then
   IDR=$($CLI record start --title "Mic check")
   check "record start returns id" test -n "$IDR"
   eq "status shows recording" "$($CLI status --json | jq -r .recording.id)" "$IDR"
-  check "start refused while recording" bash -c "! $CLI record start"
-  check "transcribe refused while recording" bash -c "! $CLI transcribe '$IDR' --model base.en"
+  fails "start refused while recording" "$CLI" record start
+  fails "transcribe refused while recording" "$CLI" transcribe "$IDR" --model base.en
   sleep 2
   check "record stop" "$CLI" record stop
   DR="$OMARECORDER_DIR/$IDR Mic check"
@@ -140,13 +222,13 @@ if pactl list short sources 2>/dev/null | grep -qv '\.monitor'; then
   sleep 1
   check "toggle stops" "$CLI" record toggle
 else
-  echo "  (skipped: no microphone source)"
+  skip "no microphone source"
 fi
 
 echo "== delete"
 check "delete --yes" "$CLI" delete "$ID1" --yes
 check "folder gone" bash -c "! test -d '$D1B'"
-check "delete unknown fails" bash -c "! $CLI delete 2000-01-01_000000 --yes"
+fails "delete unknown fails" "$CLI" delete 2000-01-01_000000 --yes
 
 echo "== setup"
 check "setup check --json runs" bash -c "$CLI setup check --json | jq -e '.version'"

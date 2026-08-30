@@ -6,15 +6,23 @@
 #
 # Usage: omarecorder <command> [args]   (run `omarecorder help` for the list)
 set -euo pipefail
+umask 077   # recordings, transcripts, state: readable by this user only
 
-VERSION="0.1.1"
+command -v jq >/dev/null 2>&1 || { echo "omarecorder: jq is required (pacman -S jq)" >&2; exit 1; }
 PLUGIN_ID="io.github.coreytyhurst.omarecorder"
 SELF="$(readlink -f "$0")"
+PLUGIN_DIR="$(dirname "$(dirname "$SELF")")"
+VERSION=$(jq -r '.version // "0"' "$PLUGIN_DIR/manifest.json" 2>/dev/null || echo 0)
 
 # ---------------------------------------------------------------- paths -----
 XDG_CONFIG_HOME="${XDG_CONFIG_HOME:-$HOME/.config}"
 XDG_STATE_HOME="${XDG_STATE_HOME:-$HOME/.local/state}"
-XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/tmp}"
+# Runtime state lives in the per-user runtime dir only — never /tmp, where
+# another local user could pre-create the directory and feed us pids/paths.
+if [[ -z "${XDG_RUNTIME_DIR:-}" ]]; then
+  if [[ -d "/run/user/$(id -u)" ]]; then XDG_RUNTIME_DIR="/run/user/$(id -u)"
+  else echo "omarecorder: XDG_RUNTIME_DIR is not set and /run/user/$(id -u) does not exist" >&2; exit 1; fi
+fi
 CONFIG_DIR="$XDG_CONFIG_HOME/omarecorder"
 CONFIG_FILE="$CONFIG_DIR/config.json"
 STATE_DIR="$XDG_STATE_HOME/omarecorder"
@@ -23,6 +31,8 @@ LOG_FILE="$STATE_DIR/omarecorder.log"
 RUN_DIR="$XDG_RUNTIME_DIR/omarecorder"
 STATE_FILE="$RUN_DIR/state.json"
 PLAY_PID_FILE="$RUN_DIR/play.pid"
+STATE_LOCK="$RUN_DIR/state.lock"
+LEVEL_FILE="$RUN_DIR/level"      # live input level while recording (see _meter)
 VOXTYPE_MODELS_DIR="${VOXTYPE_MODELS_DIR:-$HOME/.local/share/voxtype/models}"
 
 RATE=16000
@@ -39,7 +49,12 @@ MODEL_CATALOG='[
 
 # -------------------------------------------------------------- helpers -----
 die() { echo "omarecorder: $*" >&2; exit 1; }
-log() { mkdir -p "$STATE_DIR"; printf '%s %s\n' "$(date +%FT%T)" "$*" >> "$LOG_FILE"; }
+log() {
+  mkdir -p "$STATE_DIR"
+  # One rotation keeps the log bounded (whisper never writes here; see _tx_worker).
+  if [[ -f "$LOG_FILE" ]] && (( $(stat -c %s "$LOG_FILE" 2>/dev/null || echo 0) > 1000000 )); then mv -f "$LOG_FILE" "$LOG_FILE.1"; fi
+  printf '%s %s\n' "$(date +%FT%T)" "$*" >> "$LOG_FILE"
+}
 have() { command -v "$1" >/dev/null 2>&1; }
 now_iso() { date +%FT%T%z; }
 now_epoch() { date +%s; }
@@ -58,8 +73,14 @@ notify() { # notify <headline> [description] [-- exec args...]
 
 fmt_hms() { local s=${1%.*}; s=${s:-0}; printf '%02d:%02d:%02d' $((s / 3600)) $((s % 3600 / 60)) $((s % 60)); }
 
-# Atomic JSON write: write_json <file> <json>
-write_json() { mkdir -p "$(dirname "$1")"; printf '%s\n' "$2" > "$1.tmp.$$"; mv -f "$1.tmp.$$" "$1"; }
+# Atomic JSON write: write_json <file> <json>. An empty document is refused —
+# a jq filter that failed must never blank meta.json or state.json.
+write_json() {
+  [[ -n "$2" ]] || { log "write_json: refusing to write empty JSON to $1"; return 1; }
+  mkdir -p "$(dirname "$1")"; printf '%s\n' "$2" > "$1.tmp.$$"; mv -f "$1.tmp.$$" "$1"
+}
+# Seconds as given on the command line: non-negative, plain decimal, nothing else.
+valid_seconds() { [[ "$1" =~ ^[0-9]+([.][0-9]+)?$ ]]; }
 
 # ---------------------------------------------------------------- config ----
 CONFIG_DEFAULTS=$(jq -cn --arg dir "${OMARECORDER_DIR:-$HOME/Recordings}" '{
@@ -82,11 +103,13 @@ cmd_config() {
   local sub="${1:-get}"; shift || true
   case "$sub" in
     get)
-      if [[ "${1:-}" == "--json" || -z "${1:-}" ]]; then jq . <<<"$CONFIG"; else cfg "$1"; fi ;;
+      if [[ "${1:-}" == "--json" || -z "${1:-}" ]]; then jq . <<<"$CONFIG"
+      else jq -e --arg k "$1" 'has($k)' <<<"$CONFIG" >/dev/null || die "unknown config key: $1"; cfg "$1"; fi ;;
     set)
       local key="${1:-}" val="${2:-}"; [[ -n "$key" && -n "$val" ]] || die "usage: config set <key> <value>"
       case "$key" in
-        recordingsDir|defaultModel|language) ;;
+        recordingsDir) local d="${val/#\~/$HOME}"; [[ -d "$d" && -w "$d" ]] || die "recordingsDir must be an existing writable directory: $val" ;;
+        defaultModel|language) ;;
         defaultSource) [[ "$val" =~ ^(mic|system|both)$ ]] || die "defaultSource must be mic|system|both" ;;
         keepAwake) [[ "$val" =~ ^(true|false)$ ]] || die "keepAwake must be true|false" ;;
         threads) [[ "$val" =~ ^[0-9]+$ ]] || die "threads must be an integer" ;;
@@ -107,11 +130,17 @@ read_state() { # always normalized to {recording, jobs, version}
   { [[ -f "$STATE_FILE" ]] && cat "$STATE_FILE" 2>/dev/null || echo "$EMPTY_STATE"; } \
     | jq -c '{recording: (.recording // null), jobs: (.jobs // []), version: (.version // 0)}' 2>/dev/null || echo "$EMPTY_STATE"
 }
-# save_state <json>: bumps version and writes atomically
+# save_state <json>: bumps version and writes atomically (callers hold the lock)
 save_state() { write_json "$STATE_FILE" "$(jq -c '.version = ((.version // 0) + 1)' <<<"$1")"; }
-bump_state() { save_state "$(read_state)"; }
+# Every read-modify-write of state.json runs under one flock so concurrent
+# CLI calls (UI actions, workers, keybindings) never lose each other's update.
+with_lock() { mkdir -p "$RUN_DIR"; ( flock -w 5 9 || log "state lock timeout"; "$@" ) 9>>"$STATE_LOCK"; }
+_bump_state() { save_state "$(read_state)"; }
+_state_set() { save_state "$(jq -c "$@" <<<"$(read_state)")"; }
+bump_state() { with_lock _bump_state; }
 # state_set [jq args...] <filter>: apply a jq filter to the state and save it
-state_set() { save_state "$(jq -c "$@" <<<"$(read_state)")"; }
+state_set() { with_lock _state_set "$@"; }
+reconcile_state() { with_lock _reconcile_state; }
 
 pid_alive() { kill -0 "$1" 2>/dev/null; }
 
@@ -119,19 +148,26 @@ pid_alive() { kill -0 "$1" 2>/dev/null; }
 unit_active() { [[ "$(systemctl --user show -p ActiveState --value "$1" 2>/dev/null)" =~ ^(active|activating|reloading|deactivating)$ ]]; }
 
 # Drop dead recordings/jobs from state (called by status & before mutations).
-reconcile_state() {
+_reconcile_state() {
   local st changed=0
   st=$(read_state)
   if [[ $(jq -r '.recording != null' <<<"$st") == "true" ]]; then
     local alive=0 p
-    for p in $(jq -r '.recording.pids[]' <<<"$st"); do pid_alive "$p" && alive=1; done
+    for p in $(jq -r '.recording.pids[] | select(type=="number")' <<<"$st"); do pid_alive "$p" && alive=1; done
     if [[ $alive == 0 ]]; then
-      local ddir; ddir=$(jq -r '.recording.dir // empty' <<<"$st")
+      local ddir mpid; ddir=$(jq -r '.recording.dir // empty' <<<"$st"); mpid=$(jq -r '.recording.meter_pid // empty' <<<"$st")
+      [[ "$mpid" =~ ^[0-9]+$ ]] && kill -TERM "$mpid" 2>/dev/null; rm -f "$LEVEL_FILE"
       st=$(jq -c '.recording=null' <<<"$st"); changed=1; log "reconcile: cleared dead recording"
-      if [[ -n "$ddir" && -f "$ddir/audio.wav" ]]; then
-        repair_audio "$ddir" || true; finalize_audio "$ddir"; analyze_levels "$ddir"
-        local rttl; rttl=$(jq -r '.title // empty' "$ddir/meta.json"); rttl="${rttl:-$(basename "$ddir")}"
-        notify "Recording recovered · $rttl" "The recorder stopped unexpectedly; $(fmt_hms "$(jq -r '.duration_s // 0' "$ddir/meta.json")") of audio was saved."
+      if [[ -n "$ddir" && -d "$ddir" ]]; then
+        # A "both" take that died before the mix has only mic.wav + system.wav.
+        if [[ ! -f "$ddir/audio.wav" && -f "$ddir/mic.wav" && -f "$ddir/system.wav" ]]; then
+          repair_wav "$ddir/mic.wav" || true; repair_wav "$ddir/system.wav" || true; mix_both "$ddir" || true
+        fi
+        if [[ -f "$ddir/audio.wav" ]]; then
+          repair_wav "$ddir/audio.wav" || true; finalize_audio "$ddir"; analyze_levels "$ddir"
+          local rttl; rttl=$(jq -r '.title // empty' "$ddir/meta.json"); rttl="${rttl:-$(basename "$ddir")}"
+          notify "Recording recovered · $rttl" "The recorder stopped unexpectedly; $(fmt_hms "$(jq -r '.duration_s // 0' "$ddir/meta.json")") of audio was saved."
+        fi
       fi
     fi
   fi
@@ -161,14 +197,20 @@ rec_dir() {
 require_dir() { rec_dir "$1" || die "no recording with id $1"; }
 
 sanitize_title() { # strip slashes/control chars, collapse spaces, ≤80 chars
-  local t="$1"; t="${t//\//-}"; t=$(printf '%s' "$t" | tr -d '\000-\037' | sed -E 's/[[:space:]]+/ /g; s/^ //; s/ $//'); printf '%s' "${t:0:80}"
+  local t="$1"; t="${t//\//-}"; t=$(printf '%s' "$t" | tr '\000-\037' ' ' | sed -E 's/[[:space:]]+/ /g; s/^ //; s/ $//'); printf '%s' "${t:0:80}"
 }
 
-meta_path() { echo "$1/meta.json"; }
 read_meta() { jq -c . "$1/meta.json"; }
-update_meta() { write_json "$1/meta.json" "$(jq -c "$2" "$1/meta.json")"; }
+# update_meta <dir> <filter> [jq args...]: values go in through --arg/--argjson,
+# never interpolated into the program; a failing filter leaves meta.json as is.
+update_meta() {
+  local dir="$1" filter="$2"; shift 2
+  local j; j=$(jq -c "$@" "$filter" "$dir/meta.json") || { log "update_meta failed in $dir: $filter"; return 1; }
+  write_json "$dir/meta.json" "$j"
+}
 
-audio_duration() { ffprobe -v error -show_entries format=duration -of csv=p=0 "$1" 2>/dev/null | cut -d. -f1; }
+# Whole seconds, or nothing when ffprobe cannot tell (truncated file → "N/A").
+audio_duration() { local d; d=$(ffprobe -v error -show_entries format=duration -of csv=p=0 "$1" 2>/dev/null | cut -d. -f1); [[ "$d" =~ ^[0-9]+$ ]] && echo "$d"; return 0; }
 file_size() { stat -c %s "$1" 2>/dev/null || echo 0; }
 
 # rec_json <dir> → meta + dir + derived fields
@@ -216,7 +258,7 @@ record_start() {
   have pw-record || die "pw-record not found (pipewire)"
   mkdir -p "$ROOT" "$RUN_DIR"
   local id; id=$(new_id)
-  while [[ -d "$ROOT/$id" ]]; do sleep 1; id=$(new_id); done
+  while rec_dir "$id" >/dev/null 2>&1; do sleep 1; id=$(new_id); done
   title=$(sanitize_title "$title")
   local dir="$ROOT/$id"; [[ -n "$title" ]] && dir="$ROOT/$id $title"
   mkdir -p "$dir"
@@ -280,10 +322,10 @@ record_stop() {
   state_set '.recording = null'
   [[ -d "$dir" ]] || die "recording folder vanished: $dir"
 
-  if [[ "$source" == "both" ]]; then
-    ffmpeg -v error -y -i "$dir/mic.wav" -i "$dir/system.wav" \
-      -filter_complex "amix=inputs=2:duration=longest:normalize=0" -ar "$RATE" -ac 1 -c:a pcm_s16le "$dir/audio.wav" \
-      || log "amix failed for $id"
+  if [[ "$source" == "both" ]] && ! mix_both "$dir"; then
+    bump_state
+    notify "Recording saved, but mixing failed · ${id}" "mic.wav and system.wav are kept in the recording folder; audio.wav could not be produced (details: $LOG_FILE)"
+    die "amix failed for $id — mic.wav and system.wav are kept in $dir"
   fi
   finalize_audio "$dir"
   analyze_levels "$dir"
@@ -299,22 +341,30 @@ record_stop() {
   echo "$id ($(fmt_hms "$dur"))"
 }
 
+# mix_both <dir>: mic.wav + system.wav → audio.wav (mono, whisper rate)
+mix_both() {
+  local dir="$1"
+  ffmpeg -v error -y -i "$dir/mic.wav" -i "$dir/system.wav" \
+    -filter_complex "amix=inputs=2:duration=longest:normalize=0" -ar "$RATE" -ac 1 -c:a pcm_s16le "$dir/audio.wav.tmp.wav" 2>>"$LOG_FILE" \
+    && mv -f "$dir/audio.wav.tmp.wav" "$dir/audio.wav" || { rm -f "$dir/audio.wav.tmp.wav"; log "amix failed in $dir"; return 1; }
+}
+
 # finalize_audio <dir>: fill duration/size in meta.json from audio.wav
 finalize_audio() {
   local dir="$1" dur size
   dur=$(audio_duration "$dir/audio.wav"); dur=${dur:-0}
   size=$(file_size "$dir/audio.wav")
-  update_meta "$dir" ".duration_s = $dur | .size_bytes = $size"
+  update_meta "$dir" '.duration_s = $d | .size_bytes = $s' --argjson d "$dur" --argjson s "$size"
 }
 
-# repair_audio <dir>: a recorder that died (crash, power loss) leaves a WAV with
+# repair_wav <file>: a recorder that died (crash, power loss) leaves a WAV with
 # a zero-length header. Re-muxing with ffmpeg rewrites the header from the data.
-repair_audio() {
-  local dir="$1"; local f="$dir/audio.wav"
+repair_wav() {
+  local f="$1"
   [[ -f "$f" ]] || return 1
   local d; d=$(audio_duration "$f")
-  [[ -n "$d" && "$d" != "0" && "$d" != "N/A" ]] && return 0
-  ffmpeg -v error -y -i "$f" -c copy "$f.repair.wav" 2>>"$LOG_FILE" && mv -f "$f.repair.wav" "$f" && log "repaired wav header in $dir"
+  [[ -n "$d" && "$d" != "0" ]] && return 0
+  ffmpeg -v error -y -i "$f" -c copy "$f.repair.wav" 2>>"$LOG_FILE" && mv -f "$f.repair.wav" "$f" && log "repaired wav header: $f"
 }
 
 # analyze_levels <dir>: peak/RMS/flatness via ffmpeg astats → meta.levels.
@@ -336,7 +386,8 @@ analyze_levels() {
   # a handful of samples; a hot mic parks thousands per second there.
   local pct; pct=$(awk -v c="$pc" -v n="$ns" 'BEGIN{ if (n < 1) n = 1; printf "%.3f", 100 * c / n }')
   local clipped=false; awk -v p="$peak" -v fl="$flat" -v x="$pct" 'BEGIN{exit !(p > -0.5 && (x > 0.05 || fl > 2))}' && clipped=true
-  update_meta "$dir" ".levels = {peak_db: $peak, rms_db: $rms, flat: $flat, clipped_pct: $pct, clipped: $clipped}"
+  update_meta "$dir" '.levels = {peak_db: $p, rms_db: $r, flat: $f, clipped_pct: $x, clipped: $c}' \
+    --argjson p "$peak" --argjson r "$rms" --argjson f "$flat" --argjson x "$pct" --argjson c "$clipped"
   [[ $clipped == true ]] && log "levels: CLIPPED $dir peak=$peak rms=$rms flat=$flat clipped_pct=$pct"
   return 0
 }
@@ -372,7 +423,7 @@ cmd_status() {
 cmd_import() {
   local src="" move=0 title=""
   while [[ $# -gt 0 ]]; do
-    case "$1" in --move) move=1; shift ;; --title) title="$2"; shift 2 ;; *) src="$1"; shift ;; esac
+    case "$1" in --move) move=1; shift ;; --title) title="$2"; shift 2 ;; -*) die "unknown option: $1" ;; *) src="$1"; shift ;; esac
   done
   [[ -f "$src" ]] || die "file not found: $src"
   mkdir -p "$ROOT"
@@ -435,12 +486,28 @@ cmd_rename() {
 }
 
 cmd_delete() {
-  local id="${1:-}" yes=0; [[ -n "$id" ]] || die "usage: delete <id> [--yes]"
-  [[ "${2:-}" == "--yes" ]] && yes=1
+  local id="${1:-}" yes=0 permanent=0; [[ -n "$id" ]] || die "usage: delete <id> [--yes] [--permanent]"; shift
+  while [[ $# -gt 0 ]]; do case "$1" in --yes) yes=1 ;; --permanent) permanent=1 ;; *) die "unknown option: $1" ;; esac; shift; done
   local dir; dir=$(require_dir "$id")
-  if (( ! yes )) && [[ -t 0 ]]; then read -r -p "Delete '$dir'? [y/N] " a; [[ "$a" =~ ^[Yy]$ ]] || exit 1; fi
-  if have gio && gio trash "$dir" 2>/dev/null; then log "delete $id (trash)"; else rm -rf "$dir"; log "delete $id (rm)"; fi
+  if (( ! yes )); then
+    [[ -t 0 ]] || die "refusing to delete $id without --yes (no terminal to confirm on)"
+    read -r -p "Delete '$dir'? [y/N] " a; [[ "$a" =~ ^[Yy]$ ]] || exit 1
+  fi
+  if (( permanent )); then rm -rf "$dir"; log "delete $id (permanent)"
+  elif have gio && gio trash "$dir" 2>>"$LOG_FILE"; then log "delete $id (trash)"
+  else die "could not move $id to the trash (gio); use --permanent to delete it for good"; fi
   bump_state; echo "deleted $id"
+}
+
+# copy <id> [--print]: transcript text (without the header line) to the clipboard
+cmd_copy() {
+  local id="${1:-}"; [[ -n "$id" ]] || die "usage: copy <id> [--print]"
+  local dir; dir=$(require_dir "$id"); local f="$dir/transcript.md"
+  [[ -f "$f" ]] || die "no transcript yet for $id"
+  if [[ "${2:-}" == "--print" ]]; then sed '1{/^<!--/d}' "$f"; return 0; fi
+  have wl-copy || die "wl-copy not found (pacman -S wl-clipboard)"
+  sed '1{/^<!--/d}' "$f" | wl-copy
+  echo "copied $id"
 }
 
 # --------------------------------------------------------------- models ----
@@ -495,8 +562,8 @@ run_detached() {
   local unit="$1" desc="$2"; shift 2
   if [[ "${OMARECORDER_SYNC:-0}" == "1" ]] || ! have systemd-run; then "$@"; return $?; fi
   systemd-run --user --quiet --no-block --collect --service-type=oneshot -u "$unit" --description="$desc" \
-    --setenv=OMARECORDER_DIR="${OMARECORDER_DIR:-}" --setenv=XDG_CONFIG_HOME="$XDG_CONFIG_HOME" \
-    --setenv=XDG_STATE_HOME="$XDG_STATE_HOME" --setenv=VOXTYPE_MODELS_DIR="$VOXTYPE_MODELS_DIR" \
+    --setenv=OMARECORDER_DIR="${OMARECORDER_DIR:-}" --setenv=XDG_CONFIG_HOME="$XDG_CONFIG_HOME" --setenv=HOME="$HOME" \
+    --setenv=XDG_STATE_HOME="$XDG_STATE_HOME" --setenv=XDG_RUNTIME_DIR="$XDG_RUNTIME_DIR" --setenv=VOXTYPE_MODELS_DIR="$VOXTYPE_MODELS_DIR" \
     --setenv=OMARECORDER_QUIET="${OMARECORDER_QUIET:-0}" --setenv=PATH="$PATH" "$@"
 }
 
@@ -530,6 +597,9 @@ cmd_transcribe() {
       --from) from="$2"; shift 2 ;; --to) to="$2"; shift 2 ;; *) die "unknown option: $1" ;;
     esac
   done
+  [[ -z "$from" ]] || valid_seconds "$from" || die "--from must be a non-negative number of seconds"
+  [[ -z "$to" ]] || valid_seconds "$to" || die "--to must be a non-negative number of seconds"
+  [[ -z "$from" || -z "$to" ]] || awk -v a="$from" -v b="$to" 'BEGIN{exit !(b > a)}' || die "--to must be greater than --from"
   local dir; dir=$(require_dir "$id")
   [[ -f "$dir/audio.wav" ]] || die "no audio.wav in $dir"
   have voxtype || die "voxtype not installed"
@@ -553,28 +623,35 @@ _tx_worker() {
   local id="$1" model="$2" lang="$3" threads="$4" from="$5" to="$6"
   local dir; dir=$(require_dir "$id")
   local ttl; ttl=$(jq -r '.title // empty' "$dir/meta.json"); ttl="${ttl:-$id}"
-  # `omarecorder cancel` stops the unit with SIGTERM: leave no partial files
-  # behind and exit 0 so systemd does not report a failed unit.
-  trap 'kill -TERM 0 2>/dev/null; rm -f "$dir/transcript.md.tmp" "$RUN_DIR/tx-$id.wav"; exit 0' TERM
-  local input="$dir/audio.wav" tmpwav="" dur
+  # `omarecorder cancel` stops the unit with SIGTERM: stop our own child (never
+  # the process group — inline runs share it with the caller), leave no partial
+  # files behind and exit 0 so systemd does not report a failed unit.
+  local child=""
+  trap '[[ -n "$child" ]] && kill -TERM "$child" 2>/dev/null; rm -f "$dir/transcript.md.tmp" "$RUN_DIR/tx-$id".*; exit 0' TERM
+  local input="$dir/audio.wav" tmpwav="" dur errlog="$RUN_DIR/tx-$id.err"
   dur=$(jq -r '.duration_s // 0' "$dir/meta.json")
+  mkdir -p "$RUN_DIR"
   if [[ -n "$from" || -n "$to" ]]; then
-    mkdir -p "$RUN_DIR"; tmpwav="$RUN_DIR/tx-$id.wav"
-    ffmpeg -v error -y ${from:+-ss "$from"} ${to:+-to "$to"} -i "$dir/audio.wav" -c copy "$tmpwav"
+    tmpwav="$RUN_DIR/tx-$id.wav"
+    local -a cut=(); [[ -n "$from" ]] && cut+=(-ss "$from"); [[ -n "$to" ]] && cut+=(-to "$to")
+    ffmpeg -v error -y "${cut[@]}" -i "$dir/audio.wav" -c copy "$tmpwav"
     input="$tmpwav"; dur=$(audio_duration "$tmpwav")
   fi
   local -a opts=(--model "$model" --language "$lang")
   [[ "$threads" =~ ^[1-9][0-9]*$ ]] && opts+=(--threads "$threads")
   local start rc=0; start=$(date +%s.%N)
-  if voxtype -q "${opts[@]}" transcribe "$input" 2>>"$LOG_FILE" | awk 'seen{print} /^$/{seen=1}' > "$dir/transcript.md.tmp"; then
-    rc=0; else rc=1; fi
+  # whisper's stderr goes to a per-job file (it can echo decoded text), not the shared log.
+  voxtype -q "${opts[@]}" transcribe "$input" 2>"$errlog" | awk 'seen{print} /^$/{seen=1}' > "$dir/transcript.md.tmp" &
+  child=$!; wait "$child" || rc=1; child=""
   [[ -n "$tmpwav" ]] && rm -f "$tmpwav"
   if [[ $rc != 0 || ! -s "$dir/transcript.md.tmp" ]]; then
     rm -f "$dir/transcript.md.tmp"
     state_set --arg id "$id" '.jobs |= map(select(.id != $id))'
-    local why; why=$(grep -iE 'error|failed|cannot|not found' "$LOG_FILE" | tail -1 | cut -c1-120)
-    notify "Transcription failed · $ttl" "${why:-voxtype returned no text} (details: $LOG_FILE)"; log "transcribe FAILED $id"; return 0
+    local why; why=$(grep -iE 'error|failed|cannot|not found' "$errlog" 2>/dev/null | tail -1 | cut -c1-120)
+    mkdir -p "$STATE_DIR"; mv -f "$errlog" "$STATE_DIR/tx-$id.err" 2>/dev/null || true
+    notify "Transcription failed · $ttl" "${why:-voxtype returned no text} (details: $STATE_DIR/tx-$id.err)"; log "transcribe FAILED $id"; return 0
   fi
+  rm -f "$errlog"
   local elapsed; elapsed=$(awk -v s="$start" -v e="$(date +%s.%N)" 'BEGIN{d=e-s; if(d<0.1)d=0.1; printf "%.1f", d}')
   grep -q '[^[:space:]]' "$dir/transcript.md.tmp" || printf '(no speech detected)\n' > "$dir/transcript.md.tmp"
   [[ -f "$dir/transcript.md" ]] && cp -f "$dir/transcript.md" "$dir/transcript.prev.md"   # re-transcribe keeps the last one
@@ -586,8 +663,8 @@ _tx_worker() {
     mkdir -p "$STATE_DIR"; local bench='{}'; [[ -f "$BENCH_FILE" ]] && bench=$(jq -c . "$BENCH_FILE")
     write_json "$BENCH_FILE" "$(jq -c --arg m "$model" --argjson r "$rtf" --arg t "$(now_iso)" '.[$m] = {rtf:$r, measured:$t}' <<<"$bench")"
   fi
-  write_json "$dir/meta.json" "$(jq -c --arg m "$model" --arg l "$lang" --arg c "$(now_iso)" --argjson e "$elapsed" --argjson r "$rtf" \
-    '.transcript = {model:$m, language:$l, created:$c, elapsed_s:$e, rtf:$r}' "$dir/meta.json")"
+  update_meta "$dir" '.transcript = {model:$m, language:$l, created:$c, elapsed_s:$e, rtf:$r}' \
+    --arg m "$model" --arg l "$lang" --arg c "$(now_iso)" --argjson e "$elapsed" --argjson r "$rtf"
   state_set --arg id "$id" '.jobs |= map(select(.id != $id))'
   log "transcribe ok $id model=$model elapsed=${elapsed}s rtf=$rtf"
   notify "Transcript ready · $ttl" "$(model_label "$model") took $(fmt_hms "${elapsed%.*}") — click to open" -- "$SELF" open "$id"
@@ -611,20 +688,22 @@ cmd_cancel() {
 # -------------------------------------------------------- play / open ------
 cmd_play() {
   local id="${1:-}" from=""; [[ -n "$id" ]] || die "usage: play <id> [--from s]"
-  [[ "${2:-}" == "--from" ]] && from="${3:-}"
+  [[ "${2:-}" == "--from" ]] && { from="${3:-}"; valid_seconds "$from" || die "--from must be a non-negative number of seconds"; }
   local dir; dir=$(require_dir "$id")
   cmd_stop_play >/dev/null 2>&1 || true
   mkdir -p "$RUN_DIR"
-  if have mpv; then
-    setsid mpv --no-video --really-quiet ${from:+--start="$from"} "$dir/audio.wav" >/dev/null 2>&1 < /dev/null &
-  else
-    setsid pw-play "$dir/audio.wav" >/dev/null 2>&1 < /dev/null &
-  fi
+  local -a player
+  if have mpv; then player=(mpv --no-video --really-quiet); [[ -n "$from" ]] && player+=("--start=$from"); player+=("$dir/audio.wav")
+  else player=(pw-play "$dir/audio.wav"); fi
+  setsid "${player[@]}" >/dev/null 2>&1 < /dev/null &
   echo $! > "$PLAY_PID_FILE"; echo "playing $id"
 }
+# Only ever signal a pid that is still our player (pids get recycled).
 cmd_stop_play() {
   [[ -f "$PLAY_PID_FILE" ]] || { echo "not playing"; return 0; }
-  local p; p=$(cat "$PLAY_PID_FILE"); kill "$p" 2>/dev/null || true; rm -f "$PLAY_PID_FILE"; echo "stopped"
+  local p; p=$(cat "$PLAY_PID_FILE"); rm -f "$PLAY_PID_FILE"
+  if [[ "$p" =~ ^[0-9]+$ ]] && [[ "$(cat "/proc/$p/comm" 2>/dev/null)" =~ ^(mpv|pw-play)$ ]]; then kill "$p" 2>/dev/null || true; fi
+  echo "stopped"
 }
 cmd_open() {
   local id="${1:-}"; [[ -n "$id" ]] || die "usage: open <id>"
@@ -638,17 +717,41 @@ cmd_library() { have omarchy-shell || die "omarchy-shell not found"; omarchy-she
 # --------------------------------------------------------------- setup -----
 cmd_setup() {
   [[ "${1:-}" == "check" ]] || die "usage: setup check [--json]"
-  local voxtype_ok=false backend="" ffmpeg_ok=false jq_ok=true pw_ok=false mic="" root_ok=false installed='[]' m
+  local voxtype_ok=false backend="" mic="" root_ok=false installed='[]' m
   have voxtype && voxtype_ok=true && backend=$(voxtype setup gpu --status 2>/dev/null | sed -n 's/^Active backend: //p' | head -1)
-  have ffmpeg && ffmpeg_ok=true; have pw-record && pw_ok=true
+  # Every external tool we call, with the package that provides it. "required"
+  # tools block recording/transcribing; the rest only disable one feature.
+  local tools='[
+    {"tool":"voxtype","package":"omarchy install dictation","required":true,"for":"transcription"},
+    {"tool":"pw-record","package":"pipewire","required":true,"for":"recording"},
+    {"tool":"pactl","package":"libpulse","required":true,"for":"finding the microphone"},
+    {"tool":"ffmpeg","package":"ffmpeg","required":true,"for":"import, mixing, levels"},
+    {"tool":"ffprobe","package":"ffmpeg","required":true,"for":"durations"},
+    {"tool":"jq","package":"jq","required":true,"for":"state"},
+    {"tool":"systemd-run","package":"systemd","required":false,"for":"background transcription"},
+    {"tool":"wl-copy","package":"wl-clipboard","required":false,"for":"copy transcript"},
+    {"tool":"gio","package":"glib2","required":false,"for":"move to trash"},
+    {"tool":"xdg-open","package":"xdg-utils","required":false,"for":"open folder / Obsidian"},
+    {"tool":"mpv","package":"mpv","required":false,"for":"playback"}]'
+  local checked='[]' missing='[]' t present required_ok=true
+  while IFS= read -r t; do
+    present=false; have "$(jq -r .tool <<<"$t")" && present=true
+    checked=$(jq -c --argjson t "$t" --argjson p "$present" '. + [$t + {present:$p}]' <<<"$checked")
+    if [[ $present == false ]]; then
+      missing=$(jq -c --argjson t "$t" '. + [$t]' <<<"$missing")
+      [[ $(jq -r .required <<<"$t") == "true" ]] && required_ok=false
+    fi
+  done < <(jq -c '.[]' <<<"$tools")
   mic=$(resolve_mic || true)
   mkdir -p "$ROOT" 2>/dev/null && [[ -w "$ROOT" ]] && root_ok=true
   for m in $(jq -r '.[].name' <<<"$MODEL_CATALOG"); do model_installed "$m" && installed=$(jq -c --arg m "$m" '. + [$m]' <<<"$installed"); done
   local default_ok=false; model_installed "$(cfg defaultModel)" && default_ok=true
-  local ok=false; [[ $voxtype_ok == true && $ffmpeg_ok == true && $pw_ok == true && -n "$mic" && $root_ok == true && $default_ok == true ]] && ok=true
-  local out; out=$(jq -cn --argjson ok "$ok" --argjson v "$voxtype_ok" --arg b "$backend" --argjson f "$ffmpeg_ok" --argjson j "$jq_ok" --argjson p "$pw_ok" \
+  local ok=false; [[ $required_ok == true && -n "$mic" && $root_ok == true && $default_ok == true ]] && ok=true
+  local out; out=$(jq -cn --argjson ok "$ok" --argjson v "$voxtype_ok" --arg b "$backend" --argjson tools "$checked" --argjson missing "$missing" \
     --arg mic "$mic" --arg root "$ROOT" --argjson r "$root_ok" --argjson inst "$installed" --arg dm "$(cfg defaultModel)" --argjson dmok "$default_ok" --arg ver "$VERSION" \
-    '{ok:$ok, version:$ver, voxtype:$v, backend:$b, ffmpeg:$f, jq:$j, pw_record:$p, mic:$mic, mic_ok:($mic != ""), recordingsDir:$root, recordingsDir_ok:$r,
+    '{ok:$ok, version:$ver, voxtype:$v, backend:$b, tools:$tools, missing:$missing,
+      ffmpeg:($tools | any(.tool=="ffmpeg" and .present)), pw_record:($tools | any(.tool=="pw-record" and .present)),
+      mic:$mic, mic_ok:($mic != ""), recordingsDir:$root, recordingsDir_ok:$r,
       installed_models:$inst, defaultModel:$dm, defaultModel_ok:$dmok}')
   if [[ "${2:-}" == "--json" ]]; then jq . <<<"$out"; else
     jq -r 'to_entries[] | "\(.key): \(.value)"' <<<"$out"; fi
@@ -664,7 +767,8 @@ omarecorder $VERSION — record, keep, transcribe locally (voxtype)
   record stop | toggle | status [--json]                 control / inspect
   import <file> [--move] [--title T]                     bring an existing audio file in
   list [--json] | show <id> [--json] | analyze <id>      browse / measure levels
-  rename <id> <title> | delete <id> [--yes]              manage (delete → trash)
+  rename <id> <title> | delete <id> [--yes] [--permanent] manage (delete → trash)
+  copy <id> [--print]                                    transcript text → clipboard
   transcribe <id> [--model M] [--language L] [--from s --to s]
   cancel <id> | estimate <id> --model M
   models [--json] | model download <name>
@@ -678,7 +782,7 @@ EOF
 
 main() {
   load_config
-  mkdir -p "$RUN_DIR" 2>/dev/null || true
+  mkdir -p "$RUN_DIR" 2>/dev/null || true   # 0700 via umask
   local cmd="${1:-help}"; shift || true
   case "$cmd" in
     record) cmd_record "$@" ;;
@@ -689,6 +793,7 @@ main() {
     analyze) cmd_analyze "$@" ;;
     rename) cmd_rename "$@" ;;
     delete) cmd_delete "$@" ;;
+    copy) cmd_copy "$@" ;;
     transcribe) cmd_transcribe "$@" ;;
     cancel) cmd_cancel "$@" ;;
     estimate) cmd_estimate "$@" ;;

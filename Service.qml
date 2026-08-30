@@ -15,10 +15,15 @@ QtObject {
 
   property var settings: ({})
   readonly property string pluginId: "io.github.coreytyhurst.omarecorder"
-  readonly property string pluginDir: Qt.resolvedUrl(".").toString().replace(/^file:\/\//, "").replace(/\/$/, "")
+  // decodeURIComponent: a home directory with a space arrives as %20 otherwise.
+  readonly property string pluginDir: decodeURIComponent(Qt.resolvedUrl(".").toString()).replace(/^file:\/\//, "").replace(/\/$/, "")
   readonly property string cli: pluginDir + "/bin/omarecorder"
-  readonly property string runtimeDir: (Quickshell.env("XDG_RUNTIME_DIR") || "/tmp") + "/omarecorder"
-  readonly property string stateFile: runtimeDir + "/state.json"
+  // Runtime state lives only in the per-user runtime dir (never /tmp): without
+  // XDG_RUNTIME_DIR there is nothing safe to watch, so the service stays idle.
+  readonly property string xdgRuntime: Quickshell.env("XDG_RUNTIME_DIR") || ""
+  readonly property string runtimeDir: xdgRuntime ? xdgRuntime + "/omarecorder" : ""
+  readonly property string stateFile: runtimeDir ? runtimeDir + "/state.json" : ""
+  readonly property string levelFile: runtimeDir ? runtimeDir + "/level" : ""
 
   // ---- state mirrored from the CLI ----
   property var state: ({ recording: null, jobs: [], version: 0 })
@@ -125,10 +130,8 @@ QtObject {
   function stopPlay() { run(["stop-play"]) }
   function openTranscript(id) { Quickshell.execDetached([cli, "open", id]) }
   function openFolder(id) { Quickshell.execDetached([cli, "folder", id]) }
-  function copyTranscript(id) {
-    var r = recordingById(id); if (!r || !r.transcript_path) return
-    Quickshell.execDetached(["bash", "-c", "sed '1{/^<!--/d}' " + JSON.stringify(r.transcript_path) + " | wl-copy"])
-  }
+  // The CLI does the copy (argv only — no shell string is ever built from a title).
+  function copyTranscript(id, onDone) { run(["copy", id], onDone) }
   function setConfig(key, value) { run(["config", "set", key, String(value)], function() { refreshConfig() }) }
   function openLibrary() { Quickshell.execDetached(["omarchy-shell", "shell", "toggle", pluginId]) }
 
@@ -157,9 +160,11 @@ QtObject {
     onLoadFailed: function(err) { root.state = { recording: null, jobs: [], version: 0 }; root.updateElapsed() }
   }
 
+  // Ticks the elapsed clocks only. Everything else is event-driven: the CLI
+  // bumps state.json (watched above) whenever anything changes.
   property Timer elapsedTimer: Timer {
     interval: 1000; repeat: true; running: root.recording || root.transcribing || root.downloading
-    onTriggered: { root.updateElapsed(); if (root.busy) root.refreshList() }
+    onTriggered: root.updateElapsed()
   }
 
   property Process listProc: Process {
@@ -187,8 +192,9 @@ QtObject {
   }
 
   Component.onCompleted: {
-    // Ensure the runtime dir exists so the FileView has something to watch.
-    Quickshell.execDetached(["mkdir", "-p", root.runtimeDir])
-    refresh()
+    if (!root.runtimeDir) { root.lastError = "XDG_RUNTIME_DIR is not set — Omarecorder cannot run"; return }
+    // `status` reconciles stale state and creates the (0700) runtime dir and
+    // state.json, so the FileView above has a real file to watch from the start.
+    run(["status"], function() { root.stateView.reload(); root.refresh() })
   }
 }
