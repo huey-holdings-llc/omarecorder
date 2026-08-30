@@ -160,6 +160,11 @@ are left untouched.
   starts or stops recording. While recording it becomes a red record glyph with
   a running `HH:MM:SS`, replaced by CLIP while the input is on the rails. An
   hourglass means a transcription is running.
+* **Source picker**: Microphone records what the mic hears, which on speakers includes
+  whatever the computer is playing; use headphones for a clean voice-only take. System
+  audio is a clean digital copy of what the computer plays, with no room and no mic.
+  Mic + system audio records both as separate tracks (`mic.wav`, `system.wav`) and
+  mixes them into `audio.wav`.
 * **Popup keys**: `r` record/stop, `l` library, `i` import, `s` settings,
   `Up`/`Down` and `Enter` on recent rows, `Esc`.
 * **Library keys**: type to search. `Up`/`Down`, `PgUp`/`PgDn`, `Home`/`End`
