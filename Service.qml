@@ -125,9 +125,9 @@ QtObject {
   function openTranscript(id) { Quickshell.execDetached([cli, "open", id]) }
   function openFolder(id) { Quickshell.execDetached([cli, "folder", id]) }
   // The CLI does the copy (argv only — no shell string is ever built from a title).
-  function copyTranscript(id, onDone) { run(["copy", id], onDone) }
+  function copyTranscript(id, raw, onDone) { run(raw ? ["copy", id, "--raw"] : ["copy", id], onDone) }
   // The CLI picks the vault/folder (config, then the open vault) and opens the note in Obsidian.
-  function exportToObsidian(id, onDone) { run(["export", id], onDone) }
+  function exportToObsidian(id, raw, onDone) { run(raw ? ["export", id, "--raw"] : ["export", id], onDone) }
   function setConfig(key, value) { run(["config", "set", key, String(value)], function() { refreshConfig() }) }
   function openLibrary() { Quickshell.execDetached(["omarchy-shell", "shell", "toggle", pluginId]) }
 

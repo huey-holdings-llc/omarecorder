@@ -296,6 +296,35 @@ else
 fi
 $CLI delete "$IDT" --yes >/dev/null; $CLI delete "$IDT2" --yes >/dev/null
 
+echo "== tidy"
+IDT=$("$CLI" import "$TMP/quiet.wav" --title "Tidy Test"); DT2=$("$CLI" show "$IDT" --json | jq -r .dir)
+# A raw transcript the way voxtype produces it: one run-on line per piece, a
+# whisper loop in the middle, pieces separated by a blank line.
+{
+  printf '<!-- omarecorder model=base.en language=en created=x range=0-end chunks=2 -->\n'
+  printf 'We start the session with the party at the gate. The guard asks for papers. Nobody has papers. '
+  for _ in $(seq 1 30); do printf 'Sentence number %s about the plan, which is long enough to matter. ' "$_"; done
+  printf 'Then he says we need to go around the back and try the door. we need to go around the back and try the door. we need to go around the back and try the door. we need to go around the back and try the door. That is what he said.\n'
+  printf '\n'
+  printf 'Second piece begins here. It has a few sentences. And then it ends.\n'
+} > "$DT2/transcript.md"
+check "tidy runs" "$CLI" tidy "$IDT"
+check "writes transcript.tidy.md" test -s "$DT2/transcript.tidy.md"
+eq "raw transcript untouched" "$(grep -o 'go around the back' "$DT2/transcript.md" | wc -l)" "4"
+eq "loop collapsed to one copy" "$(grep -o 'go around the back' "$DT2/transcript.tidy.md" | wc -l)" "1"
+check "keeps the sentence after the loop" grep -q 'That is what he said' "$DT2/transcript.tidy.md"
+check "paragraphs: more than one blank-line break" bash -c "[ \"\$(grep -c '^$' '$DT2/transcript.tidy.md')\" -ge 3 ]"
+check "piece boundary kept as a paragraph break" bash -c "grep -q '^Second piece begins here' '$DT2/transcript.tidy.md'"
+check "tidy header line" bash -c "head -1 '$DT2/transcript.tidy.md' | grep -q '<!-- omarecorder tidy'"
+check "meta records the tidy stats" bash -c "jq -e '.transcript.tidy.repeats_removed > 0 and .transcript.tidy.paragraphs > 1' '$DT2/meta.json'"
+check "show --json has tidy_path and tidy_text" bash -c "\"$CLI\" show '$IDT' --json | jq -e '.tidy_path and (.tidy_text | length > 0)'"
+eq "copy --print gives the tidy text" "$("$CLI" copy "$IDT" --print | grep -o 'go around the back' | wc -l)" "1"
+eq "copy --raw --print gives the raw text" "$("$CLI" copy "$IDT" --raw --print | grep -o 'go around the back' | wc -l)" "4"
+check "export uses the tidy text" bash -c "\"$CLI\" export '$IDT' --dir '$TMP/exp-tidy' --no-open >/dev/null && grep -o 'go around the back' '$TMP/exp-tidy/'*.md | wc -l | grep -qx 1"
+check "export --raw uses the raw text" bash -c "\"$CLI\" export '$IDT' --dir '$TMP/exp-raw' --raw --no-open >/dev/null && grep -o 'go around the back' '$TMP/exp-raw/'*.md | wc -l | grep -qx 4"
+check "list backfills tidy for an old transcript" bash -c "rm -f '$DT2/transcript.tidy.md'; \"$CLI\" list >/dev/null; test -s '$DT2/transcript.tidy.md'"
+"$CLI" delete "$IDT" --yes >/dev/null
+
 echo "== models / estimate"
 check "models --json lists base.en" bash -c "$CLI models --json | jq -e '.[] | select(.name==\"base.en\")'"
 eq "estimate uses default rtf" "$($CLI estimate "$ID1" --model base.en | jq -r '.rtf, .source' | paste -sd,)" "10,default"
@@ -313,6 +342,7 @@ if command -v voxtype >/dev/null && [[ -f "${VOXTYPE_MODELS_DIR:-$HOME/.local/sh
   check "transcript header line" bash -c "head -1 '$D3/transcript.md' | grep -q '<!-- omarecorder model=base.en'"
   check "transcript mentions 'right'" bash -c "grep -qi right '$D3/transcript.md'"
   eq "meta.transcript.model" "$(jq -r .transcript.model "$D3/meta.json")" "base.en"
+  check "transcription also writes transcript.tidy.md" test -s "$D3/transcript.tidy.md"
   check "short clip does not train the estimate" bash -c "! test -f '$XDG_STATE_HOME/omarecorder/bench.json'"
   check "elapsed_s recorded with sub-second precision" bash -c "jq -e '.transcript.elapsed_s > 0' '$D3/meta.json'"
   ID6=$($CLI import "$TMP/speech60.wav" --title "Speech 60s")

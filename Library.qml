@@ -28,6 +28,8 @@ Item {
   property bool deleteConfirmOpen: false
   property string chosenModel: ""
   property string transcriptText: ""
+  property bool showRaw: false            // the tidy transcript is the default view
+  readonly property bool hasTidy: !!(selected && selected.tidy_path)
   // playback (in-process, QtMultimedia) and trim mode
   property bool trimMode: false
   property real trimFrom: 0
@@ -150,7 +152,7 @@ Item {
   onRowsChanged: ensureSelection()
   onSelectedChanged: {
     if (player) player.stop()
-    trimMode = false; previewing = false
+    trimMode = false; previewing = false; showRaw = false
     if (!selected || !selected.transcript_path) transcriptText = ""
     // Re-transcribe defaults to the model that produced the visible transcript.
     var last = selected && selected.transcript && selected.transcript.model ? selected.transcript.model : ""
@@ -175,7 +177,7 @@ Item {
 
   FileView {
     id: transcriptFile
-    path: root.selected && root.selected.transcript_path ? root.selected.transcript_path : ""
+    path: !root.selected ? "" : (root.hasTidy && !root.showRaw ? root.selected.tidy_path : (root.selected.transcript_path || ""))
     watchChanges: true
     printErrors: false
     onLoaded: root.transcriptText = root.stripHeader(text())
@@ -418,6 +420,7 @@ Item {
                     + (root.svc.isClipped(root.selected) ? " · ⚠ clipped" : "")
                     + (root.svc.isPartial(root.selected) ? " · partial transcript" : "")
                     + (root.selected.trim ? " · trimmed" : "")
+                    + (root.selected.transcript && root.selected.transcript.tidy && root.selected.transcript.tidy.repeats_removed > 0 && !root.showRaw ? " · " + root.selected.transcript.tidy.repeats_removed + " repeats removed" : "")
                     + (root.playing ? " · ▶ playing" : ""))
                   : ""
                 textFormat: Text.PlainText
@@ -611,11 +614,20 @@ Item {
                   foreground: root.foreground; fontFamily: root.fontFamily
                   onClicked: if (root.svc && root.selected) root.svc.openTranscript(root.selected.id)
                 }
+                Button {
+                  visible: root.hasTidy
+                  text: root.showRaw ? "Raw" : "Tidy"
+                  iconText: root.showRaw ? "󰈔" : "󰦪"
+                  fontSize: Style.font.caption; horizontalPadding: Style.spacing.sm; verticalPadding: Style.spacing.xxs
+                  tooltipText: root.showRaw ? "Showing the raw transcript. Click for the tidy one (paragraphs, repeats removed)." : "Showing the tidy transcript. Click for the raw one, exactly as whisper wrote it."
+                  foreground: root.foreground; fontFamily: root.fontFamily
+                  onClicked: root.showRaw = !root.showRaw
+                }
                 PanelActionButton {
                   iconText: "󰆏"
                   tooltipText: "Copy transcript"
                   foreground: root.foreground; fontFamily: root.fontFamily
-                  onClicked: if (root.svc && root.selected) root.svc.copyTranscript(root.selected.id, function(code) { if (code === 0) copiedFlash.restart() })
+                  onClicked: if (root.svc && root.selected) root.svc.copyTranscript(root.selected.id, root.showRaw, function(code) { if (code === 0) copiedFlash.restart() })
                 }
                 Text {
                   anchors.verticalCenter: parent.verticalCenter
@@ -630,7 +642,7 @@ Item {
                   iconText: "󰈝"
                   tooltipText: "Send to Obsidian"
                   foreground: root.foreground; fontFamily: root.fontFamily
-                  onClicked: if (root.svc && root.selected) root.svc.exportToObsidian(root.selected.id, function(code) { if (code === 0) sentFlash.restart() })
+                  onClicked: if (root.svc && root.selected) root.svc.exportToObsidian(root.selected.id, root.showRaw, function(code) { if (code === 0) sentFlash.restart() })
                 }
                 Text {
                   anchors.verticalCenter: parent.verticalCenter

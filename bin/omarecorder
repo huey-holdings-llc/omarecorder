@@ -259,20 +259,25 @@ file_size() { stat -c %s "$1" 2>/dev/null || echo 0; }
 
 # rec_json <dir> → meta + dir + derived fields
 rec_json() {
-  local d="$1" has_t=false has_w=false has_o=false tfile=/dev/null
+  local d="$1" has_t=false has_w=false has_o=false has_y=false tfile=/dev/null yfile=/dev/null
   [[ -f "$d/transcript.md" ]] && has_t=true
+  [[ -s "$d/transcript.tidy.md" ]] && has_y=true
   [[ -f "$d/waveform.png" ]] && has_w=true
   [[ -f "$d/audio.orig.wav" ]] && has_o=true
   # Text goes in via --rawfile (a long transcript blows past the argv size limit as
   # --arg), already stripped of its header line by strip_header.
   if [[ "${2:-}" == "--with-text" && -f "$d/transcript.md" ]]; then
     tfile="$RUN_DIR/rec_json.$$.txt"; strip_header "$d/transcript.md" > "$tfile"
+    if [[ $has_y == true ]]; then yfile="$RUN_DIR/rec_json.$$.tidy"; strip_header "$d/transcript.tidy.md" > "$yfile"; fi
   fi
-  jq -c --arg dir "$d" --argjson has_t "$has_t" --argjson has_w "$has_w" --argjson has_o "$has_o" --rawfile ttxt "$tfile" \
+  jq -c --arg dir "$d" --argjson has_t "$has_t" --argjson has_w "$has_w" --argjson has_o "$has_o" --argjson has_y "$has_y" --rawfile ttxt "$tfile" --rawfile ytxt "$yfile" \
     '. + {dir:$dir, audio:($dir+"/audio.wav"), has_transcript:$has_t, transcript_path:(if $has_t then $dir+"/transcript.md" else null end),
+          tidy_path:(if $has_y then $dir+"/transcript.tidy.md" else null end),
           waveform:(if $has_w then $dir+"/waveform.png" else null end), has_orig:$has_o}
-       + (if $ttxt != "" then {transcript_text:$ttxt} else {} end)' "$d/meta.json"
+       + (if $ttxt != "" then {transcript_text:$ttxt} else {} end)
+       + (if $ytxt != "" then {tidy_text:$ytxt} else {} end)' "$d/meta.json"
   [[ "$tfile" == /dev/null ]] || rm -f "$tfile"
+  [[ "$yfile" == /dev/null ]] || rm -f "$yfile"
 }
 
 resolve_mic() {
@@ -563,6 +568,7 @@ cmd_list() {
     # Recordings made before 1.0 have no waveform yet: draw it once, here, so the
     # Library can scrub and trim them too (≈0.1 s per file, never repeated).
     [[ -f "$d/waveform.png" || ! -s "$d/audio.wav" ]] || make_waveform "$d"
+    [[ -s "$d/transcript.tidy.md" || ! -s "$d/transcript.md" ]] || tidy_transcript "$d"
     arr=$(jq -c --argjson r "$(rec_json "$d")" '. + [$r]' <<<"$arr")
   done < <(find "$ROOT" -mindepth 1 -maxdepth 1 -type d -name '????-??-??_??????*' | sort -r)
   if [[ "${1:-}" == "--json" ]]; then jq . <<<"$arr"; return 0; fi
@@ -658,10 +664,13 @@ cmd_delete() {
 
 # copy <id> [--print]: transcript text (without the header line) to the clipboard
 cmd_copy() {
-  local id="${1:-}"; [[ -n "$id" ]] || die "usage: copy <id> [--print]"
-  local dir; dir=$(require_dir "$id"); local f="$dir/transcript.md"
-  [[ -f "$f" ]] || die "no transcript yet for $id"
-  if [[ "${2:-}" == "--print" ]]; then strip_header "$f"; return 0; fi
+  local id="${1:-}"; [[ -n "$id" ]] || die "usage: copy <id> [--raw] [--print]"; shift
+  local print=0 raw=""
+  while [[ $# -gt 0 ]]; do case "$1" in --print) print=1 ;; --raw) raw=raw ;; *) die "unknown option: $1" ;; esac; shift; done
+  local dir; dir=$(require_dir "$id")
+  [[ -f "$dir/transcript.md" ]] || die "no transcript yet for $id"
+  local f; f=$(transcript_file "$dir" "$raw")
+  if (( print )); then strip_header "$f"; return 0; fi
   have wl-copy || die "wl-copy not found (pacman -S wl-clipboard)"
   strip_header "$f" | wl-copy
   echo "copied $id"
@@ -734,16 +743,18 @@ note_stem() {
 # export <id> [--vault P | --dir P] [--no-open]: write the note, remember where, open it in Obsidian
 cmd_export() {
   local id="${1:-}"; [[ -n "$id" ]] || die "usage: export <id> [--vault P | --dir P] [--no-open]"; shift
-  local -a target=(); local open=1
+  local -a target=(); local open=1 raw=""
   while [[ $# -gt 0 ]]; do
     case "$1" in
       --vault|--dir) [[ -n "${2:-}" ]] || die "$1 needs a path"; target+=("$1" "$2"); shift 2 ;;
       --no-open) open=0; shift ;;
+      --raw) raw=raw; shift ;;
       *) die "unknown option: $1" ;;
     esac
   done
-  local dir; dir=$(require_dir "$id"); local f="$dir/transcript.md"
-  [[ -f "$f" ]] || die "no transcript yet for $id"
+  local dir; dir=$(require_dir "$id")
+  [[ -f "$dir/transcript.md" ]] || die "no transcript yet for $id"
+  local f; f=$(transcript_file "$dir" "$raw")
   local line folder vault; line=$(resolve_export_target "$dir" "${target[@]}")
   IFS=$'\t' read -r folder vault <<<"$line"
   mkdir -p "$folder" || die "cannot create $folder"
@@ -783,6 +794,68 @@ cmd_export() {
   log "export $id -> $path"
   echo "$path"
 }
+
+# ------------------------------------------------------------------ tidy ----
+# tidy_transcript <dir>: transcript.md -> transcript.tidy.md. Local and
+# deterministic: collapse phrases whisper repeated back to back (its "loops"),
+# then lay the words out in paragraphs at sentence ends, with every piece
+# boundary (blank line) kept as a paragraph break. The raw file is never touched.
+read -r -d '' TIDY_AWK <<'AWK' || true
+function norm(w) { w = tolower(w); gsub(/[^a-z0-9]/, "", w); return (w == "" ? "\001" : w) }
+function block_eq(a, b, N,   k) { for (k = 0; k < N; k++) if (nt[a+k] != nt[b+k]) return 0; return 1 }
+function endpara() { if (cur != "") { out = out (out == "" ? "" : "\n\n") cur; paras++ } cur = ""; cnt = 0 }
+function emit(w) {
+  cur = (cur == "" ? w : cur " " w); cnt++
+  if (cnt >= para_words && w ~ /[.!?]["')\]]*$/) endpara()
+  else if (cnt >= hard_words) endpara()
+}
+function flush_piece(   n, m, i, j, k, N, matched, t) {
+  n = split(piece, t, /[[:space:]]+/); m = 0
+  for (i = 1; i <= n; i++) if (t[i] != "") { m++; tt[m] = t[i]; nt[m] = norm(t[i]) }
+  n = m; i = 1
+  while (i <= n) {
+    matched = 0
+    for (N = maxN; N >= minN; N--) {
+      if (i + 2*N - 1 <= n && block_eq(i, i + N, N)) {
+        j = i + N
+        while (j + N - 1 <= n && block_eq(i, j, N)) j += N
+        removed += (j - i - N)
+        for (k = i; k < i + N; k++) emit(tt[k])
+        i = j; matched = 1; break
+      }
+    }
+    if (!matched) { emit(tt[i]); i++ }
+  }
+  endpara(); piece = ""; delete tt; delete nt
+}
+BEGIN { minN = 4; maxN = 14; para_words = 90; hard_words = 220 }
+/^[[:space:]]*$/ { flush_piece(); next }
+{ piece = piece " " $0 }
+END { flush_piece(); printf "%s\n", out; print paras + 0, removed + 0 > statsfile }
+
+AWK
+tidy_transcript() {
+  local dir="$1" paras removed; local src="$dir/transcript.md" out="$dir/transcript.tidy.md" stats="$RUN_DIR/tidy.$$.stats"
+  [[ -s "$src" ]] || return 0
+  mkdir -p "$RUN_DIR"
+  if ! strip_header "$src" | awk -v statsfile="$stats" "$TIDY_AWK" > "$out.tmp"; then rm -f "$out.tmp" "$stats"; log "tidy failed in $dir"; return 0; fi
+  read -r paras removed < "$stats"; rm -f "$stats"
+  { printf '<!-- omarecorder tidy: %s paragraphs, %s repeated words removed, created=%s -->\n' "$paras" "$removed" "$(now_iso)"; cat "$out.tmp"; } > "$out"
+  rm -f "$out.tmp"
+  update_meta "$dir" '.transcript = ((.transcript // {}) + {tidy:{paragraphs:$p, repeats_removed:$r, created:$c}})' \
+    --argjson p "$paras" --argjson r "$removed" --arg c "$(now_iso)" || true
+}
+
+cmd_tidy() { # tidy <id>: (re)build transcript.tidy.md
+  local id="${1:-}"; [[ -n "$id" ]] || die "usage: tidy <id>"
+  local dir; dir=$(require_dir "$id")
+  [[ -s "$dir/transcript.md" ]] || die "no transcript yet for $id"
+  tidy_transcript "$dir"; bump_state
+  jq -c '.transcript.tidy' "$dir/meta.json"
+}
+
+# transcript_file <dir> [raw]: the tidy transcript when there is one, else the raw
+transcript_file() { if [[ "${2:-}" != "raw" && -s "$1/transcript.tidy.md" ]]; then echo "$1/transcript.tidy.md"; else echo "$1/transcript.md"; fi; }
 
 # --------------------------------------------------------------- models ----
 model_installed() { [[ -f "$VOXTYPE_MODELS_DIR/ggml-$1.bin" ]]; }
@@ -983,6 +1056,7 @@ _tx_worker() {
     if (( prev_kept == 0 )); then [[ -f "$dir/transcript.md" ]] && cp -f "$dir/transcript.md" "$dir/transcript.prev.md"; prev_kept=1; fi
     if (( i < n )); then   # publish what we have so far; the Library shows it growing
       publish_transcript "$dir" "$acc" "$model" "$lang" "$from" "$to" "$n" true
+      tidy_transcript "$dir"
       update_meta "$dir" '.transcript = ((.transcript // {}) + {model:$m, language:$l, created:$c, partial:true, chunks:$N, chunks_done:$i})' \
         --arg m "$model" --arg l "$lang" --arg c "$(now_iso)" --argjson N "$n" --argjson i "$i"
     fi
@@ -994,6 +1068,7 @@ _tx_worker() {
     mkdir -p "$STATE_DIR"; mv -f "$errlog" "$STATE_DIR/tx-$id.err" 2>/dev/null || true
     if (( i > 1 )) && [[ -s "$acc" ]]; then   # some pieces made it: keep them, say so
       publish_transcript "$dir" "$acc" "$model" "$lang" "$from" "$to" "$n" true
+      tidy_transcript "$dir"
       notify "Transcription stopped after $((i - 1))/$n pieces · $ttl" "${why:-voxtype failed}. The finished pieces are kept (details: $STATE_DIR/tx-$id.err)"
     else
       notify "Transcription failed · $ttl" "${why:-voxtype returned no text} (details: $STATE_DIR/tx-$id.err)"
@@ -1004,6 +1079,7 @@ _tx_worker() {
   local elapsed; elapsed=$(awk -v s="$start" -v e="$(date +%s.%N)" 'BEGIN{d=e-s; if(d<0.1)d=0.1; printf "%.1f", d}')
   grep -q '[^[:space:]]' "$acc" || printf '(no speech detected)\n' > "$acc"
   publish_transcript "$dir" "$acc" "$model" "$lang" "$from" "$to" "$n" false
+  tidy_transcript "$dir"
   rm -f "$acc"
   learn_rtf "$model" "$done_audio" "$elapsed"
   local rtf; rtf=$(jq -n --argjson d "$done_audio" --argjson e "$elapsed" '(($d / $e) * 100 | round) / 100')
@@ -1126,7 +1202,8 @@ omarecorder $VERSION: record, keep, transcribe locally (voxtype)
   list [--json] | show <id> [--json] | analyze <id>      browse / measure levels
   rename <id> <title> | delete <id> [--yes] [--permanent] manage (delete → trash)
   trim <id> --from s --to s [--replace] | trim <id> --restore  cut the audio (first original kept as audio.orig.wav)
-  copy <id> [--print]                                    transcript text → clipboard
+  copy <id> [--raw] [--print]                            transcript text to the clipboard
+  tidy <id>                                              rebuild transcript.tidy.md (paragraphs, loops removed)
   export <id> [--vault P | --dir P] [--no-open]           transcript → Obsidian note (frontmatter + text)
   vaults [--json]                                        Obsidian vaults on this machine (* = open)
   transcribe <id> [--model M] [--language L] [--from s --to s]
@@ -1156,6 +1233,7 @@ main() {
     rename) cmd_rename "$@" ;;
     delete) cmd_delete "$@" ;;
     copy) cmd_copy "$@" ;;
+    tidy) cmd_tidy "$@" ;;
     export) cmd_export "$@" ;;
     vaults) cmd_vaults "$@" ;;
     transcribe) cmd_transcribe "$@" ;;
