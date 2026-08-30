@@ -370,9 +370,10 @@ Accurate (`large-v3-turbo`) when the words matter. The picker shows an estimate
 for each, learned from your own machine after the first run.
 
 **Why is a long recording transcribed in pieces?**
-whisper drifts into repeating itself on very long inputs. Cutting a take into
-pieces of about 30 minutes, at moments of silence, keeps that in check, shows
-progress, and means a cancel keeps what is already done.
+Pieces mean visible progress, a cancel that keeps what is already done, and
+small temporary files. whisper also drifts into repeating itself on long
+inputs; pieces help, but the reliable cure is the Tidy pass, which removes
+back-to-back repeats whatever their cause.
 
 **Can I bring in recordings from elsewhere?**
 Yes. `omarecorder import <file>` (or `i` in the popup) takes anything ffmpeg can
@@ -442,6 +443,11 @@ Design specs: `docs/superpowers/specs/2026-08-29-omarecorder-design.md` and
 * Speaker attribution and per-track transcripts for "both", only if Omarchy
   ships an engine for it. No new packages is a rule.
 * A graphical import picker once the Quickshell FileDialog crash is fixed upstream.
+* Transcribe automatically after a model download that you started from the picker.
+* Click a transcript paragraph to seek the audio there; keep the view pinned to
+  the newest text while a long take is still transcribing.
+* The three model presets as buttons with their estimates, instead of a dropdown.
+* A sharper waveform on wide and high-DPI screens.
 
 Not planned: bundling `whisper-cpp` or `sherpa-onnx`. voxtype is the engine.
 
