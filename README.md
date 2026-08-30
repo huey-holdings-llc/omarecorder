@@ -1,15 +1,15 @@
-# Omarecorder
+# OmaRecorder
 
 Record conversations and meetings from the Omarchy bar, keep the audio, and
 transcribe it locally, later, with the voxtype/whisper engine Omarchy already
 ships. One click to record, a library to browse, a transcript beside every
 recording, and a note in Obsidian when you want one. Nothing leaves your machine.
 
-![Omarecorder](preview.png)
+![OmaRecorder](preview.png)
 
 ## About this project
 
-Omarecorder was built with AI assistance (Claude Code) by a hobbyist, not a
+OmaRecorder was built with AI assistance (Claude Code) by a hobbyist, not a
 professional developer. Every effort was made to follow good practice anyway:
 the code is reviewed by a second model on each pull request, every CLI
 behaviour has a test, the security posture was audited and fixed before release,
@@ -28,8 +28,8 @@ If you are on macOS or Windows, go look at
 [Samurai Scribe](https://samuraiscribe.com/) instead: a polished, far more
 feature-rich local transcription app whose "record, keep, transcribe, browse"
 shape inspired this plugin. To be clear, its developer had no discussion with
-or input into Omarecorder; the inspiration was entirely from admiring their
-work. Omarecorder exists because nothing like it fit an Omarchy desktop.
+or input into OmaRecorder; the inspiration was entirely from admiring their
+work. OmaRecorder exists because nothing like it fit an Omarchy desktop.
 
 ## Privacy and security
 
@@ -52,7 +52,7 @@ Local first is the rule, not a feature. Everything in 1.0 runs on your machine:
   outside a recording folder, never `rm -rf`s a recording without
   `--permanent`, runs no daemon, polls nothing, and uploads nothing.
 
-**Local only, by design.** Omarecorder does everything with tools that ship
+**Local only, by design.** OmaRecorder does everything with tools that ship
 with Omarchy and sends nothing anywhere. That includes the transcript
 clean-up: the Tidy pass that breaks the text into paragraphs and removes
 repeated passages is a deterministic script, not a language model. This
@@ -72,11 +72,11 @@ rather than a change to this one. Open an issue if that matters to you.
 
 * [Samurai Scribe](https://samuraiscribe.com/), a local transcription app for
   macOS and Windows. Its "record, keep, transcribe, browse" idea inspired this
-  plugin, from a distance: its developer had no involvement in Omarecorder and
+  plugin, from a distance: its developer had no involvement in OmaRecorder and
   deserves none of the blame for it. If you are on either platform, use Samurai
   Scribe; it is far more polished than this.
 * [voxtype](https://github.com/peteonrails/voxtype), the push-to-talk dictation
-  engine Omarchy ships. Omarecorder is a library around its `transcribe` command.
+  engine Omarchy ships. OmaRecorder is a library around its `transcribe` command.
 * [omarchy-voxtype-osd](https://github.com/rmacy/omarchy-voxtype-osd) for the
   level meter ideas.
 * [omarchy-voxtype-enhance](https://github.com/iamcheyan/omarchy-voxtype-enhance)
@@ -347,7 +347,7 @@ The plugin never edits these files for you.
 
 **How is this different from voxtype, which Omarchy already ships?**
 Same engine, different job. voxtype is dictation: hold a key, speak, and the
-text is typed into whatever window has focus, right away. Omarecorder is for
+text is typed into whatever window has focus, right away. OmaRecorder is for
 recordings you want to keep: meetings, calls, game sessions, lectures. It adds
 three things on top of voxtype:
 

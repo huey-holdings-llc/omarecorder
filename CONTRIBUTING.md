@@ -1,6 +1,6 @@
-# Contributing to Omarecorder
+# Contributing to OmaRecorder
 
-Thank you for looking at this. Omarecorder is a part-time hobby project, built
+Thank you for looking at this. OmaRecorder is a part-time hobby project, built
 with AI assistance by someone who is not a professional developer. Pull requests
 from people who know this territory better are the best thing that can happen
 to it. Issues and pull requests are handled as time allows, so please be patient,

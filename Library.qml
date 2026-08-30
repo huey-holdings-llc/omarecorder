@@ -8,7 +8,7 @@ import "ui/format.js" as Fmt
 import qs.Ui
 import "ui"
 
-// Omarecorder Library — fullscreen overlay: every recording on the left,
+// OmaRecorder Library — fullscreen overlay: every recording on the left,
 // the selected one on the right with its transcript. Summoned with
 //   omarchy-shell shell toggle io.github.coreytyhurst.omarecorder
 // Uses the theme's [popups] surface tokens (same chrome as the bar popup) so
@@ -355,7 +355,7 @@ Item {
             spacing: Style.spacing.lg
             Text {
               anchors.verticalCenter: parent.verticalCenter
-              text: "󰍬  Omarecorder"   // mic, not the red record dot: this header is visible while idle
+              text: "󰍬  OmaRecorder"   // mic, not the red record dot: this header is visible while idle
               color: root.foreground
               font.family: root.fontFamily
               font.pixelSize: Style.font.title

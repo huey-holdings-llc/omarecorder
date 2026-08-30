@@ -3,7 +3,7 @@ import Quickshell
 import Quickshell.Io
 import "ui/format.js" as Fmt
 
-// Omarecorder service — the single source of truth for the plugin's UI.
+// OmaRecorder service — the single source of truth for the plugin's UI.
 // Mounted once by the shell (kind "service", keepLoaded); Panel/Library
 // instances (one per monitor) read from it via bar.shell.serviceFor(id).
 //
@@ -224,7 +224,7 @@ QtObject {
   }
 
   Component.onCompleted: {
-    if (!root.runtimeDir) { root.lastError = "XDG_RUNTIME_DIR is not set, so Omarecorder cannot run"; return }
+    if (!root.runtimeDir) { root.lastError = "XDG_RUNTIME_DIR is not set, so OmaRecorder cannot run"; return }
     // `status` reconciles stale state and creates the (0700) runtime dir and
     // state.json, so the FileView above has a real file to watch from the start.
     run(["status"], function() { root.stateView.reload(); root.refresh() })

@@ -44,7 +44,7 @@ RATE=16000
 CHUNK_S="${OMARECORDER_CHUNK_S:-1800}"
 [[ "$CHUNK_S" =~ ^[1-9][0-9]*$ ]] || CHUNK_S=1800   # a bad value must not reach bash arithmetic
 
-# The three presets Omarecorder offers (voxtype can download more, but three
+# The three presets OmaRecorder offers (voxtype can download more, but three
 # clear choices beat a list of eight). size_mb from ggml file sizes; rtf =
 # default realtime factor (audio seconds per wall second), replaced by
 # measured values in bench.json after the first run on this machine.
@@ -72,9 +72,9 @@ notify() { # notify <headline> [description] [-- exec args...]
   local -a extra=()
   if [[ "${1:-}" == "--" ]]; then shift; extra=(--exec "$@"); fi
   if have omarchy-notification-send; then
-    omarchy-notification-send --app-name Omarecorder -g "󰑊" -t 8000 "$head" "$desc" "${extra[@]}" 2>/dev/null || true
+    omarchy-notification-send --app-name OmaRecorder -g "󰑊" -t 8000 "$head" "$desc" "${extra[@]}" 2>/dev/null || true
   elif have notify-send; then
-    notify-send -a Omarecorder -t 8000 "$head" "$desc" 2>/dev/null || true
+    notify-send -a OmaRecorder -t 8000 "$head" "$desc" 2>/dev/null || true
   fi
 }
 
@@ -953,7 +953,7 @@ cmd_model() {
       size=$(jq -r --arg m "$name" '.[] | select(.name==$m) | .size_mb' <<<"$MODEL_CATALOG")
       state_set --arg m "$name" --arg u "$unit" --argjson t "$(now_epoch)" --argjson b $((size * 1000000)) \
         '.jobs += [{type:"download", model:$m, unit:$u, started_at:$t, expected_bytes:$b}]'
-      if ! run_detached "$unit" "Omarecorder download $name" "$SELF" _dl-worker "$name"; then
+      if ! run_detached "$unit" "OmaRecorder download $name" "$SELF" _dl-worker "$name"; then
         state_set --arg m "$name" '.jobs |= map(select(.type != "download" or .model != $m))'
         die "could not start the download"
       fi
@@ -1024,7 +1024,7 @@ cmd_transcribe() {
     '.jobs += [{type:"transcribe", id:$id, model:$m, unit:$u, started_at:$t}]' \
     || die "transcription already running for $id"
   log "transcribe $id model=$model lang=$lang range=${from:-0}-${to:-end}"
-  if ! run_detached "$unit" "Omarecorder transcribe $id" "$SELF" _tx-worker "$id" "$model" "$lang" "$threads" "$from" "$to"; then
+  if ! run_detached "$unit" "OmaRecorder transcribe $id" "$SELF" _tx-worker "$id" "$model" "$lang" "$threads" "$from" "$to"; then
     state_set --arg id "$id" '.jobs |= map(select(.id != $id))'
     die "could not start transcription job"
   fi

@@ -1,4 +1,4 @@
-# Omarecorder — design spec (2026-08-29)
+# OmaRecorder — design spec (2026-08-29)
 
 Approved design for v0.1. Source of truth for behaviour; see README for usage.
 

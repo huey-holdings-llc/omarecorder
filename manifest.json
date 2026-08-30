@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
   "id": "io.github.coreytyhurst.omarecorder",
-  "name": "Omarecorder",
+  "name": "OmaRecorder",
   "version": "1.0.0",
   "author": "Corey Tyhurst",
   "license": "MIT",
@@ -18,7 +18,7 @@
     "overlay": "Library.qml"
   },
   "barWidget": {
-    "displayName": "Omarecorder",
+    "displayName": "OmaRecorder",
     "description": "One-click audio recording with a local transcription library.",
     "category": "Productivity",
     "aliases": [

@@ -6,7 +6,7 @@ import qs.Commons
 import qs.Ui
 import "ui"
 
-// Omarecorder bar widget: glyph + elapsed timer in the bar, and a popup with
+// OmaRecorder bar widget: glyph + elapsed timer in the bar, and a popup with
 // record/stop, source, the most recent recordings, and settings.
 // All state comes from Service.qml (shared across monitors); this file is a view.
 Panel {
@@ -163,7 +163,7 @@ Panel {
             readonly property bool busy: root.transcribing
             readonly property color recColor: root.urgent
             width: parent.width
-            title: "Omarecorder"
+            title: "OmaRecorder"
             meta: root.stateText
             foreground: root.foreground
             fontFamily: root.fontFamily

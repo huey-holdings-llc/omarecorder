@@ -1,6 +1,6 @@
 # Security
 
-Omarecorder records audio and stores transcripts, so security reports get
+OmaRecorder records audio and stores transcripts, so security reports get
 priority over everything else.
 
 ## Reporting a vulnerability
