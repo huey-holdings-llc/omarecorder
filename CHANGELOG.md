@@ -6,6 +6,8 @@ All notable changes to this project are documented here. Format follows
 ## [Unreleased]
 
 ### Changed
+- Model choice is just the three presets — Fast (base.en), Balanced (small.en),
+  Accurate (large-v3-turbo); missing ones still show "download N MB".
 - Clipping detection skips the first 2 s (the ADC rails briefly when capture
   starts) and decides on the share of samples at the rail (`levels.clipped_pct`,
   > 0.05 %) rather than flatness alone. README now recommends 30–40 % input for
