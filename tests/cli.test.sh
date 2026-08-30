@@ -223,6 +223,63 @@ eq "exportDir used when no vault" "$("$CLI" export "$IDX" --no-open)" "$TMP/expo
 eq "vaults --json without obsidian.json" "$("$CLI" vaults --json | jq -c .)" "[]"
 "$CLI" delete "$IDX" --yes >/dev/null
 
+echo "== trim / waveform"
+# Import ids come from the file mtime: give each fixture its own second.
+cp "$TMP/tone48.wav" "$TMP/trim.wav"; touch -d "2026-01-06 03:04:05" "$TMP/trim.wav"
+cp "$TMP/quiet.wav" "$TMP/trim2.wav"; touch -d "2026-01-07 03:04:05" "$TMP/trim2.wav"
+IDT=$($CLI import "$TMP/trim.wav" --title "Trim Test"); DT="$OMARECORDER_DIR/$IDT Trim Test"
+eq "import makes waveform.png" "$(ffprobe -v error -show_entries stream=codec_name,width,height -of csv=p=0 "$DT/waveform.png")" "png,800,64"
+eq "show --json has waveform path" "$($CLI show "$IDT" --json | jq -r .waveform)" "$DT/waveform.png"
+eq "has_orig false before trim" "$($CLI show "$IDT" --json | jq -r .has_orig)" "false"
+cp "$TMP/quiet.wav" "$DT/mic.wav"   # a raw take must never be touched by trim
+touch "$TMP/trim.marker"
+eq "trim 1–2 s → duration 1" "$($CLI trim "$IDT" --from 1 --to 2)" "$IDT (00:00:01)"
+eq "audio.orig.wav kept, 3 s" "$(ffprobe -v error -show_entries format=duration -of csv=p=0 "$DT/audio.orig.wav" | cut -d. -f1)" "3"
+eq "meta.trim.from == 1" "$(jq -r .trim.from "$DT/meta.json")" "1"
+eq "meta.trim.original true" "$(jq -r .trim.original "$DT/meta.json")" "true"
+check "waveform regenerated" bash -c "find '$DT' -maxdepth 1 -name waveform.png -newer '$TMP/trim.marker' | grep -q ."
+eq "has_orig true" "$($CLI show "$IDT" --json | jq -r .has_orig)" "true"
+check "mic.wav untouched" cmp -s "$TMP/quiet.wav" "$DT/mic.wav"
+check "levels re-measured after trim" bash -c "jq -e '.levels.peak_db' '$DT/meta.json'"
+$CLI trim "$IDT" --from 0 --to 0.5 >/dev/null
+eq "second trim keeps the FIRST original" "$(ffprobe -v error -show_entries format=duration -of csv=p=0 "$DT/audio.orig.wav" | cut -d. -f1)" "3"
+eq "meta.trim.to == 0.5" "$(jq -r .trim.to "$DT/meta.json")" "0.5"
+# --replace on a fresh import: no original is kept
+IDT2=$($CLI import "$TMP/trim2.wav" --title "Trim Replace"); DT2="$OMARECORDER_DIR/$IDT2 Trim Replace"
+fails "trim rejects to<=from" "$CLI" trim "$IDT2" --from 2 --to 2
+fails "trim rejects negative" "$CLI" trim "$IDT2" --from -1 --to 2
+fails "trim rejects non-numeric" "$CLI" trim "$IDT2" --from abc --to 2
+fails "trim rejects to beyond duration+1" "$CLI" trim "$IDT2" --from 0 --to 5
+fails "trim needs both --from and --to" "$CLI" trim "$IDT2" --from 1
+fails "trim rejects unknown flag" "$CLI" trim "$IDT2" --from 0 --to 1 --bogus
+check "nothing changed after rejected trims" bash -c "! test -e '$DT2/audio.orig.wav' && [ \"\$(jq -r .duration_s '$DT2/meta.json')\" = 3 ]"
+jq -cn --arg id "$IDT2" '{recording:null,jobs:[{type:"transcribe",id:$id,model:"base.en",started_at:0}],version:1}' > "$XDG_RUNTIME_DIR/omarecorder/state.json"
+fails "trim refused while a transcription runs" "$CLI" trim "$IDT2" --from 0 --to 1
+"$CLI" cancel "$IDT2" >/dev/null
+eq "trim --replace (to may overshoot by ≤1 s)" "$($CLI trim "$IDT2" --from 1 --to 4 --replace)" "$IDT2 (00:00:02)"
+check "trim --replace leaves no original" bash -c "! test -e '$DT2/audio.orig.wav'"
+eq "meta.trim.original false" "$(jq -r .trim.original "$DT2/meta.json")" "false"
+fails "restore without original fails" "$CLI" trim "$IDT2" --restore
+rm -f "$DT2/waveform.png"
+eq "waveform null when the file is missing" "$($CLI show "$IDT2" --json | jq -r .waveform)" "null"
+# --restore puts the first original back
+eq "trim --restore → duration 3" "$($CLI trim "$IDT" --restore)" "$IDT (00:00:03)"
+check "orig gone after restore" bash -c "! test -e '$DT/audio.orig.wav'"
+eq "meta.trim absent after restore" "$(jq -r 'has("trim")' "$DT/meta.json")" "false"
+eq "has_orig false after restore" "$($CLI show "$IDT" --json | jq -r .has_orig)" "false"
+check "mic.wav still untouched" cmp -s "$TMP/quiet.wav" "$DT/mic.wav"
+if command -v voxtype >/dev/null && [[ -f "${VOXTYPE_MODELS_DIR:-$HOME/.local/share/voxtype/models}/ggml-base.en.bin" ]]; then
+  jq -c '.transcript = {model:"base.en"}' "$DT/meta.json" > "$DT/meta.json.t" && mv -f "$DT/meta.json.t" "$DT/meta.json"
+  $CLI trim "$IDT" --from 0 --to 2 >/dev/null
+  eq "trim marks the transcript stale" "$(jq -r .transcript.stale "$DT/meta.json")" "true"
+  check "transcribe after trim" "$CLI" transcribe "$IDT" --model base.en
+  eq "new transcript clears stale" "$(jq -r '.transcript.stale // "absent"' "$DT/meta.json")" "absent"
+  eq "stale set again by --restore" "$($CLI trim "$IDT" --restore >/dev/null; jq -r .transcript.stale "$DT/meta.json")" "true"
+else
+  skip "voxtype/base.en not available"
+fi
+$CLI delete "$IDT" --yes >/dev/null; $CLI delete "$IDT2" --yes >/dev/null
+
 echo "== models / estimate"
 check "models --json lists base.en" bash -c "$CLI models --json | jq -e '.[] | select(.name==\"base.en\")'"
 eq "estimate uses default rtf" "$($CLI estimate "$ID1" --model base.en | jq -r '.rtf, .source' | paste -sd,)" "10,default"

@@ -223,12 +223,15 @@ file_size() { stat -c %s "$1" 2>/dev/null || echo 0; }
 
 # rec_json <dir> → meta + dir + derived fields
 rec_json() {
-  local d="$1" has_t=false tfile=/dev/null
+  local d="$1" has_t=false has_w=false has_o=false tfile=/dev/null
   [[ -f "$d/transcript.md" ]] && has_t=true
+  [[ -f "$d/waveform.png" ]] && has_w=true
+  [[ -f "$d/audio.orig.wav" ]] && has_o=true
   # Text goes in via --rawfile: a long transcript blows past the argv size limit as --arg.
   [[ "${2:-}" == "--with-text" && -f "$d/transcript.md" ]] && tfile="$d/transcript.md"
-  jq -c --arg dir "$d" --argjson has_t "$has_t" --rawfile ttxt "$tfile" \
-    '. + {dir:$dir, audio:($dir+"/audio.wav"), has_transcript:$has_t, transcript_path:(if $has_t then $dir+"/transcript.md" else null end)}
+  jq -c --arg dir "$d" --argjson has_t "$has_t" --argjson has_w "$has_w" --argjson has_o "$has_o" --rawfile ttxt "$tfile" \
+    '. + {dir:$dir, audio:($dir+"/audio.wav"), has_transcript:$has_t, transcript_path:(if $has_t then $dir+"/transcript.md" else null end),
+          waveform:(if $has_w then $dir+"/waveform.png" else null end), has_orig:$has_o}
        + (if $ttxt != "" then {transcript_text:($ttxt | sub("^<!--[^\n]*-->\n?"; ""))} else {} end)' "$d/meta.json"
 }
 
@@ -368,12 +371,26 @@ mix_both() {
     && mv -f "$dir/audio.wav.tmp.wav" "$dir/audio.wav" || { rm -f "$dir/audio.wav.tmp.wav"; log "amix failed in $dir"; return 1; }
 }
 
-# finalize_audio <dir>: fill duration/size in meta.json from audio.wav
+# finalize_audio <dir>: fill duration/size in meta.json from audio.wav, and
+# redraw the waveform strip (record stop, import, crash recovery, trim all end here).
 finalize_audio() {
   local dir="$1" dur size
   dur=$(audio_duration "$dir/audio.wav"); dur=${dur:-0}
   size=$(file_size "$dir/audio.wav")
   update_meta "$dir" '.duration_s = $d | .size_bytes = $s' --argjson d "$dur" --argjson s "$size"
+  make_waveform "$dir"
+}
+
+# make_waveform <dir>: audio.wav → waveform.png, an 800x64 strip the Library
+# draws behind the trim handles. Mid-grey reads on light and dark themes; sqrt
+# scaling keeps quiet speech visible next to loud passages. Best effort only —
+# a missing strip never fails a stop or an import.
+make_waveform() {
+  local dir="$1"; [[ -f "$dir/audio.wav" ]] && have ffmpeg || return 0
+  ffmpeg -v error -y -i "$dir/audio.wav" -filter_complex "showwavespic=s=800x64:colors=#888888:scale=sqrt" \
+    -frames:v 1 -update 1 "$dir/waveform.png.tmp.png" 2>>"$LOG_FILE" && mv -f "$dir/waveform.png.tmp.png" "$dir/waveform.png" \
+    || { rm -f "$dir/waveform.png.tmp.png"; log "waveform failed in $dir"; }
+  return 0
 }
 
 # repair_wav <file>: a recorder that died (crash, power loss) leaves a WAV with
@@ -524,6 +541,57 @@ cmd_analyze() { # analyze <id>: (re)measure levels for an existing recording
   local id="${1:-}"; [[ -n "$id" ]] || die "usage: analyze <id>"
   local dir; dir=$(require_dir "$id"); analyze_levels "$dir"; bump_state
   jq -c '.levels // {}' "$dir/meta.json"
+}
+
+# trim <id> --from s --to s [--replace] | trim <id> --restore
+# Cuts audio.wav down to [from, to]. The first original is kept as
+# audio.orig.wav (later trims cut the already-trimmed take and leave that
+# original alone) unless --replace; --restore puts it back. The raw takes of a
+# "both" recording (mic.wav / system.wav) are never touched. An existing
+# transcript is flagged stale — it still describes the old audio.
+cmd_trim() {
+  local usage="usage: trim <id> --from s --to s [--replace] | trim <id> --restore"
+  local id="${1:-}" from="" to="" replace=0 restore=0; [[ -n "$id" ]] || die "$usage"; shift
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --from) from="${2:-}"; shift 2 ;; --to) to="${2:-}"; shift 2 ;;
+      --replace) replace=1; shift ;; --restore) restore=1; shift ;;
+      *) die "unknown option: $1" ;;
+    esac
+  done
+  local dir; dir=$(require_dir "$id")
+  reconcile_state
+  local st; st=$(read_state)
+  [[ $(jq -r '.recording.id // empty' <<<"$st") == "$id" ]] && die "$id is still recording — stop it first"
+  [[ $(jq -r --arg id "$id" '.jobs[] | select(.type=="transcribe" and .id==$id)' <<<"$st") ]] && die "transcription running for $id — wait for it or cancel it first"
+  if (( restore )); then
+    [[ -f "$dir/audio.orig.wav" ]] || die "nothing to restore: $id has no audio.orig.wav"
+    mv -f "$dir/audio.orig.wav" "$dir/audio.wav"
+    finalize_audio "$dir"; analyze_levels "$dir"
+    update_meta "$dir" 'del(.trim) | (if .transcript != null then .transcript.stale = true else . end)'
+    bump_state; log "trim restore $id"
+    echo "$id ($(fmt_hms "$(jq -r '.duration_s // 0' "$dir/meta.json")"))"; return 0
+  fi
+  [[ -n "$from" && -n "$to" ]] || die "$usage"
+  valid_seconds "$from" || die "--from must be a non-negative number of seconds"
+  valid_seconds "$to" || die "--to must be a non-negative number of seconds"
+  awk -v a="$from" -v b="$to" 'BEGIN{exit !(b > a)}' || die "--to must be greater than --from"
+  [[ -f "$dir/audio.wav" ]] || die "no audio.wav in $dir"
+  local dur; dur=$(jq -r '.duration_s // 0' "$dir/meta.json")
+  awk -v b="$to" -v d="$dur" 'BEGIN{exit !(b <= d + 1)}' || die "--to is past the end of the recording (${dur} s)"
+  local tmp="$dir/audio.trim.tmp.wav"
+  ffmpeg -v error -y -ss "$from" -to "$to" -i "$dir/audio.wav" -c copy "$tmp" 2>>"$LOG_FILE" || { rm -f "$tmp"; die "ffmpeg could not cut $id (details: $LOG_FILE)"; }
+  (( $(file_size "$tmp") > 44 )) || { rm -f "$tmp"; die "that range holds no audio"; }   # 44 bytes = a bare WAV header
+  if (( ! replace )) && [[ ! -f "$dir/audio.orig.wav" ]]; then mv "$dir/audio.wav" "$dir/audio.orig.wav"; fi
+  mv -f "$tmp" "$dir/audio.wav"
+  finalize_audio "$dir"; analyze_levels "$dir"
+  local has_o=false; [[ -f "$dir/audio.orig.wav" ]] && has_o=true
+  update_meta "$dir" '.trim = {from:($f|tonumber), to:($t|tonumber), at:$now, original:$o} | (if .transcript != null then .transcript.stale = true else . end)' \
+    --arg f "$from" --arg t "$to" --arg now "$(now_iso)" --argjson o "$has_o"
+  bump_state
+  local ndur; ndur=$(jq -r '.duration_s // 0' "$dir/meta.json")
+  log "trim $id ${from}-${to}s -> ${ndur}s replace=$replace original=$has_o"
+  echo "$id ($(fmt_hms "$ndur"))"
 }
 
 cmd_show() {
@@ -1025,6 +1093,7 @@ omarecorder $VERSION — record, keep, transcribe locally (voxtype)
   import <file> [--move] [--title T]                     bring an existing audio file in
   list [--json] | show <id> [--json] | analyze <id>      browse / measure levels
   rename <id> <title> | delete <id> [--yes] [--permanent] manage (delete → trash)
+  trim <id> --from s --to s [--replace] | trim <id> --restore  cut the audio (first original kept as audio.orig.wav)
   copy <id> [--print]                                    transcript text → clipboard
   export <id> [--vault P | --dir P] [--no-open]           transcript → Obsidian note (frontmatter + text)
   vaults [--json]                                        Obsidian vaults on this machine (* = open)
@@ -1042,6 +1111,7 @@ EOF
 main() {
   load_config
   mkdir -p "$RUN_DIR" 2>/dev/null && chmod 700 "$RUN_DIR" 2>/dev/null || true   # private even if it pre-dates umask 077
+  mkdir -p "$STATE_DIR" 2>/dev/null || true   # ffmpeg stderr is appended to $LOG_FILE before anything has logged
   local cmd="${1:-help}"; shift || true
   case "$cmd" in
     record) cmd_record "$@" ;;
@@ -1050,6 +1120,7 @@ main() {
     list) cmd_list "$@" ;;
     show) cmd_show "$@" ;;
     analyze) cmd_analyze "$@" ;;
+    trim) cmd_trim "$@" ;;
     rename) cmd_rename "$@" ;;
     delete) cmd_delete "$@" ;;
     copy) cmd_copy "$@" ;;
