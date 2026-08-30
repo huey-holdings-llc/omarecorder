@@ -171,6 +171,58 @@ mkdir -p "$TMP/nowl"; ln -s /usr/bin/* "$TMP/nowl/" 2>/dev/null; rm -f "$TMP/now
 ( PATH="$TMP/nowl" "$CLI" setup check --json > "$TMP/setup.json" 2>/dev/null || true )
 eq "missing wl-copy reported with package" "$(jq -r '.missing[] | select(.tool=="wl-copy") | .package' "$TMP/setup.json")" "wl-clipboard"
 
+echo "== export"
+# A fake Obsidian install: vault A is open and files new notes under inbox/,
+# vault B is closed and newer, vault C is listed but no longer exists.
+OBS="$XDG_CONFIG_HOME/obsidian"; mkdir -p "$OBS" "$TMP/vaults/a/.obsidian" "$TMP/vaults/b"
+printf '{"newFileLocation":"folder","newFileFolderPath":"inbox"}' > "$TMP/vaults/a/.obsidian/app.json"
+jq -cn --arg a "$TMP/vaults/a" --arg b "$TMP/vaults/b" --arg c "$TMP/vaults/gone" \
+  '{vaults:{"aaa":{path:$a,ts:100,open:true},"bbb":{path:$b,ts:200},"ccc":{path:$c,ts:300}}}' > "$OBS/obsidian.json"
+eq "vaults --json: open vault first, missing one dropped" "$("$CLI" vaults --json | jq -r '.[].name' | paste -sd,)" "a,b"
+eq "vaults: folder follows newFileFolderPath" "$("$CLI" vaults --json | jq -r '.[0].folder')" "$TMP/vaults/a/inbox"
+eq "vaults: no app.json → vault root" "$("$CLI" vaults --json | jq -r '.[1].folder')" "$TMP/vaults/b"
+eq "vaults: open flag is a boolean" "$("$CLI" vaults --json | jq -c 'map(.open)')" "[true,false]"
+check "vaults: human output stars the open vault" bash -c "\"$CLI\" vaults | grep -q '^\* a  '"
+IDX=$("$CLI" import "$TMP/quiet.wav" --title "Tone: Test?"); DX=$("$CLI" show "$IDX" --json | jq -r .dir)
+fails "export without transcript fails" "$CLI" export "$IDX" --no-open
+printf '<!-- omarecorder model=base.en -->\nhello world\n' > "$DX/transcript.md"
+NOTE=$("$CLI" export "$IDX" --no-open)
+eq "export lands in the open vault's new-note folder" "$NOTE" "$TMP/vaults/a/inbox/Tone- Test-.md"
+check "note written" test -s "$NOTE"
+eq "note is private (0600)" "$(stat -c %a "$NOTE")" "600"
+check "frontmatter starts the file" bash -c "head -1 '$NOTE' | grep -qx -- '---'"
+check "frontmatter has the recording id" grep -qx "omarecorder: $IDX" "$NOTE"
+check "frontmatter keeps the real title" grep -qxF 'title: "Tone: Test?"' "$NOTE"
+eq "frontmatter source" "$(sed -n 's/^source: //p' "$NOTE")" "imported"
+eq "frontmatter duration" "$(sed -n 's/^duration: //p' "$NOTE")" "00:00:03"
+eq "frontmatter date is meta.created" "$(sed -n 's/^date: //p' "$NOTE")" "$(jq -r .created "$DX/meta.json")"
+check "frontmatter tags" grep -qx 'tags: \[omarecorder\]' "$NOTE"
+check "body has no header comment" bash -c "! grep -q '<!--' '$NOTE'"
+check "body has the transcript text" grep -qx "hello world" "$NOTE"
+eq "meta.exported_to set" "$(jq -r .exported_to "$DX/meta.json")" "$NOTE"
+check "meta.exported_at set" bash -c "jq -e '.exported_at | length > 0' '$DX/meta.json'"
+eq "second export gets (2)" "$("$CLI" export "$IDX" --no-open)" "$TMP/vaults/a/inbox/Tone- Test- (2).md"
+eq "--vault picks that vault's folder" "$("$CLI" export "$IDX" --vault "$TMP/vaults/b" --no-open)" "$TMP/vaults/b/Tone- Test-.md"
+eq "--dir exports anywhere" "$("$CLI" export "$IDX" --dir "$TMP/exports" --no-open)" "$TMP/exports/Tone- Test-.md"
+fails "--vault /nonexistent fails" "$CLI" export "$IDX" --vault "$TMP/nonexistent" --no-open
+check "config set obsidianVault" "$CLI" config set obsidianVault "$TMP/vaults/b"
+eq "configured vault wins over the open one" "$("$CLI" export "$IDX" --no-open)" "$TMP/vaults/b/Tone- Test- (2).md"
+fails "config set obsidianVault rejects missing dir" "$CLI" config set obsidianVault "$TMP/does-not-exist"
+check "config set obsidianVault '' → automatic" "$CLI" config set obsidianVault ""
+eq "config get obsidianVault empty again" "$("$CLI" config get obsidianVault)" ""
+eq "automatic again: the open vault" "$("$CLI" export "$IDX" --no-open)" "$TMP/vaults/a/inbox/Tone- Test- (3).md"
+CREATED=$(jq -r .created "$DX/meta.json")   # read before the rename: an untitled folder is just "<id>"
+"$CLI" rename "$IDX" "" >/dev/null
+eq "untitled → Recording <date> <time>" "$("$CLI" export "$IDX" --no-open)" "$TMP/vaults/a/inbox/Recording ${CREATED:0:10} ${CREATED:11:2}-${CREATED:14:2}.md"
+"$CLI" rename "$IDX" "Tone: Test?" >/dev/null
+rm "$OBS/obsidian.json"
+eq "no Obsidian: note lands in the recording folder" "$("$CLI" export "$IDX" --no-open)" "$DX/Tone- Test-.md"
+check "config set exportDir" "$CLI" config set exportDir "$TMP/exports2"
+eq "exportDir used when no vault" "$("$CLI" export "$IDX" --no-open)" "$TMP/exports2/Tone- Test-.md"
+"$CLI" config set exportDir "" >/dev/null
+eq "vaults --json without obsidian.json" "$("$CLI" vaults --json | jq -c .)" "[]"
+"$CLI" delete "$IDX" --yes >/dev/null
+
 echo "== models / estimate"
 check "models --json lists base.en" bash -c "$CLI models --json | jq -e '.[] | select(.name==\"base.en\")'"
 eq "estimate uses default rtf" "$($CLI estimate "$ID1" --model base.en | jq -r '.rtf, .source' | paste -sd,)" "10,default"
