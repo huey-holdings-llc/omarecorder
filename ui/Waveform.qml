@@ -38,7 +38,7 @@ Item {
     // so the query string defeats Qt's image cache.
     Image {
       anchors.fill: parent
-      source: root.rec && root.rec.waveform ? "file://" + root.rec.waveform + "?" + (root.rec.size_bytes || 0) : ""
+      source: root.rec && root.rec.waveform ? Fmt.fileUrl(root.rec.waveform) + "?v=" + (root.rec.size_bytes || 0) : ""
       fillMode: Image.Stretch
       cache: false
       smooth: true
@@ -63,8 +63,8 @@ Item {
     // trim mode: what is cut goes dark, what is kept gets the accent tint, and the
     // two handles stay inside the strip (clamped) with a time badge each.
     readonly property real hw: Style.space(10)
-    Rectangle { visible: root.trimMode; x: 0; y: 0; height: parent.height; width: root.trimFrom * root.pxPerSecond; color: Util.alpha("#000000", 0.65) }
-    Rectangle { visible: root.trimMode; x: root.trimTo * root.pxPerSecond; y: 0; height: parent.height; width: Math.max(0, parent.width - x); color: Util.alpha("#000000", 0.65) }
+    Rectangle { visible: root.trimMode; x: 0; y: 0; height: parent.height; width: root.trimFrom * root.pxPerSecond; color: Util.alpha(Color.background, 0.7) }
+    Rectangle { visible: root.trimMode; x: root.trimTo * root.pxPerSecond; y: 0; height: parent.height; width: Math.max(0, parent.width - x); color: Util.alpha(Color.background, 0.7) }
     Rectangle {
       visible: root.trimMode; y: 0; height: parent.height
       x: root.trimFrom * root.pxPerSecond; width: Math.max(0, (root.trimTo - root.trimFrom) * root.pxPerSecond)
@@ -74,17 +74,25 @@ Item {
     Rectangle {
       id: fromHandle
       visible: root.trimMode
-      x: Math.max(0, Math.min(parent.width - parent.hw, root.trimFrom * root.pxPerSecond - parent.hw / 2)); y: 0
+      // Dragging writes x imperatively and would kill a plain binding for good;
+      // Binding restores it whenever the drag ends.
+      Binding on x {
+        when: !fromDrag.drag.active
+        value: Math.max(0, Math.min(fromHandle.parent.width - fromHandle.parent.hw, root.trimFrom * root.pxPerSecond - fromHandle.parent.hw / 2))
+        restoreMode: Binding.RestoreBindingOrValue
+      }
+      y: 0
       width: parent.hw; height: parent.height
       radius: 3; color: root.accent; z: 3
-      Text { anchors.centerIn: parent; text: "‖"; color: "#000000"; font.pixelSize: Style.font.caption; font.bold: true }
+      Text { anchors.centerIn: parent; text: "‖"; color: Color.background; font.pixelSize: Style.font.caption; font.bold: true }
       Rectangle {   // time badge
         anchors.bottom: parent.top; anchors.bottomMargin: 2; anchors.left: parent.left
         width: fromBadge.implicitWidth + Style.spacing.xs * 2; height: fromBadge.implicitHeight + 2
         radius: 3; color: root.accent
-        Text { id: fromBadge; anchors.centerIn: parent; text: "start " + root.fmt(root.trimFrom); color: "#000000"; font.family: root.fontFamily; font.pixelSize: Style.font.caption; font.bold: true }
+        Text { id: fromBadge; anchors.centerIn: parent; text: "start " + root.fmt(root.trimFrom); color: Color.background; font.family: root.fontFamily; font.pixelSize: Style.font.caption; font.bold: true }
       }
       MouseArea {
+        id: fromDrag
         anchors.fill: parent; anchors.margins: -Style.space(6)
         cursorShape: Qt.SizeHorCursor
         drag.target: fromHandle; drag.axis: Drag.XAxis; drag.minimumX: 0; drag.maximumX: toHandle.x - fromHandle.width
@@ -95,17 +103,23 @@ Item {
     Rectangle {
       id: toHandle
       visible: root.trimMode
-      x: Math.max(0, Math.min(parent.width - parent.hw, root.trimTo * root.pxPerSecond - parent.hw / 2)); y: 0
+      Binding on x {
+        when: !toDrag.drag.active
+        value: Math.max(0, Math.min(toHandle.parent.width - toHandle.parent.hw, root.trimTo * root.pxPerSecond - toHandle.parent.hw / 2))
+        restoreMode: Binding.RestoreBindingOrValue
+      }
+      y: 0
       width: parent.hw; height: parent.height
       radius: 3; color: root.accent; z: 3
-      Text { anchors.centerIn: parent; text: "‖"; color: "#000000"; font.pixelSize: Style.font.caption; font.bold: true }
+      Text { anchors.centerIn: parent; text: "‖"; color: Color.background; font.pixelSize: Style.font.caption; font.bold: true }
       Rectangle {   // time badge
         anchors.bottom: parent.top; anchors.bottomMargin: 2; anchors.right: parent.right
         width: toBadge.implicitWidth + Style.spacing.xs * 2; height: toBadge.implicitHeight + 2
         radius: 3; color: root.accent
-        Text { id: toBadge; anchors.centerIn: parent; text: "end " + root.fmt(root.trimTo); color: "#000000"; font.family: root.fontFamily; font.pixelSize: Style.font.caption; font.bold: true }
+        Text { id: toBadge; anchors.centerIn: parent; text: "end " + root.fmt(root.trimTo); color: Color.background; font.family: root.fontFamily; font.pixelSize: Style.font.caption; font.bold: true }
       }
       MouseArea {
+        id: toDrag
         anchors.fill: parent; anchors.margins: -Style.space(6)
         cursorShape: Qt.SizeHorCursor
         drag.target: toHandle; drag.axis: Drag.XAxis; drag.minimumX: fromHandle.x + fromHandle.width; drag.maximumX: root.width - toHandle.width
@@ -129,14 +143,14 @@ Item {
       visible: !root.trimMode   // the badges carry the times in trim mode
       text: root.trimMode ? root.fmt(root.trimFrom) : root.fmt(root.position)
       color: root.foreground; font.family: root.fontFamily; font.pixelSize: Style.font.caption
-      style: Text.Outline; styleColor: Util.alpha("#000000", 0.6)
+      style: Text.Outline; styleColor: Util.alpha(Color.background, 0.6)
     }
     Text {
       anchors.right: parent.right; anchors.bottom: parent.bottom; anchors.margins: Style.spacing.xxs
       visible: !root.trimMode
       text: root.trimMode ? root.fmt(root.trimTo) : root.fmt(root.duration)
       color: root.foreground; font.family: root.fontFamily; font.pixelSize: Style.font.caption
-      style: Text.Outline; styleColor: Util.alpha("#000000", 0.6)
+      style: Text.Outline; styleColor: Util.alpha(Color.background, 0.6)
     }
   }
 }

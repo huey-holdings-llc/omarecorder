@@ -5,6 +5,7 @@ import QtQuick
 import QtQuick.Controls
 import QtMultimedia
 import qs.Commons
+import "ui/format.js" as Fmt
 import qs.Ui
 import "ui"
 
@@ -92,8 +93,8 @@ Item {
   function indexOfId(id) { for (var i = 0; i < rows.length; i++) if (rows[i].id === id) return i; return -1 }
   function ensureSelection() { if (selectedIndex < 0 && rows.length > 0) selectedId = rows[0].id }
   readonly property string hintsText: root.trimMode
-    ? "Space play   ←→ seek   [ ] mark start / end at the playhead   Esc leave trim mode"
-    : "↑↓ select   Enter transcribe / open   Space play   ←→ seek   F2 rename   F3 trim   Del delete   Esc close"
+    ? "Space play   ←→ seek   [ ] mark start / end   Enter trim   Esc leave trim mode"
+    : "↑↓ select   Enter open / transcribe   Space play   ←→ seek   F2 rename   F3 trim   F4 raw   Del delete   Esc close"
   function select(delta) {
     if (rows.length === 0) return
     var i = selectedIndex < 0 ? (delta < 0 ? rows.length - 1 : 0) : (selectedIndex + delta + rows.length) % rows.length
@@ -113,7 +114,7 @@ Item {
     svc.transcribe(selected.id, modelForRun, svc.config.language || "en")
   }
   function cancelSelected() { if (svc && selected && selectedJob) svc.cancel(selected.id) }
-  function audioUrl(rec) { return rec && rec.audio ? "file://" + rec.audio : "" }
+  function audioUrl(rec) { return rec && rec.audio ? Fmt.fileUrl(rec.audio) : "" }
   function loadSelected() { if (player && selected && String(player.source) !== audioUrl(selected)) player.source = audioUrl(selected) }
   function togglePlay() {
     if (!player || !selected || selectedLive) return
@@ -135,7 +136,9 @@ Item {
   // [ and ] in trim mode: put the start / end where the playhead is.
   function markStart() { if (positionS < trimTo - 0.5) trimFrom = positionS }
   function markEnd() { if (positionS > trimFrom + 0.5) trimTo = positionS }
-  function requestTrim() { if (trimMode && trimTo > trimFrom) { trimConfirm.selectedIndex = 0; trimConfirmOpen = true } }
+  // Trim was explicitly invoked and is reversible (the original is kept), so the
+  // dialog defaults to Trim; delete keeps defaulting to Cancel.
+  function requestTrim() { if (trimMode && trimTo > trimFrom + 0.5) { trimConfirm.selectedIndex = 1; trimConfirmOpen = true } }
   function confirmTrim() {
     if (svc && selected) { if (player) player.stop(); svc.trim(selected.id, trimFrom.toFixed(2), trimTo.toFixed(2)) }
     trimConfirmOpen = false; trimMode = false; Qt.callLater(function() { keyCatcher.forceActiveFocus() })
@@ -153,7 +156,7 @@ Item {
   onSelectedChanged: {
     if (player) player.stop()
     trimMode = false; previewing = false; showRaw = false
-    if (!selected || !selected.transcript_path) transcriptText = ""
+    transcriptText = ""   // never show the previous recording's text while the file loads
     // Re-transcribe defaults to the model that produced the visible transcript.
     var last = selected && selected.transcript && selected.transcript.model ? selected.transcript.model : ""
     var m = svc && last ? svc.modelByName(last) : null
@@ -240,6 +243,14 @@ Item {
           else if (root.trimMode && event.key === Qt.Key_BracketLeft) { root.markStart(); event.accepted = true }
           else if (root.trimMode && event.key === Qt.Key_BracketRight) { root.markEnd(); event.accepted = true }
           else if (event.key === Qt.Key_Space) { if (root.filterText) root.setFilter(root.filterText + " "); else root.togglePlay(); event.accepted = true }
+          else if (root.trimMode && (event.key === Qt.Key_Return || event.key === Qt.Key_Enter)) { root.requestTrim(); event.accepted = true }
+          else if (event.key === Qt.Key_F4) { if (root.hasTidy) root.showRaw = !root.showRaw; event.accepted = true }
+          else if ((event.modifiers & Qt.ControlModifier) && event.key === Qt.Key_C && root.transcriptText.length > 0) {
+            root.svc.copyTranscript(root.selected.id, root.showRaw, function(code) { if (code === 0) copiedFlash.restart() }); event.accepted = true
+          }
+          else if ((event.modifiers & Qt.ControlModifier) && event.key === Qt.Key_O && root.transcriptText.length > 0) {
+            root.svc.exportToObsidian(root.selected.id, root.showRaw, function(code) { if (code === 0) sentFlash.restart() }); event.accepted = true
+          }
           else if (event.key === Qt.Key_Return || event.key === Qt.Key_Enter) {
             if (root.svc && root.selected && root.selected.has_transcript && !(event.modifiers & Qt.ShiftModifier)) root.svc.openTranscript(root.selected.id)
             else root.transcribeSelected()
@@ -274,7 +285,7 @@ Item {
           anchors.fill: parent
           opened: root.trimConfirmOpen
           z: 10
-          message: "Keep " + wave.fmt(root.trimFrom) + " – " + wave.fmt(root.trimTo) + " and cut the rest? The original stays as audio.orig.wav."
+          message: "Keep " + wave.fmt(root.trimFrom) + " to " + wave.fmt(root.trimTo) + " and cut the rest? The original is kept and can be restored."
           confirmText: "Trim"
           background: root.background
           foreground: root.foreground
@@ -297,7 +308,7 @@ Item {
             spacing: Style.spacing.lg
             Text {
               anchors.verticalCenter: parent.verticalCenter
-              text: "󰑊  Omarecorder"
+              text: "󰍬  Omarecorder"   // mic, not the red record dot: this header is visible while idle
               color: root.foreground
               font.family: root.fontFamily
               font.pixelSize: Style.font.title
@@ -327,7 +338,7 @@ Item {
             }
             Text {
               anchors.verticalCenter: parent.verticalCenter
-              text: root.rows.length + (root.rows.length === 1 ? " recording" : " recordings") + (root.filterText ? " match" : "")
+              text: root.rows.length + (root.rows.length === 1 ? " recording" : " recordings") + (root.filterText ? (root.rows.length === 1 ? " matches" : " match") : "")
               color: root.dim
               font.family: root.fontFamily
               font.pixelSize: Style.font.caption
@@ -427,6 +438,8 @@ Item {
                 color: root.selectedLive ? root.urgent : root.dim
                 font.family: root.fontFamily
                 font.pixelSize: Style.font.caption
+                wrapMode: Text.Wrap
+                maximumLineCount: 2
                 elide: Text.ElideRight
               }
 
@@ -460,6 +473,7 @@ Item {
                   id: mainButton
                   anchors.verticalCenter: parent.verticalCenter
                   visible: !root.selectedLive
+                  tooltipText: root.selectedJob ? "" : (root.selected && root.selected.has_transcript ? "Shift+Enter" : "Enter")
                   text: root.selectedJob ? "Cancel"
                     : (picker.currentInstalled ? (root.selected && root.selected.has_transcript ? "Re-transcribe" : "Transcribe")
                                                : (picker.download ? "Downloading…" : "Download model"))
@@ -487,7 +501,7 @@ Item {
                 PanelActionButton {
                   anchors.verticalCenter: parent.verticalCenter
                   iconText: "󰆐"
-                  tooltipText: "Trim (drag the handles on the waveform)"
+                  tooltipText: "Trim (F3)"
                   enabled: !!(root.selected && root.selected.waveform && !root.selectedLive && !root.selectedJob)
                   opacity: enabled ? 1 : 0.4
                   foreground: root.trimMode ? Color.accent : root.foreground; fontFamily: root.fontFamily
@@ -495,7 +509,9 @@ Item {
                 }
                 PanelActionButton {
                   anchors.verticalCenter: parent.verticalCenter
-                  visible: !!(root.selected && root.selected.has_orig)
+                  // Slot always reserved so the trash button never shifts under the pointer.
+                  enabled: !!(root.selected && root.selected.has_orig)
+                  opacity: enabled ? 1 : 0
                   iconText: "󰕌"
                   tooltipText: "Restore the untrimmed original"
                   foreground: root.foreground; fontFamily: root.fontFamily
@@ -543,7 +559,7 @@ Item {
                 Text {
                   anchors.verticalCenter: parent.verticalCenter
                   width: parent.width - previewButton.width - trimButton.width - cancelButton.width - parent.spacing * 3
-                  text: "Keep " + wave.fmt(root.trimFrom) + " – " + wave.fmt(root.trimTo) + "  ·  drag the handles, or play and press [ ] at the playhead"
+                  text: "Keep " + wave.fmt(root.trimFrom) + " to " + wave.fmt(root.trimTo)
                   elide: Text.ElideRight
                   color: root.dim; font.family: root.fontFamily; font.pixelSize: Style.font.caption
                 }
@@ -588,6 +604,17 @@ Item {
                 font.pixelSize: Style.font.caption
               }
 
+              Text {
+                visible: !!(root.svc && root.svc.lastError.length > 0)
+                width: parent.width
+                text: root.svc ? root.svc.lastError : ""
+                textFormat: Text.PlainText
+                color: root.urgent
+                wrapMode: Text.Wrap
+                font.family: root.fontFamily
+                font.pixelSize: Style.font.caption
+              }
+
               PanelSeparator { width: parent.width; foreground: root.foreground }
 
               Text {
@@ -616,16 +643,25 @@ Item {
                 }
                 Button {
                   visible: root.hasTidy
-                  text: root.showRaw ? "Raw" : "Tidy"
-                  iconText: root.showRaw ? "󰈔" : "󰦪"
+                  text: "Tidy"
+                  active: !root.showRaw
                   fontSize: Style.font.caption; horizontalPadding: Style.spacing.sm; verticalPadding: Style.spacing.xxs
-                  tooltipText: root.showRaw ? "Showing the raw transcript. Click for the tidy one (paragraphs, repeats removed)." : "Showing the tidy transcript. Click for the raw one, exactly as whisper wrote it."
+                  tooltipText: "Paragraphs, repeated passages removed (F4)"
                   foreground: root.foreground; fontFamily: root.fontFamily
-                  onClicked: root.showRaw = !root.showRaw
+                  onClicked: root.showRaw = false
+                }
+                Button {
+                  visible: root.hasTidy
+                  text: "Raw"
+                  active: root.showRaw
+                  fontSize: Style.font.caption; horizontalPadding: Style.spacing.sm; verticalPadding: Style.spacing.xxs
+                  tooltipText: "Exactly as whisper wrote it (F4)"
+                  foreground: root.foreground; fontFamily: root.fontFamily
+                  onClicked: root.showRaw = true
                 }
                 PanelActionButton {
                   iconText: "󰆏"
-                  tooltipText: "Copy transcript"
+                  tooltipText: "Copy transcript (Ctrl+C)"
                   foreground: root.foreground; fontFamily: root.fontFamily
                   onClicked: if (root.svc && root.selected) root.svc.copyTranscript(root.selected.id, root.showRaw, function(code) { if (code === 0) copiedFlash.restart() })
                 }
@@ -640,7 +676,7 @@ Item {
                 Timer { id: copiedFlash; interval: 1500 }
                 PanelActionButton {
                   iconText: "󰈝"
-                  tooltipText: "Send to Obsidian"
+                  tooltipText: "Send to Obsidian (Ctrl+O)"
                   foreground: root.foreground; fontFamily: root.fontFamily
                   onClicked: if (root.svc && root.selected) root.svc.exportToObsidian(root.selected.id, root.showRaw, function(code) { if (code === 0) sentFlash.restart() })
                 }

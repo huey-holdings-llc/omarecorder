@@ -14,7 +14,6 @@ import "ui/format.js" as Fmt
 QtObject {
   id: root
 
-  property var settings: ({})
   readonly property string pluginId: "io.github.coreytyhurst.omarecorder"
   // decodeURIComponent: a home directory with a space arrives as %20 otherwise.
   readonly property string pluginDir: decodeURIComponent(Qt.resolvedUrl(".").toString()).replace(/^file:\/\//, "").replace(/\/$/, "")
@@ -56,7 +55,7 @@ QtObject {
   function jobProgressText(j) { return j && j.progress && j.progress.chunks > 1 ? j.progress.chunk + "/" + j.progress.chunks + " · " : "" }
   function isPartial(rec) { return !!(rec && rec.transcript && rec.transcript.partial) }
   function isStale(rec) { return !!(rec && rec.transcript && rec.transcript.stale) }
-  readonly property string activeJobTitle: activeJob ? displayTitle(recordingById(activeJob.id) || { id: activeJob.id, created: "" }) || activeJob.id : ""
+  readonly property string activeJobTitle: activeJob ? (recordingById(activeJob.id) ? displayTitle(recordingById(activeJob.id)) : activeJob.id) : ""
   readonly property string defaultModel: config && config.defaultModel ? config.defaultModel : "base.en"
   readonly property string defaultSource: config && config.defaultSource ? config.defaultSource : "mic"
 
@@ -86,13 +85,31 @@ QtObject {
   function refreshConfig() { if (!configProc.running) configProc.running = true }
   function refreshSetup() { if (!setupProc.running) setupProc.running = true }
 
+  // Which state changes actually need a re-list or a setup re-check: not the
+  // bytes_done ticks a download writes every 2 s. jobs shape + per-piece
+  // progress + the recording id cover everything the list renders.
+  property string _listSig: ""
+  function _stateSig(s) {
+    var jobs = (s.jobs || []).map(function(j) { return [j.type, j.id || j.model, j.unit, j.progress ? j.progress.chunk : 0].join(":") })
+    return jobs.join("|") + "//" + (s.recording ? s.recording.id : "")
+  }
   function applyState(text) {
     try {
       var s = JSON.parse(text)
       var prevVersion = state ? state.version : -1
       state = s
       updateElapsed()
-      if (s.version !== prevVersion) { refreshList(); refreshSetup() }
+      if (s.version !== prevVersion) {
+        var sig = _stateSig(s)
+        if (sig !== _listSig) {
+          _listSig = sig
+          refreshList()
+          if (!setup || setup.ok !== true) refreshSetup()
+        } else if (!s.jobs || s.jobs.length === 0) {
+          refreshList()   // a bump with no jobs: a mutation such as rename or delete
+          if (!setup || setup.ok !== true) refreshSetup()
+        }
+      }
     } catch (e) { /* partial write; FileView will fire again */ }
   }
   function updateElapsed() {

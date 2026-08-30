@@ -35,7 +35,7 @@ Panel {
   readonly property string stateText: !ready ? "Service unavailable"
     : recording ? "Recording " + svc.elapsedText + (svc.activeRecording ? " · " + svc.sourceLabel(svc.activeRecording.source) : "") + (svc.clipping ? " · ⚠ clipping" : "")
     : transcribing ? "Transcribing " + svc.jobProgressText(svc.activeJob) + svc.transcribeElapsedText + " · " + svc.activeJobTitle
-    : (svc.downloading ? "Downloading model…" : "Idle")
+    : (svc.downloading ? "Downloading model…" : "Ready")
 
   property bool settingsOpen: false
   property bool cursorActive: false
@@ -73,7 +73,14 @@ Panel {
   // Quickshell on Omarchy 4 — both in-shell and in its own process — so no
   // graphical picker until that is fixed upstream.)
   property bool importOpen: false
-  function importAudio() { if (!ready) return; importOpen = !importOpen; if (importOpen) Qt.callLater(function() { importField.forceActiveFocus() }) }
+  function importAudio() {
+    if (!ready) return
+    importOpen = !importOpen
+    if (importOpen) Qt.callLater(function() {
+      importField.forceActiveFocus()
+      if (panelFlick) panelFlick.contentY = Math.max(0, panelFlick.contentHeight - panelFlick.height)
+    })
+  }
   function openLibrary() { if (ready) { root.close(); svc.openLibrary() } }
 
   IpcHandler {
@@ -118,8 +125,10 @@ Panel {
     PanelKeyCatcher {
       id: keyCatcher
       anchors.fill: parent
-      blocked: (settingsSection.visible && settingsSection.activeFocus) || importField.activeFocus
-      onMoveRequested: function(dx, dy) { root.moveCursor(dy) }
+      blocked: (settingsSection.visible && settingsSection.editing) || importField.activeFocus
+      // The catcher eats h/j/k/l as vim movement, so "l" arrives as dx=1: route
+      // it to the library (nothing else uses horizontal movement here).
+      onMoveRequested: function(dx, dy) { if (dx === 1) root.openLibrary(); else root.moveCursor(dy) }
       onActivateRequested: root.activateCursor()
       onCloseRequested: root.close()
       onTabRequested: function(direction) { root.switchPanel(direction) }
@@ -231,7 +240,8 @@ Panel {
           Text {
             visible: root.recent.length === 0
             width: parent.width
-            text: root.ready ? "No recordings yet." : "Service not loaded."
+            text: !root.ready ? "Service not loaded."
+              : (root.svc.recordings.length === 0 ? "No recordings yet. Press r to start one." : "Recent list is off (recentCount is 0).")
             color: root.dim
             font.family: root.fontFamily
             font.pixelSize: Style.font.caption
@@ -298,7 +308,7 @@ Panel {
             visible: root.importOpen && root.ready
             width: parent.width
             spacing: Style.spacing.xxs
-            Text { text: "Import an audio file (path, Enter)"; color: root.dim; font.family: root.fontFamily; font.pixelSize: Style.font.caption }
+            Text { text: "Import an audio file: type a path, Enter imports, Esc cancels"; color: root.dim; font.family: root.fontFamily; font.pixelSize: Style.font.caption }
             TextField {
               id: importField
               width: parent.width
@@ -310,6 +320,8 @@ Panel {
             }
           }
 
+          PanelSeparator { visible: root.settingsOpen && root.ready; width: parent.width; foreground: root.foreground }
+
           SettingsSection {
             id: settingsSection
             visible: root.settingsOpen && root.ready
@@ -317,6 +329,15 @@ Panel {
             svc: root.svc
             foreground: root.foreground
             fontFamily: root.fontFamily
+          }
+
+          Text {
+            width: parent.width
+            horizontalAlignment: Text.AlignHCenter
+            text: "r record · l library · i import · s settings · Esc close"
+            color: root.dim
+            font.family: root.fontFamily
+            font.pixelSize: Style.font.caption
           }
         }
       }

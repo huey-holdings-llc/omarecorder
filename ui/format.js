@@ -29,6 +29,11 @@ function fmtDate(iso) {
   if (isNaN(d.getTime())) return String(iso).slice(0, 16).replace("T", " ")
   return Qt.formatDateTime(d, "MMM d, HH:mm")
 }
+// A file path as a QML url: '#' and '?' are legal in file names but would be
+// read as fragment/query, silently breaking MediaPlayer and Image sources.
+function fileUrl(p) {
+  return "file://" + encodeURI(p).replace(/#/g, "%23").replace(/\?/g, "%3F")
+}
 // 1.2 GB / 466 MB / 12 KB
 function fmtBytes(b) {
   b = b || 0

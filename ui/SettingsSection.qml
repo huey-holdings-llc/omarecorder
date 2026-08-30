@@ -10,6 +10,8 @@ Column {
   property color foreground: Color.foreground
   property string fontFamily: Style.font.family
   readonly property var cfg: svc ? svc.config : ({})
+  // The popup's key catcher must stand down while a settings field is edited.
+  readonly property bool editing: dirField.activeFocus
   readonly property var installedModels: {
     var out = []
     var ms = svc ? svc.models : []
@@ -62,7 +64,8 @@ Column {
       text: root.cfg.recordingsDir || ""
       foreground: root.foreground
       font.family: root.fontFamily
-      onAccepted: if (root.svc && text.length) root.svc.setConfig("recordingsDir", text)
+      onAccepted: { if (root.svc && text.length) root.svc.setConfig("recordingsDir", text); focus = false }
+      Keys.onEscapePressed: { text = root.cfg.recordingsDir || ""; focus = false }
     }
   }
 }
