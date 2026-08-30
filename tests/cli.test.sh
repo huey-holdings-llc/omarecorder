@@ -12,9 +12,11 @@ trap 'rm -rf "$TMP"' EXIT
 # Keep PipeWire/Pulse reachable while XDG_RUNTIME_DIR points at the sandbox.
 REAL_RUNTIME="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"
 export PIPEWIRE_RUNTIME_DIR="$REAL_RUNTIME" PULSE_SERVER="unix:$REAL_RUNTIME/pulse/native"
-export OMARECORDER_DIR="$TMP/Recordings" XDG_CONFIG_HOME="$TMP/config" XDG_STATE_HOME="$TMP/state" XDG_RUNTIME_DIR="$TMP/run"
+# XDG_RUNTIME_DIR stays real so `systemd-run --user` / `systemctl --user` work; the CLI state goes to $RUN.
+export OMARECORDER_DIR="$TMP/Recordings" XDG_CONFIG_HOME="$TMP/config" XDG_STATE_HOME="$TMP/state" XDG_RUNTIME_DIR="$REAL_RUNTIME"
+export OMARECORDER_RUN_DIR="$TMP/run/omarecorder"; RUN="$OMARECORDER_RUN_DIR"
 export OMARECORDER_QUIET=1 OMARECORDER_SYNC=1
-mkdir -p "$XDG_CONFIG_HOME" "$XDG_STATE_HOME" "$XDG_RUNTIME_DIR"
+mkdir -p "$XDG_CONFIG_HOME" "$XDG_STATE_HOME" "$TMP/run"
 
 pass=0; fail=0
 ok()   { pass=$((pass+1)); echo "  ✓ $1"; }
@@ -65,7 +67,7 @@ eq "audio converted to 16k mono s16" "$(ffprobe -v error -select_streams a:0 -sh
 eq "meta duration" "$(jq -r .duration_s "$D1/meta.json")" "3"
 eq "meta title" "$(jq -r .title "$D1/meta.json")" "Tone Test"
 eq "meta source" "$(jq -r .source "$D1/meta.json")" "import"
-V1=$(jq -r .version "$XDG_RUNTIME_DIR/omarecorder/state.json")
+V1=$(jq -r .version "$RUN/state.json")
 if [[ -f "$TMP/speech.wav" ]]; then
   ID2=$($CLI import "$TMP/speech.wav"); eq "second import id" "$ID2" "2026-01-03_030405"
   eq "title defaults to filename" "$(jq -r .title "$OMARECORDER_DIR/$ID2 speech/meta.json")" "speech"
@@ -94,7 +96,7 @@ check "folder renamed (sanitized)" test -d "$D1B"
 check "old folder gone" bash -c "! test -d '$D1'"
 eq "id stable after rename" "$($CLI show "$ID1" --json | jq -r .id)" "$ID1"
 eq "meta title updated" "$(jq -r .title "$D1B/meta.json")" "Renamed - Title here"
-V2=$(jq -r .version "$XDG_RUNTIME_DIR/omarecorder/state.json")
+V2=$(jq -r .version "$RUN/state.json")
 check "state version bumped by mutations" test "$V2" -gt "$V1"
 
 echo "== security / robustness"
@@ -142,26 +144,26 @@ IDP=$("$CLI" import "$TMP/quiet.wav" --title Private); DP=$("$CLI" show "$IDP" -
 eq "audio.wav is 0600" "$(stat -c %a "$DP/audio.wav")" "600"
 eq "meta.json is 0600" "$(stat -c %a "$DP/meta.json")" "600"
 eq "recording folder is 0700" "$(stat -c %a "$DP")" "700"
-eq "runtime dir is 0700" "$(stat -c %a "$XDG_RUNTIME_DIR/omarecorder")" "700"
+eq "runtime dir is 0700" "$(stat -c %a "$RUN")" "700"
 "$CLI" delete "$IDP" --yes >/dev/null
 # runtime state never falls back to /tmp
-( unset XDG_RUNTIME_DIR; "$CLI" status >/dev/null 2>&1; echo $? > "$TMP/rc" )
+( unset XDG_RUNTIME_DIR OMARECORDER_RUN_DIR; "$CLI" status >/dev/null 2>&1; echo $? > "$TMP/rc" )
 check "no XDG_RUNTIME_DIR: uses /run/user or fails, never /tmp" bash -c "! test -d /tmp/omarecorder"
 # config validation
 fails "config get unknown key fails" "$CLI" config get bogus
 fails "config set recordingsDir rejects missing dir" "$CLI" config set recordingsDir "$TMP/does-not-exist"
 fails "import rejects unknown flag" "$CLI" import --bogus "$TMP/quiet.wav"
 # concurrent state writers do not lose bumps
-V0=$(jq -r .version "$XDG_RUNTIME_DIR/omarecorder/state.json")
+V0=$(jq -r .version "$RUN/state.json")
 for i in $(seq 1 20); do "$CLI" config set threads "$i" >/dev/null & done; wait
-V1=$(jq -r .version "$XDG_RUNTIME_DIR/omarecorder/state.json")
+V1=$(jq -r .version "$RUN/state.json")
 check "20 parallel config sets → 20 version bumps" test $((V1 - V0)) -ge 20
 "$CLI" config set threads 0 >/dev/null
 # crash recovery for a "both" take that died before the mix
 IDB="2026-01-05_010203"; DB="$OMARECORDER_DIR/$IDB Both crash"; mkdir -p "$DB"
 cp "$TMP/quiet.wav" "$DB/mic.wav"; cp "$TMP/quiet.wav" "$DB/system.wav"
 jq -cn --arg id "$IDB" --arg dir "$DB" '{id:$id,title:"Both crash",source:"both",created:"2026-01-05T01:02:03+0000",duration_s:null,size_bytes:0,sample_rate:16000,transcript:null,notes:""}' > "$DB/meta.json"
-jq -cn --arg id "$IDB" --arg dir "$DB" '{recording:{id:$id,source:"both",dir:$dir,started_at:0,pids:[999999],files:[]},jobs:[],version:1}' > "$XDG_RUNTIME_DIR/omarecorder/state.json"
+jq -cn --arg id "$IDB" --arg dir "$DB" '{recording:{id:$id,source:"both",dir:$dir,started_at:0,pids:[999999],files:[]},jobs:[],version:1}' > "$RUN/state.json"
 eq "status clears the dead recording" "$("$CLI" status)" "idle"
 check "both crash recovery produced audio.wav" test -s "$DB/audio.wav"
 eq "recovered both take has duration" "$(jq -r .duration_s "$DB/meta.json")" "3"
@@ -254,7 +256,7 @@ fails "trim rejects to beyond duration+1" "$CLI" trim "$IDT2" --from 0 --to 5
 fails "trim needs both --from and --to" "$CLI" trim "$IDT2" --from 1
 fails "trim rejects unknown flag" "$CLI" trim "$IDT2" --from 0 --to 1 --bogus
 check "nothing changed after rejected trims" bash -c "! test -e '$DT2/audio.orig.wav' && [ \"\$(jq -r .duration_s '$DT2/meta.json')\" = 3 ]"
-jq -cn --arg id "$IDT2" '{recording:null,jobs:[{type:"transcribe",id:$id,model:"base.en",started_at:0}],version:1}' > "$XDG_RUNTIME_DIR/omarecorder/state.json"
+jq -cn --arg id "$IDT2" '{recording:null,jobs:[{type:"transcribe",id:$id,model:"base.en",started_at:0}],version:1}' > "$RUN/state.json"
 fails "trim refused while a transcription runs" "$CLI" trim "$IDT2" --from 0 --to 1
 "$CLI" cancel "$IDT2" >/dev/null
 eq "trim --replace (to may overshoot by ≤1 s)" "$($CLI trim "$IDT2" --from 1 --to 4 --replace)" "$IDT2 (00:00:02)"
@@ -324,7 +326,7 @@ if command -v voxtype >/dev/null && [[ -f "${VOXTYPE_MODELS_DIR:-$HOME/.local/sh
   eq "50 s range → 2 pieces" "$(jq -r '.transcript.chunks' "$D6/meta.json")" "2"
   # cancel keeps the pieces that finished: run the worker directly, TERM it after piece 1
   rm -f "$D6/transcript.md"
-  jq -cn --arg id "$ID6" '{recording:null,jobs:[{type:"transcribe",id:$id,model:"base.en",started_at:0}],version:1}' > "$XDG_RUNTIME_DIR/omarecorder/state.json"
+  jq -cn --arg id "$ID6" '{recording:null,jobs:[{type:"transcribe",id:$id,model:"base.en",started_at:0}],version:1}' > "$RUN/state.json"
   OMARECORDER_CHUNK_S=25 setsid "$CLI" _tx-worker "$ID6" base.en en 0 "" "" >/dev/null 2>&1 < /dev/null &
   WPID=$!
   for _ in $(seq 1 120); do [[ -s "$D6/transcript.md" ]] && break; sleep 0.5; done
@@ -334,7 +336,7 @@ if command -v voxtype >/dev/null && [[ -f "${VOXTYPE_MODELS_DIR:-$HOME/.local/sh
   eq "cancelled worker exits 0" "$WRC" "0"
   check "partial header" bash -c "head -1 '$D6/transcript.md' | grep -q 'partial=true'"
   eq "meta says partial" "$(jq -r '.transcript.partial' "$D6/meta.json")" "true"
-  check "no chunk temp files left" bash -c "! ls '$XDG_RUNTIME_DIR/omarecorder/'tx-* 2>/dev/null | grep -q ."
+  check "no chunk temp files left" bash -c "! ls '$RUN/'tx-* 2>/dev/null | grep -q ."
   "$CLI" cancel "$ID6" >/dev/null
 
   echo "== transcribe (detached systemd-run unit)"
@@ -374,8 +376,8 @@ if pactl list short sources 2>/dev/null | grep -qv '\.monitor'; then
   fails "transcribe refused while recording" "$CLI" transcribe "$IDR" --model base.en
   MPID=$("$CLI" status --json | jq -r '.recording.meter_pid')
   check "state has meter_pid" test "$MPID" -gt 0
-  for _ in $(seq 1 30); do jq -e '.t > 0' "$XDG_RUNTIME_DIR/omarecorder/level" >/dev/null 2>&1 && break; sleep 0.2; done
-  check "level file updates while recording" jq -e '.t > 0 and (.peak_db|type)=="number"' "$XDG_RUNTIME_DIR/omarecorder/level"
+  for _ in $(seq 1 30); do jq -e '.t > 0' "$RUN/level" >/dev/null 2>&1 && break; sleep 0.2; done
+  check "level file updates while recording" jq -e '.t > 0 and (.peak_db|type)=="number"' "$RUN/level"
   sleep 1
   check "record stop" "$CLI" record stop
   DR="$OMARECORDER_DIR/$IDR Mic check"
@@ -385,7 +387,7 @@ if pactl list short sources 2>/dev/null | grep -qv '\.monitor'; then
   eq "state cleared" "$($CLI status)" "idle"
   sleep 0.5
   check "meter process gone after stop" bash -c "! kill -0 $MPID 2>/dev/null"
-  check "level file removed after stop" bash -c "! test -e '$XDG_RUNTIME_DIR/omarecorder/level'"
+  check "level file removed after stop" bash -c "! test -e '$RUN/level'"
   check "toggle starts" "$CLI" record toggle --source mic
   sleep 1
   check "toggle stops" "$CLI" record toggle

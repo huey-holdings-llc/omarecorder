@@ -28,7 +28,9 @@ CONFIG_FILE="$CONFIG_DIR/config.json"
 STATE_DIR="$XDG_STATE_HOME/omarecorder"
 BENCH_FILE="$STATE_DIR/bench.json"
 LOG_FILE="$STATE_DIR/omarecorder.log"
-RUN_DIR="$XDG_RUNTIME_DIR/omarecorder"
+# OMARECORDER_RUN_DIR: test hook only — lets the suite keep the real XDG_RUNTIME_DIR (so systemd --user
+# is reachable) while state stays in a sandbox.
+RUN_DIR="${OMARECORDER_RUN_DIR:-$XDG_RUNTIME_DIR/omarecorder}"
 STATE_FILE="$RUN_DIR/state.json"
 PLAY_PID_FILE="$RUN_DIR/play.pid"
 STATE_LOCK="$RUN_DIR/state.lock"
@@ -810,7 +812,7 @@ run_detached() {
   if [[ "${OMARECORDER_SYNC:-0}" == "1" ]] || ! have systemd-run; then "$@"; return $?; fi
   systemd-run --user --quiet --no-block --collect --service-type=oneshot -u "$unit" --description="$desc" \
     --setenv=OMARECORDER_DIR="${OMARECORDER_DIR:-}" --setenv=XDG_CONFIG_HOME="$XDG_CONFIG_HOME" --setenv=HOME="$HOME" \
-    --setenv=XDG_STATE_HOME="$XDG_STATE_HOME" --setenv=XDG_RUNTIME_DIR="$XDG_RUNTIME_DIR" --setenv=VOXTYPE_MODELS_DIR="$VOXTYPE_MODELS_DIR" \
+    --setenv=XDG_STATE_HOME="$XDG_STATE_HOME" --setenv=XDG_RUNTIME_DIR="$XDG_RUNTIME_DIR" --setenv=OMARECORDER_RUN_DIR="${OMARECORDER_RUN_DIR:-}" --setenv=VOXTYPE_MODELS_DIR="$VOXTYPE_MODELS_DIR" \
     --setenv=OMARECORDER_QUIET="${OMARECORDER_QUIET:-0}" --setenv=PATH="$PATH" "$@"
 }
 
