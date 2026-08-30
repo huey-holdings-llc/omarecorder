@@ -16,6 +16,9 @@ Third persona pass (an efficiency-minded enthusiast): say each fact once.
 - Settings no longer duplicate the popup's Source control.
 - Library: rename hint shown once; re-transcribe preselects the model that made
   the visible transcript; "▶ playing" in the meta line while playback runs.
+- Library: "open in editor" and "copy transcript" moved from the icon strip to
+  the top-left of the transcript box, outside the scroll area, with a brief
+  "Copied" confirmation.
 - Library action row: no "Model" label row; the picker is sized to its longest
   option ("Accurate · large-v3-turbo · ≈ 52m", "Balanced · small.en · 466 MB
   download"); "Re-transcribe"; list rows no longer repeat the model (the detail

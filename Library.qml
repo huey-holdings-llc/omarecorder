@@ -393,24 +393,6 @@ Item {
                 }
                 PanelActionButton {
                   anchors.verticalCenter: parent.verticalCenter
-                  iconText: "󰈙"
-                  tooltipText: "Open transcript in editor"
-                  enabled: !!(root.selected && root.selected.has_transcript)
-                  opacity: enabled ? 1 : 0.4
-                  foreground: root.foreground; fontFamily: root.fontFamily
-                  onClicked: root.svc.openTranscript(root.selected.id)
-                }
-                PanelActionButton {
-                  anchors.verticalCenter: parent.verticalCenter
-                  iconText: "󰆏"
-                  tooltipText: "Copy transcript"
-                  enabled: !!(root.selected && root.selected.has_transcript)
-                  opacity: enabled ? 1 : 0.4
-                  foreground: root.foreground; fontFamily: root.fontFamily
-                  onClicked: root.svc.copyTranscript(root.selected.id)
-                }
-                PanelActionButton {
-                  anchors.verticalCenter: parent.verticalCenter
                   iconText: "󰉋"
                   tooltipText: "Open folder"
                   foreground: root.foreground; fontFamily: root.fontFamily
@@ -442,6 +424,35 @@ Item {
               }
 
               PanelSeparator { width: parent.width; foreground: root.foreground }
+
+              // Transcript tools sit above the text, outside the scroll area, so
+              // they stay put however far down a long transcript you are.
+              Row {
+                id: transcriptTools
+                visible: root.transcriptText.length > 0
+                spacing: Style.spacing.xs
+                PanelActionButton {
+                  iconText: "󰈙"
+                  tooltipText: "Open in editor (Enter)"
+                  foreground: root.foreground; fontFamily: root.fontFamily
+                  onClicked: root.svc.openTranscript(root.selected.id)
+                }
+                PanelActionButton {
+                  iconText: "󰆏"
+                  tooltipText: "Copy transcript"
+                  foreground: root.foreground; fontFamily: root.fontFamily
+                  onClicked: { root.svc.copyTranscript(root.selected.id); copiedFlash.restart() }
+                }
+                Text {
+                  anchors.verticalCenter: parent.verticalCenter
+                  visible: copiedFlash.running
+                  text: "Copied"
+                  color: Color.accent
+                  font.family: root.fontFamily
+                  font.pixelSize: Style.font.caption
+                }
+                Timer { id: copiedFlash; interval: 1500 }
+              }
 
               TranscriptView {
                 width: parent.width
