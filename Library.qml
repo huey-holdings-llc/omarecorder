@@ -10,7 +10,7 @@ import "ui"
 
 // OmaRecorder Library — fullscreen overlay: every recording on the left,
 // the selected one on the right with its transcript. Summoned with
-//   omarchy-shell shell toggle io.github.coreytyhurst.omarecorder
+//   omarchy-shell shell toggle io.github.huey-holdings-llc.omarecorder
 // Uses the theme's [popups] surface tokens (same chrome as the bar popup) so
 // the overlay reads as part of the same plugin; list selection reuses the
 // [menu] selection tokens.

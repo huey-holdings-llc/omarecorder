@@ -6,7 +6,7 @@ Approved design for v0.1. Source of truth for behaviour; see README for usage.
 
 Tonight's D&D session proved the primitives: `pw-record` captures for hours, voxtype's whisper transcribes locally on this hardware, and a bar toggle (`~/.local/bin/dnd-record` + a `type: "command"` module in `shell.json`) is enough to record. What's missing is *usability*: browse recordings, rename/delete/trim, decide what to transcribe with a light accuracy-vs-speed choice, and read the transcript beside the audio. D&D is one use case; the tool is "record any conversation or meeting, save the audio, transcribe some or all of it."
 
-Constraints the user set: local-first; near-zero new dependencies (leverage what Omarchy ships); fully in the Omarchy ecosystem (theme-adaptive, movable in the bar, `omarchy plugin add/remove`, publishable to omarchyplugins.com); performant, minimal bloat; runs on most hardware Omarchy runs on. Engine for v1 = **voxtype only** (whatever models/settings it offers). MVP = "I can see my recordings, decide to transcribe them or not, and if transcribed, see the transcript next to it." Repo `~/projects/omarecorder`, private GitHub, MIT, id `io.github.coreytyhurst.omarecorder`.
+Constraints the user set: local-first; near-zero new dependencies (leverage what Omarchy ships); fully in the Omarchy ecosystem (theme-adaptive, movable in the bar, `omarchy plugin add/remove`, publishable to omarchyplugins.com); performant, minimal bloat; runs on most hardware Omarchy runs on. Engine for v1 = **voxtype only** (whatever models/settings it offers). MVP = "I can see my recordings, decide to transcribe them or not, and if transcribed, see the transcript next to it." Repo `~/projects/omarecorder`, private GitHub, MIT, id `io.github.huey-holdings-llc.omarecorder`.
 
 Decisions from the design discussion (2026-08-29):
 
@@ -103,12 +103,12 @@ Behaviours:
 ### Library.qml (kind `overlay`, fullscreen, on-demand)
 
 * Two panes. Left: search `TextField` (filters title/date), list of all recordings (newest first) with title/date/duration/status; keyboard nav. Right: header with editable title (`TextField` → `rename` on accept), meta line (date · duration · size · source · model used), action bar: **Transcribe** (`ModelPicker`: Fast/Balanced/Accurate + More, each with "≈ N min" estimate and "download 1.6 GB" when missing) · Play/Stop · Open folder · Open in editor · Copy transcript (`wl-copy`) · Delete (`ConfirmDialog`). Body: `TranscriptView` (Flickable, selectable read-only text) or empty state "Not transcribed yet — pick a model above". While a job runs: progress row (elapsed vs estimate) + Cancel.
-* Summon: `omarchy-shell shell summon io.github.coreytyhurst.omarecorder` (overlay entry) — wired to the popup button and `omarecorder library`.
+* Summon: `omarchy-shell shell summon io.github.huey-holdings-llc.omarecorder` (overlay entry) — wired to the popup button and `omarecorder library`.
 * v0.2 adds: `waveform.png` strip, `PanelSlider` seek + trim in/out with preview (pending the playback spike), import button.
 
 ### Integration & lifecycle
 
-* Install: `omarchy plugin add https://github.com/coreytyhurst/omarecorder --enable` (section chooser) · remove: `omarchy plugin remove io.github.coreytyhurst.omarecorder` (leaves `~/Recordings` untouched; README says so).
+* Install: `omarchy plugin add https://github.com/huey-holdings-llc/omarecorder --enable` (section chooser) · remove: `omarchy plugin remove io.github.huey-holdings-llc.omarecorder` (leaves `~/Recordings` untouched; README says so).
 * Dev loop: repo in `~/projects/omarecorder`; `scripts/dev-install.sh` = `rsync -a --delete --exclude .git` into `~/.config/omarchy/plugins/<id>/` + `omarchy-shell shell rescanPlugins` (symlinks are rejected by validate, so no symlink). `omarchy plugin validate .` in CI/tests.
 * CLI on PATH: README documents `ln -s ~/.config/omarchy/plugins/<id>/bin/omarecorder ~/.local/bin/` (or the panel's setup card offers to do it) so keybinds/menu work: Hyprland `o.bind("SUPER + ALT + R", "Record audio", "omarecorder record toggle")`; menu snippet for `~/.config/omarchy/extensions/omarchy-menu.jsonc` (`trigger.record`). Plugin never writes user config without consent.
 * Retire `dnd-record`: `omarecorder import ~/recording/*.wav` (or move), remove the `dnd-record` command module from `shell.json` and the script; update hp-laptop-config allowlist accordingly.

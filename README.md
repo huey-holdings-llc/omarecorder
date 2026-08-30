@@ -133,17 +133,17 @@ others switches off one feature when missing.
 ## Install
 
 ```bash
-omarchy plugin add https://github.com/coreytyhurst/omarecorder --enable
+omarchy plugin add https://github.com/huey-holdings-llc/omarecorder --enable
 ```
 
 Pick a bar section when asked, or later with
-`omarchy bar move io.github.coreytyhurst.omarecorder --section right`.
+`omarchy bar move io.github.huey-holdings-llc.omarecorder --section right`.
 
 Optional, and only needed for keybindings, the menu and scripts. The widget and
 the Library call the CLI by its own path and work without this:
 
 ```bash
-ln -s ~/.config/omarchy/plugins/io.github.coreytyhurst.omarecorder/bin/omarecorder ~/.local/bin/omarecorder
+ln -s ~/.config/omarchy/plugins/io.github.huey-holdings-llc.omarecorder/bin/omarecorder ~/.local/bin/omarecorder
 ```
 
 First run: open the popup. If a requirement is missing (no whisper model yet, a
@@ -153,13 +153,13 @@ the command that fixes it, and downloads the default model with one click.
 ## Update
 
 ```bash
-omarchy plugin update io.github.coreytyhurst.omarecorder
+omarchy plugin update io.github.huey-holdings-llc.omarecorder
 ```
 
 ## Remove
 
 ```bash
-omarchy plugin remove io.github.coreytyhurst.omarecorder
+omarchy plugin remove io.github.huey-holdings-llc.omarecorder
 rm -f ~/.local/bin/omarecorder   # if you made the symlink
 ```
 
@@ -338,7 +338,7 @@ o.bind("SUPER + ALT + R", "Record audio", "omarecorder record toggle")
 "trigger.record": { "icon": "󰑊", "label": "Record Audio", "aliases": ["record"],
   "action": "omarecorder record toggle" },
 "trigger.record.library": { "icon": "󰈔", "label": "Recording Library",
-  "action": "omarchy-shell shell toggle io.github.coreytyhurst.omarecorder" }
+  "action": "omarchy-shell shell toggle io.github.huey-holdings-llc.omarecorder" }
 ```
 
 The plugin never edits these files for you.
@@ -417,7 +417,7 @@ the same.
 ## Development
 
 ```bash
-git clone https://github.com/coreytyhurst/omarecorder ~/projects/omarecorder
+git clone https://github.com/huey-holdings-llc/omarecorder ~/projects/omarecorder
 cd ~/projects/omarecorder
 scripts/dev-install.sh --enable   # rsync into the plugin dir, validate, symlink the CLI, rescan plugins
 omarchy-restart-shell             # QML changes need this: rescan keeps Qt's component cache

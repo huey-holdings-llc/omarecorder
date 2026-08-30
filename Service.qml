@@ -14,7 +14,7 @@ import "ui/format.js" as Fmt
 QtObject {
   id: root
 
-  readonly property string pluginId: "io.github.coreytyhurst.omarecorder"
+  readonly property string pluginId: "io.github.huey-holdings-llc.omarecorder"
   // decodeURIComponent: a home directory with a space arrives as %20 otherwise.
   readonly property string pluginDir: decodeURIComponent(Qt.resolvedUrl(".").toString()).replace(/^file:\/\//, "").replace(/\/$/, "")
   readonly property string cli: pluginDir + "/bin/omarecorder"

@@ -9,7 +9,7 @@ set -euo pipefail
 umask 077   # recordings, transcripts, state: readable by this user only
 
 command -v jq >/dev/null 2>&1 || { echo "omarecorder: jq is required (pacman -S jq)" >&2; exit 1; }
-PLUGIN_ID="io.github.coreytyhurst.omarecorder"
+PLUGIN_ID="io.github.huey-holdings-llc.omarecorder"
 SELF="$(readlink -f "$0")"
 PLUGIN_DIR="$(dirname "$(dirname "$SELF")")"
 VERSION=$(jq -r '.version // "0"' "$PLUGIN_DIR/manifest.json" 2>/dev/null || echo 0)

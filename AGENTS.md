@@ -19,7 +19,7 @@ shell restarting, and nothing ever leaves the machine.
 | `bin/omarecorder` | The whole backend: a single bash CLI (`set -euo pipefail`, jq for JSON). Every UI action is a CLI command. |
 | `Service.qml` | Shell-side state: watches one small state file, exposes properties to the widgets. No polling loops. |
 | `Panel.qml`, `Library.qml`, `ui/*.qml` | Qt Quick UI on the omarchy-shell framework (`Panel`, `BarWidget`, `WidgetButton`). |
-| `manifest.json` | Plugin manifest (id `io.github.coreytyhurst.omarecorder`). |
+| `manifest.json` | Plugin manifest (id `io.github.huey-holdings-llc.omarecorder`). |
 | `tests/cli.test.sh` | CLI tests against a throwaway XDG tree. |
 | `scripts/dev-install.sh` | rsync into the plugin dir + rescan. |
 

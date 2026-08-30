@@ -11,8 +11,8 @@ import "ui"
 // All state comes from Service.qml (shared across monitors); this file is a view.
 Panel {
   id: root
-  moduleName: "io.github.coreytyhurst.omarecorder"
-  ipcTarget: "io.github.coreytyhurst.omarecorder"
+  moduleName: "io.github.huey-holdings-llc.omarecorder"
+  ipcTarget: "io.github.huey-holdings-llc.omarecorder"
   manageIpc: false
 
   readonly property var svc: bar && bar.shell && bar.shell.serviceFor ? bar.shell.serviceFor(moduleName) : null
