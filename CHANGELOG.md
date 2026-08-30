@@ -16,6 +16,10 @@ Third persona pass (an efficiency-minded enthusiast): say each fact once.
 - Settings no longer duplicate the popup's Source control.
 - Library: rename hint shown once; re-transcribe preselects the model that made
   the visible transcript; "▶ playing" in the meta line while playback runs.
+- Library action row: no "Model" label row; the picker is sized to its longest
+  option ("Accurate · large-v3-turbo · ≈ 52m", "Balanced · small.en · 466 MB
+  download"); "Re-transcribe"; list rows no longer repeat the model (the detail
+  meta line keeps it); list narrowed to 300 px so the detail pane breathes.
 - Model choice is just the three presets — Fast (base.en), Balanced (small.en),
   Accurate (large-v3-turbo); missing ones still show "download N MB".
 - Clipping detection skips the first 2 s (the ADC rails briefly when capture

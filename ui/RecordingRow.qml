@@ -34,7 +34,7 @@ CursorSurface {
   readonly property string subtitleText: live
     ? "Recording… " + elapsedText
     : working ? "Transcribing " + (jobElapsedText ? jobElapsedText + " · " : "") + job.model
-    : ((untitled ? "" : dateText) + (durationText ? (untitled ? "" : " · ") + durationText : "") + (clipped ? " · ⚠ clipped" : "") + (transcribed ? " · " + rec.transcript.model : ""))
+    : ((untitled ? "" : dateText) + (durationText ? (untitled ? "" : " · ") + durationText : "") + (clipped ? " · ⚠ clipped" : ""))
 
   width: parent ? parent.width : Style.space(300)
   height: Math.max(Style.space(40), col.implicitHeight + Style.spacing.rowPaddingX)
