@@ -87,6 +87,8 @@ write_json() {
 }
 # Seconds as given on the command line: non-negative, plain decimal, nothing else.
 valid_seconds() { [[ "$1" =~ ^[0-9]+([.][0-9]+)?$ ]]; }
+# strip_header <transcript.md>: the text without the first-line "<!-- omarecorder ... -->" comment
+strip_header() { sed '1{/^<!--/d}' "$1"; }
 
 # ---------------------------------------------------------------- config ----
 CONFIG_DEFAULTS=$(jq -cn --arg dir "${OMARECORDER_DIR:-$HOME/Recordings}" '{
@@ -205,12 +207,25 @@ rec_dir() {
   return 1
 }
 require_dir() { rec_dir "$1" || die "no recording with id $1"; }
+# require_idle <id>: refuse while that recording is being recorded or transcribed
+require_idle() {
+  reconcile_state
+  local st; st=$(read_state)
+  [[ $(jq -r '.recording.id // empty' <<<"$st") == "$1" ]] && die "$1 is still recording; stop it first"
+  [[ $(jq -r --arg id "$1" '.jobs[] | select(.type=="transcribe" and .id==$id)' <<<"$st") ]] && die "transcription running for $1; wait for it or cancel it first"
+  return 0
+}
 
 sanitize_title() { # strip slashes/control chars, collapse spaces, ≤80 chars
   local t="$1"; t="${t//\//-}"; t=$(printf '%s' "$t" | tr '\000-\037' ' ' | sed -E 's/[[:space:]]+/ /g; s/^ //; s/ $//'); printf '%s' "${t:0:80}"
 }
 
 read_meta() { jq -c . "$1/meta.json"; }
+# write_initial_meta <dir> <id> <title> <source> <created>: the meta.json every recording starts with
+write_initial_meta() {
+  write_json "$1/meta.json" "$(jq -cn --arg id "$2" --arg title "$3" --arg source "$4" --arg created "$5" --argjson rate "$RATE" \
+    '{id:$id, title:$title, source:$source, created:$created, duration_s:null, size_bytes:0, sample_rate:$rate, transcript:null, notes:""}')"
+}
 # update_meta <dir> <filter> [jq args...]: values go in through --arg/--argjson,
 # never interpolated into the program; a failing filter leaves meta.json as is.
 update_meta() {
@@ -229,12 +244,16 @@ rec_json() {
   [[ -f "$d/transcript.md" ]] && has_t=true
   [[ -f "$d/waveform.png" ]] && has_w=true
   [[ -f "$d/audio.orig.wav" ]] && has_o=true
-  # Text goes in via --rawfile: a long transcript blows past the argv size limit as --arg.
-  [[ "${2:-}" == "--with-text" && -f "$d/transcript.md" ]] && tfile="$d/transcript.md"
+  # Text goes in via --rawfile (a long transcript blows past the argv size limit as
+  # --arg), already stripped of its header line by strip_header.
+  if [[ "${2:-}" == "--with-text" && -f "$d/transcript.md" ]]; then
+    tfile="$RUN_DIR/rec_json.$$.txt"; strip_header "$d/transcript.md" > "$tfile"
+  fi
   jq -c --arg dir "$d" --argjson has_t "$has_t" --argjson has_w "$has_w" --argjson has_o "$has_o" --rawfile ttxt "$tfile" \
     '. + {dir:$dir, audio:($dir+"/audio.wav"), has_transcript:$has_t, transcript_path:(if $has_t then $dir+"/transcript.md" else null end),
           waveform:(if $has_w then $dir+"/waveform.png" else null end), has_orig:$has_o}
-       + (if $ttxt != "" then {transcript_text:($ttxt | sub("^<!--[^\n]*-->\n?"; ""))} else {} end)' "$d/meta.json"
+       + (if $ttxt != "" then {transcript_text:$ttxt} else {} end)' "$d/meta.json"
+  [[ "$tfile" == /dev/null ]] || rm -f "$tfile"
 }
 
 resolve_mic() {
@@ -322,8 +341,7 @@ record_start() {
     setsid "$SELF" _meter "$mtarget" "$(jq -r '.[0]' <<<"$pids")" >/dev/null 2>&1 < /dev/null &
     meter_pid=$!
   fi
-  write_json "$dir/meta.json" "$(jq -cn --arg id "$id" --arg title "$title" --arg source "$source" --arg created "$(now_iso)" --argjson rate "$RATE" \
-    '{id:$id, title:$title, source:$source, created:$created, duration_s:null, size_bytes:0, sample_rate:$rate, transcript:null, notes:""}')"
+  write_initial_meta "$dir" "$id" "$title" "$source" "$(now_iso)"
   state_set --arg id "$id" --arg source "$source" --argjson pids "$pids" --argjson files "$files" --arg dir "$dir" --argjson t "$(now_epoch)" --argjson mp "$meter_pid" \
     '.recording = {id:$id, source:$source, dir:$dir, started_at:$t, pids:$pids, files:$files, meter_pid:$mp}'
   log "record start $id source=$source dir=$dir"
@@ -480,19 +498,7 @@ cmd_status() {
   local out; out=$(jq -c --argjson now "$(now_epoch)" --arg mdir "$VOXTYPE_MODELS_DIR" '
     .recording |= (if . == null then null else . + {elapsed_s: ($now - .started_at)} end)
     | .jobs |= map(. + {elapsed_s: ($now - .started_at)})' <<<"$st")
-  # download progress: bytes present for model files
-  out=$(jq -c --arg mdir "$VOXTYPE_MODELS_DIR" '.jobs |= map(if .type=="download" then . + {file: ($mdir + "/ggml-" + .model + ".bin")} else . end)' <<<"$out")
-  local jobs='[]' j f b
-  while IFS= read -r j; do
-    [[ -z "$j" ]] && continue
-    if [[ $(jq -r '.type' <<<"$j") == "download" ]]; then
-      f=$(jq -r '.file' <<<"$j"); b=0; [[ -f "$f" ]] && b=$(file_size "$f")
-      [[ -f "$f.part" ]] && b=$(file_size "$f.part")
-      j=$(jq -c --argjson b "$b" '. + {bytes_done:$b}' <<<"$j")
-    fi
-    jobs=$(jq -c --argjson j "$j" '. + [$j]' <<<"$jobs")
-  done < <(jq -c '.jobs[]' <<<"$out")
-  out=$(jq -c --argjson jobs "$jobs" '.jobs=$jobs' <<<"$out")
+  # Download progress (bytes_done) is written into the job by _dl_worker itself.
   if [[ "${1:-}" == "--json" ]]; then jq . <<<"$out"; return 0; fi
   if [[ $(jq -r '.recording != null' <<<"$out") == "true" ]]; then
     echo "recording $(jq -r '.recording.id' <<<"$out") ($(fmt_hms "$(jq -r '.recording.elapsed_s' <<<"$out")"), $(jq -r '.recording.source' <<<"$out"))"
@@ -523,8 +529,7 @@ cmd_import() {
     ffmpeg -v error -y -i "$src" -ar "$RATE" -ac 1 -c:a pcm_s16le "$dir/audio.wav" || { rm -rf "$dir"; die "ffmpeg failed to convert $src"; }
     (( move )) && rm -f "$src"
   fi
-  write_json "$dir/meta.json" "$(jq -cn --arg id "$id" --arg title "$title" --arg created "$(date -r "$dir/audio.wav" +%FT%T%z)" --argjson rate "$RATE" \
-    '{id:$id, title:$title, source:"import", created:$created, duration_s:null, size_bytes:0, sample_rate:$rate, transcript:null, notes:""}')"
+  write_initial_meta "$dir" "$id" "$title" "import" "$(date -r "$dir/audio.wav" +%FT%T%z)"
   finalize_audio "$dir"; analyze_levels "$dir"; bump_state
   log "import $src -> $dir"
   echo "$id"
@@ -570,10 +575,7 @@ cmd_trim() {
     esac
   done
   local dir; dir=$(require_dir "$id")
-  reconcile_state
-  local st; st=$(read_state)
-  [[ $(jq -r '.recording.id // empty' <<<"$st") == "$id" ]] && die "$id is still recording; stop it first"
-  [[ $(jq -r --arg id "$id" '.jobs[] | select(.type=="transcribe" and .id==$id)' <<<"$st") ]] && die "transcription running for $id; wait for it or cancel it first"
+  require_idle "$id"
   if (( restore )); then
     [[ -f "$dir/audio.orig.wav" ]] || die "nothing to restore: $id has no audio.orig.wav"
     mv -f "$dir/audio.orig.wav" "$dir/audio.wav"
@@ -617,7 +619,7 @@ cmd_rename() {
   title=$(sanitize_title "$title")
   local new="$ROOT/$id"; [[ -n "$title" ]] && new="$ROOT/$id $title"
   if [[ "$new" != "$dir" ]]; then mv "$dir" "$new"; fi
-  write_json "$new/meta.json" "$(jq -c --arg t "$title" '.title = $t' "$new/meta.json")"
+  update_meta "$new" '.title = $t' --arg t "$title"
   bump_state; log "rename $id -> '$title'"; echo "$new"
 }
 
@@ -640,9 +642,9 @@ cmd_copy() {
   local id="${1:-}"; [[ -n "$id" ]] || die "usage: copy <id> [--print]"
   local dir; dir=$(require_dir "$id"); local f="$dir/transcript.md"
   [[ -f "$f" ]] || die "no transcript yet for $id"
-  if [[ "${2:-}" == "--print" ]]; then sed '1{/^<!--/d}' "$f"; return 0; fi
+  if [[ "${2:-}" == "--print" ]]; then strip_header "$f"; return 0; fi
   have wl-copy || die "wl-copy not found (pacman -S wl-clipboard)"
-  sed '1{/^<!--/d}' "$f" | wl-copy
+  strip_header "$f" | wl-copy
   echo "copied $id"
 }
 
@@ -745,7 +747,7 @@ cmd_export() {
     [[ $(jq -r '.transcript.stale // false' <<<"$meta") == "true" ]] && printf 'stale: true\n'
     printf 'tags: [omarecorder]\n'
     printf -- '---\n\n'
-    sed '1{/^<!--/d}' "$f"
+    strip_header "$f"
   } > "$tmp" && mv -f "$tmp" "$path" || { rm -f "$tmp"; die "could not write $path"; }
   update_meta "$dir" '.exported_to = $p | .exported_at = $t' --arg p "$path" --arg t "$(now_iso)"
   bump_state
@@ -864,11 +866,9 @@ cmd_transcribe() {
   local dir; dir=$(require_dir "$id")
   [[ -f "$dir/audio.wav" ]] || die "no audio.wav in $dir"
   have voxtype || die "voxtype not installed"
-  reconcile_state
-  [[ $(jq -r '.recording.id // empty' <<<"$(read_state)") == "$id" ]] && die "$id is still recording; stop it first"
+  require_idle "$id"
   [[ $(jq -r '.duration_s // 0' "$dir/meta.json") == "0" ]] && die "$id has no audio yet"
   if ! model_installed "$model"; then echo "omarecorder: model '$model' is not downloaded (run: omarecorder model download $model)" >&2; exit 3; fi
-  [[ $(jq -r --arg id "$id" '.jobs[] | select(.type=="transcribe" and .id==$id)' <<<"$(read_state)") ]] && die "transcription already running for $id"
   local unit="omarecorder-tx-$id"
   state_set --arg id "$id" --arg m "$model" --arg u "$unit" --argjson t "$(now_epoch)" \
     '.jobs += [{type:"transcribe", id:$id, model:$m, unit:$u, started_at:$t}]'
