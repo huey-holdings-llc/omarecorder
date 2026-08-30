@@ -19,6 +19,7 @@ jobs:
           OMARECORDER_TEST_ALLOW_SKIP: "1"
           XDG_RUNTIME_DIR: /tmp/xdg-runtime-ci
           OMARECORDER_TEST_TMP: /root/omarecorder-tests
+          HOME: /root
         run: |
           mkdir -m 700 -p "$XDG_RUNTIME_DIR"
           git config --global --add safe.directory "$PWD"

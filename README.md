@@ -270,7 +270,9 @@ bash tests/lint.sh                # shellcheck, manifest schema, QML hygiene, RE
 The tests use the real microphone, ffmpeg and voxtype with `base.en`; a
 missing engine, model or mic is a failure unless `OMARECORDER_TEST_ALLOW_SKIP=1`
 (CI runs `tests/lint.sh` and the CLI tests that way in an Arch container).
-`OMARECORDER_SYNC=1` runs jobs inline instead of under `systemd-run`. There is
+`OMARECORDER_SYNC=1` runs jobs inline instead of under `systemd-run`;
+`OMARECORDER_RUN_DIR` (tests only) moves the runtime state out of
+`$XDG_RUNTIME_DIR` so the real user manager stays reachable. There is
 no QML test harness — review QML by reading it and restarting the shell; the
 screenshots in `docs/screenshots/` are the reference for how it should look.
 
