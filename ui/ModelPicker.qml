@@ -2,8 +2,8 @@ import QtQuick
 import qs.Commons
 import qs.Ui
 
-// Accuracy-vs-speed chooser. Presets (Fast/Balanced/Accurate) first, then
-// the rest of voxtype's whisper models under "More". Shows size + estimate.
+// Accuracy-vs-speed chooser: Fast / Balanced / Accurate, each with its
+// size (when not downloaded) or the time estimate for the selected take.
 Item {
   id: root
   property var svc: null

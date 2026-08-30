@@ -27,20 +27,14 @@ VOXTYPE_MODELS_DIR="${VOXTYPE_MODELS_DIR:-$HOME/.local/share/voxtype/models}"
 
 RATE=16000
 
-# Whisper model catalog voxtype can download. size_mb from ggml file sizes;
-# rtf = default realtime factor (audio seconds per wall second), replaced by
+# The three presets Omarecorder offers (voxtype can download more, but three
+# clear choices beat a list of eight). size_mb from ggml file sizes; rtf =
+# default realtime factor (audio seconds per wall second), replaced by
 # measured values in bench.json after the first run on this machine.
 MODEL_CATALOG='[
-  {"name":"tiny.en","size_mb":75,"rtf":20,"label":""},
-  {"name":"tiny","size_mb":75,"rtf":20,"label":""},
   {"name":"base.en","size_mb":142,"rtf":10,"label":"Fast"},
-  {"name":"base","size_mb":142,"rtf":10,"label":""},
   {"name":"small.en","size_mb":466,"rtf":4,"label":"Balanced"},
-  {"name":"small","size_mb":466,"rtf":4,"label":""},
-  {"name":"medium.en","size_mb":1500,"rtf":1.5,"label":""},
-  {"name":"medium","size_mb":1500,"rtf":1.5,"label":""},
-  {"name":"large-v3-turbo","size_mb":1600,"rtf":3,"label":"Accurate"},
-  {"name":"large-v3","size_mb":3100,"rtf":1,"label":""}
+  {"name":"large-v3-turbo","size_mb":1600,"rtf":3,"label":"Accurate"}
 ]'
 
 # -------------------------------------------------------------- helpers -----

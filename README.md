@@ -79,9 +79,10 @@ Runtime state: `$XDG_RUNTIME_DIR/omarecorder/state.json`. Speed measurements: `~
 
 ### Models
 
-Presets map to voxtype's whisper models: **Fast** = `base.en`, **Balanced** =
-`small.en`, **Accurate** = `large-v3-turbo`; the rest are under "More". Missing
-models download in the background with a progress bar (`voxtype setup --download`).
+Three presets, mapped to voxtype's whisper models: **Fast** = `base.en`,
+**Balanced** = `small.en`, **Accurate** = `large-v3-turbo`. A preset you don't
+have yet shows "download N MB" and fetches in the background with a progress
+bar (`voxtype setup --download`).
 The first transcription with each model calibrates the estimate for your machine.
 
 ### CLI
