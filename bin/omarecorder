@@ -328,14 +328,21 @@ repair_audio() {
 # stop and import — it is the only way the user finds out before transcribing.
 analyze_levels() {
   local dir="$1"; local f="$dir/audio.wav"; [[ -f "$f" ]] || return 0
-  local stats; stats=$(ffmpeg -nostats -i "$f" -af "astats=measure_perchannel=none:measure_overall=Peak_level+RMS_level+Flat_factor" -f null - 2>&1 | grep -E 'Peak level dB|RMS level dB|Flat factor' | tail -3)
-  local peak rms flat
-  peak=$(sed -n 's/.*Peak level dB: *//p' <<<"$stats" | head -1); rms=$(sed -n 's/.*RMS level dB: *//p' <<<"$stats" | head -1); flat=$(sed -n 's/.*Flat factor: *//p' <<<"$stats" | head -1)
-  [[ "$peak" =~ ^-?[0-9.]+$ && "$flat" =~ ^-?[0-9.]+$ ]] || return 0
+  # The ADC rails for the first ~0.7 s after capture starts (settling
+  # transient); skip the head so a clean take is not reported as clipped.
+  local skip=0 d; d=$(audio_duration "$f"); [[ "${d:-0}" =~ ^[0-9]+$ ]] && (( d > 6 )) && skip=2
+  local stats; stats=$(ffmpeg -nostats -ss "$skip" -i "$f" -af "astats=measure_perchannel=none:measure_overall=Peak_level+RMS_level+Flat_factor+Peak_count+Number_of_samples" -f null - 2>&1 | grep -E 'Peak level dB|RMS level dB|Flat factor|Peak count|Number of samples' | tail -5)
+  local peak rms flat pc ns
+  peak=$(sed -n 's/.*Peak level dB: *//p' <<<"$stats" | head -1); rms=$(sed -n 's/.*RMS level dB: *//p' <<<"$stats" | head -1)
+  flat=$(sed -n 's/.*Flat factor: *//p' <<<"$stats" | head -1); pc=$(sed -n 's/.*Peak count: *//p' <<<"$stats" | head -1); ns=$(sed -n 's/.*Number of samples: *//p' <<<"$stats" | head -1)
+  [[ "$peak" =~ ^-?[0-9.]+$ && "$flat" =~ ^-?[0-9.]+$ && "$pc" =~ ^[0-9.]+$ && "$ns" =~ ^[0-9.]+$ ]] || return 0
   [[ "$rms" =~ ^-?[0-9.]+$ ]] || rms="-99"
-  local clipped=false; awk -v p="$peak" -v fl="$flat" 'BEGIN{exit !(p > -0.5 && fl > 2)}' && clipped=true
-  update_meta "$dir" ".levels = {peak_db: $peak, rms_db: $rms, flat: $flat, clipped: $clipped}"
-  [[ $clipped == true ]] && log "levels: CLIPPED $dir peak=$peak rms=$rms flat=$flat"
+  # clipped_pct = share of samples sitting on the rail. A stray transient is
+  # a handful of samples; a hot mic parks thousands per second there.
+  local pct; pct=$(awk -v c="$pc" -v n="$ns" 'BEGIN{ if (n < 1) n = 1; printf "%.3f", 100 * c / n }')
+  local clipped=false; awk -v p="$peak" -v fl="$flat" -v x="$pct" 'BEGIN{exit !(p > -0.5 && (x > 0.05 || fl > 2))}' && clipped=true
+  update_meta "$dir" ".levels = {peak_db: $peak, rms_db: $rms, flat: $flat, clipped_pct: $pct, clipped: $clipped}"
+  [[ $clipped == true ]] && log "levels: CLIPPED $dir peak=$peak rms=$rms flat=$flat clipped_pct=$pct"
   return 0
 }
 

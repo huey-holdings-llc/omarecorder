@@ -58,9 +58,10 @@ no microphone), a **Setup** card tells you and offers the one-click fix.
 * **Clipping check** — every recording is measured after stop; if the mic was
   driven into the rails you get "⚠ clipped" in the lists and a warning in the
   notification. Fix it at the source: lower the input level (Audio popup →
-  Input, or `wpctl set-volume @DEFAULT_AUDIO_SOURCE@ 60%`) and re-check with a
-  short test take — whisper copes with quiet audio far better than with
-  distorted audio.
+  Input, or `wpctl set-volume @DEFAULT_AUDIO_SOURCE@ 0.30`) and re-check with a
+  short test take (`omarecorder analyze <id>` should print `clipped: false`).
+  Laptop mics are commonly shipped far too hot — 30–40 % is a normal starting
+  point, and whisper copes with quiet audio far better than with distorted audio.
 
 ### Where things live
 
