@@ -88,8 +88,9 @@ most needs someone who knows more than its author:
   interfaces. The speed estimates and the clipping detector were tuned on one
   laptop.
 * **The Quickshell file dialog crash.** A QtQuick `FileDialog` crashes
-  Quickshell on Omarchy 4 (crash folders are noted in the README's roadmap
-  item). Anyone who can diagnose it upstream unblocks a graphical picker.
+  Quickshell 0.3.1 on Omarchy 4, both inside the shell and in a separate `qs`
+  process. Anyone who can diagnose it upstream unblocks a graphical picker;
+  open an issue and the crash reports can be attached.
 * **Per-track transcripts for "both" takes.** The raw tracks are already kept;
   transcribing them separately and interleaving the result is the missing piece.
 * **Transcript quality.** Better seam choices for long takes, or a cheaper way
