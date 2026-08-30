@@ -101,7 +101,7 @@ Item {
     Qt.callLater(function() { keyCatcher.forceActiveFocus() })
   }
   function cancelDelete() { deleteConfirmOpen = false; Qt.callLater(function() { keyCatcher.forceActiveFocus() }) }
-  function stripHeader(t) { return String(t || "").replace(/^<!--[^\n]*-->\n?/, "") }
+  function stripHeader(t) { return String(t || "").replace(/^<!--[^\n]*-->\n?/, "").trim() }
 
   onRowsChanged: ensureSelection()
   onSelectedChanged: if (!selected || !selected.transcript_path) transcriptText = ""

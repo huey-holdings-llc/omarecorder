@@ -121,7 +121,8 @@ state_set() { save_state "$(jq -c "$@" <<<"$(read_state)")"; }
 
 pid_alive() { kill -0 "$1" 2>/dev/null; }
 
-unit_active() { systemctl --user is-active --quiet "$1" 2>/dev/null; }
+# oneshot units report "activating" while they run — treat that as alive.
+unit_active() { [[ "$(systemctl --user show -p ActiveState --value "$1" 2>/dev/null)" =~ ^(active|activating|reloading|deactivating)$ ]]; }
 
 # Drop dead recordings/jobs from state (called by status & before mutations).
 reconcile_state() {
@@ -434,7 +435,7 @@ cmd_model() {
 run_detached() {
   local unit="$1" desc="$2"; shift 2
   if [[ "${OMARECORDER_SYNC:-0}" == "1" ]] || ! have systemd-run; then "$@"; return $?; fi
-  systemd-run --user --quiet --collect --service-type=oneshot -u "$unit" --description="$desc" \
+  systemd-run --user --quiet --no-block --collect --service-type=oneshot -u "$unit" --description="$desc" \
     --setenv=OMARECORDER_DIR="${OMARECORDER_DIR:-}" --setenv=XDG_CONFIG_HOME="$XDG_CONFIG_HOME" \
     --setenv=XDG_STATE_HOME="$XDG_STATE_HOME" --setenv=VOXTYPE_MODELS_DIR="$VOXTYPE_MODELS_DIR" \
     --setenv=OMARECORDER_QUIET="${OMARECORDER_QUIET:-0}" --setenv=PATH="$PATH" "$@"
@@ -508,6 +509,7 @@ _tx_worker() {
     notify "Transcription failed" "$id — see $LOG_FILE"; log "transcribe FAILED $id"; return 1
   fi
   local elapsed=$(( $(now_epoch) - start )); (( elapsed < 1 )) && elapsed=1
+  grep -q '[^[:space:]]' "$dir/transcript.md.tmp" || printf '(no speech detected)\n' > "$dir/transcript.md.tmp"
   { printf '<!-- omarecorder model=%s language=%s created=%s range=%s-%s -->\n' "$model" "$lang" "$(now_iso)" "${from:-0}" "${to:-end}"
     cat "$dir/transcript.md.tmp"; } > "$dir/transcript.md"
   rm -f "$dir/transcript.md.tmp"
