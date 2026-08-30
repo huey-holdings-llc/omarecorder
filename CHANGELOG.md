@@ -5,7 +5,7 @@ All notable changes to this project are documented here. Format follows
 
 ## [1.0.0] - 2026-08-30
 
-First public release — on the Omarchy plugin marketplace. Everything below was
+First public release, on the Omarchy plugin marketplace. Everything below was
 built on top of 0.1.1 in one sprint: the v0.2 roadmap, one v0.3 item (Obsidian),
 a security pass, and a documentation rewrite in which every claim was checked
 against the code.
@@ -32,7 +32,7 @@ against the code.
   original kept as `audio.orig.wav`, transcript flagged stale until re-transcribed.
 - **Send to Obsidian.** `omarecorder export <id>` writes a note (YAML frontmatter
   + transcript) into the folder where Obsidian itself files new notes (read from
-  the vault's `.obsidian/app.json` — never overridden), then opens it via
+  the vault's `.obsidian/app.json`, never overridden), then opens it via
   `obsidian://`. `omarecorder vaults` lists vaults; Settings gets a vault picker;
   config `obsidianVault` / `exportDir`; without Obsidian the note lands next to
   the recording.
@@ -97,7 +97,7 @@ against the code.
   shell string is built from data anywhere.
 - **No `/tmp` fallback** for runtime state: `$XDG_RUNTIME_DIR` (or
   `/run/user/UID`) only, `0700`; the CLI refuses to run without one.
-- **Private files**: `umask 077` — recordings, transcripts, notes, config, state.
+- **Private files**: `umask 077` for recordings, transcripts, notes, config and state.
 - `--from`/`--to` (transcribe, play, trim) validated as non-negative numbers and
   passed as arguments, never word-split into ffmpeg/mpv.
 - User strings render as plain text in every QML `Text` (titles, meta line,
@@ -108,12 +108,12 @@ against the code.
 - The graphical file picker that was planned for popup import: a QtQuick
   `FileDialog` crashes Quickshell on Omarchy 4 (in-shell and in its own
   process). Back once that is fixed upstream.
-- From the roadmap: `whisper-cpp` and `sherpa-onnx` engines — new packages.
+- From the roadmap: `whisper-cpp` and `sherpa-onnx` engines: they would be new packages.
 
 ## [0.1.1] - 2026-08-30
 
 First polish round, driven by two persona walkthroughs (a first-time user and
-a professional audio recordist — the first-time user's notes weighed more).
+a professional audio recordist; the first-time user's notes weighed more).
 
 ### Added
 - Clipping detection: every stop/import measures peak/RMS/flatness with
@@ -128,7 +128,7 @@ a professional audio recordist — the first-time user's notes weighed more).
 - The in-progress take shows live in Recent and the Library ("Recording… 00:04:25");
   it cannot be transcribed or deleted until it is stopped.
 - Library: search box in the header, recording count, key hints in a footer,
-  "Renaming — Enter saves, Esc cancels" cue, Space types into a non-empty search.
+  "Renaming: Enter saves, Esc cancels" cue, Space types into a non-empty search.
 
 ### Changed
 - Bar: the slot grows with the timer instead of overflowing into neighbours;
@@ -149,7 +149,7 @@ a professional audio recordist — the first-time user's notes weighed more).
 - Recent rows showed "0s" right after stopping (state bumped after finalize).
 - Cancelling a transcription no longer trips the systemd "failed unit" toast.
 
-## [0.1.0] — 2026-08-29
+## [0.1.0] - 2026-08-29
 
 ### Added
 

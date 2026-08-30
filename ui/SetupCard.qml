@@ -69,14 +69,14 @@ Column {
   function issues() {
     var s = root.setup, out = []
     if (!s || s.ok !== false) return out
-    if (!s.voxtype) out.push("voxtype is not installed — run: omarchy install dictation")
+    if (!s.voxtype) out.push("voxtype is not installed. Run: omarchy install dictation")
     // Every tool the CLI could not find, with the package that provides it.
     var miss = s.missing || []
     for (var i = 0; i < miss.length; i++) {
       if (miss[i].tool === "voxtype") continue   // covered above with the Omarchy command
-      out.push(miss[i].tool + " is missing — pacman -S " + miss[i].package + (miss[i].required ? "" : " (only needed for " + miss[i]["for"] + ")"))
+      out.push(miss[i].tool + " is missing. Install it with: pacman -S " + miss[i].package + (miss[i].required ? "" : " (only needed for " + miss[i]["for"] + ")"))
     }
-    if (!s.mic_ok) out.push("No microphone found — plug one in or pick 'system' as the source")
+    if (!s.mic_ok) out.push("No microphone found. Plug one in or pick 'system' as the source")
     if (!s.recordingsDir_ok) out.push("Cannot write to " + s.recordingsDir)
     if (s.voxtype && s.defaultModel_ok === false) out.push("Model " + s.defaultModel + " is not downloaded yet")
     return out

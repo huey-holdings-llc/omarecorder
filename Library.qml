@@ -408,7 +408,7 @@ Item {
               Text {
                 visible: titleField.activeFocus
                 width: parent.width
-                text: "Renaming — Enter saves, Esc cancels"
+                text: "Renaming: Enter saves, Esc cancels"
                 color: Color.accent
                 font.family: root.fontFamily
                 font.pixelSize: Style.font.caption
@@ -598,8 +598,8 @@ Item {
                 visible: !root.selectedJob && root.svc && root.selected && (root.svc.isPartial(root.selected) || root.svc.isStale(root.selected))
                 width: parent.width
                 text: root.svc && root.selected && root.svc.isPartial(root.selected)
-                  ? "Partial — stopped after " + root.selected.transcript.chunks_done + "/" + root.selected.transcript.chunks + " pieces. Re-transcribe to finish."
-                  : "The audio was trimmed after this transcript was made — re-transcribe to match."
+                  ? "Partial: stopped after " + root.selected.transcript.chunks_done + "/" + root.selected.transcript.chunks + " pieces. Re-transcribe to finish."
+                  : "The audio was trimmed after this transcript was made. Re-transcribe to match."
                 color: Color.accent
                 wrapMode: Text.Wrap
                 font.family: root.fontFamily
@@ -662,8 +662,8 @@ Item {
                 // The progress line above already says "Transcribing…"; say nothing twice.
                 visible: root.transcriptText.length === 0 && !root.selectedJob
                 width: parent.width
-                text: root.selectedLive ? "Recording in progress — stop it from the bar icon, then transcribe."
-                  : "Not transcribed yet — pick a model above and press Transcribe (or Enter)."
+                text: root.selectedLive ? "Recording in progress. Stop it from the bar icon, then transcribe."
+                  : "Not transcribed yet. Pick a model above and press Transcribe (or Enter)."
                 color: root.dim
                 wrapMode: Text.Wrap
                 font.family: root.fontFamily
