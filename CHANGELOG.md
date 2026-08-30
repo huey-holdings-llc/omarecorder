@@ -5,6 +5,12 @@ All notable changes to this project are documented here. Format follows
 
 ## [Unreleased]
 
+### Changed
+- Clipping detection skips the first 2 s (the ADC rails briefly when capture
+  starts) and decides on the share of samples at the rail (`levels.clipped_pct`,
+  > 0.05 %) rather than flatness alone. README now recommends 30–40 % input for
+  laptop mics (measured on an ALC285: 55 % still clipped, 30 % peaks at −1 dB).
+
 ## [0.1.1] - 2026-08-30
 
 First polish round, driven by two persona walkthroughs (a first-time user and
