@@ -350,11 +350,11 @@ Item {
                 model: root.rows
                 spacing: Style.spacing.xxs
                 boundsBehavior: Flickable.StopAtBounds
-                ScrollBar.vertical: ScrollBar { policy: ScrollBar.AsNeeded }
+                ScrollBar.vertical: ThinScrollBar { id: listBar; foreground: root.foreground }
                 delegate: RecordingRow {
                   required property var modelData
                   required property int index
-                  width: list.width - Style.spacing.sm
+                  width: list.width - listBar.width - Style.spacing.xs
                   rec: modelData
                   svc: root.svc
                   showActions: false
