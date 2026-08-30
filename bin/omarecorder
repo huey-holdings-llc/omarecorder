@@ -36,6 +36,10 @@ LEVEL_FILE="$RUN_DIR/level"      # live input level while recording (see _meter)
 VOXTYPE_MODELS_DIR="${VOXTYPE_MODELS_DIR:-$HOME/.local/share/voxtype/models}"
 
 RATE=16000
+# Long takes are transcribed in pieces of at most this many seconds (whisper
+# drifts into repetition loops on very long inputs; the transcript also fills
+# in piece by piece). Equal pieces, seams snapped to silence — see plan_chunks.
+CHUNK_S="${OMARECORDER_CHUNK_S:-1800}"
 
 # The three presets Omarecorder offers (voxtype can download more, but three
 # clear choices beat a list of eight). size_mb from ggml file sizes; rtf =
@@ -156,7 +160,7 @@ _reconcile_state() {
     for p in $(jq -r '.recording.pids[] | select(type=="number")' <<<"$st"); do pid_alive "$p" && alive=1; done
     if [[ $alive == 0 ]]; then
       local ddir mpid; ddir=$(jq -r '.recording.dir // empty' <<<"$st"); mpid=$(jq -r '.recording.meter_pid // empty' <<<"$st")
-      [[ "$mpid" =~ ^[0-9]+$ ]] && kill -TERM "$mpid" 2>/dev/null; rm -f "$LEVEL_FILE"
+      stop_meter "$mpid"
       st=$(jq -c '.recording=null' <<<"$st"); changed=1; log "reconcile: cleared dead recording"
       if [[ -n "$ddir" && -d "$ddir" ]]; then
         # A "both" take that died before the mix has only mic.wav + system.wav.
@@ -295,10 +299,20 @@ record_start() {
       tail --pid="$first" -f /dev/null >/dev/null 2>&1 < /dev/null &
   fi
 
+  # Live input meter: an independent ffmpeg reader on the same source writes
+  # $LEVEL_FILE a few times a second; the shell watches that file. It lives and
+  # dies with the first recorder (watchdog in _meter_loop) and never affects the take.
+  local meter_pid=null
+  if have ffmpeg; then
+    local mtarget="${mic:-}"; [[ "$source" == "system" ]] && mtarget="$sys"
+    write_json "$LEVEL_FILE" '{"peak_db":-99,"clip":false,"t":0}'
+    setsid "$SELF" _meter "$mtarget" "$(jq -r '.[0]' <<<"$pids")" >/dev/null 2>&1 < /dev/null &
+    meter_pid=$!
+  fi
   write_json "$dir/meta.json" "$(jq -cn --arg id "$id" --arg title "$title" --arg source "$source" --arg created "$(now_iso)" --argjson rate "$RATE" \
     '{id:$id, title:$title, source:$source, created:$created, duration_s:null, size_bytes:0, sample_rate:$rate, transcript:null, notes:""}')"
-  state_set --arg id "$id" --arg source "$source" --argjson pids "$pids" --argjson files "$files" --arg dir "$dir" --argjson t "$(now_epoch)" \
-    '.recording = {id:$id, source:$source, dir:$dir, started_at:$t, pids:$pids, files:$files}'
+  state_set --arg id "$id" --arg source "$source" --argjson pids "$pids" --argjson files "$files" --arg dir "$dir" --argjson t "$(now_epoch)" --argjson mp "$meter_pid" \
+    '.recording = {id:$id, source:$source, dir:$dir, started_at:$t, pids:$pids, files:$files, meter_pid:$mp}'
   log "record start $id source=$source dir=$dir"
   local src_label; case "$source" in mic) src_label="microphone" ;; system) src_label="system audio" ;; both) src_label="microphone + system audio" ;; esac
   notify "Recording started" "${title:-$id} — $src_label. Click the bar icon or press the toggle to stop."
@@ -319,6 +333,7 @@ record_stop() {
     [[ $any == 0 ]] && break; sleep 0.2; i=$((i+1))
   done
   for p in $(jq -r '.recording.pids[]' <<<"$st"); do pid_alive "$p" && kill -TERM "$p" 2>/dev/null || true; done
+  stop_meter "$(jq -r '.recording.meter_pid // empty' <<<"$st")"
   state_set '.recording = null'
   [[ -d "$dir" ]] || die "recording folder vanished: $dir"
 
@@ -389,6 +404,45 @@ analyze_levels() {
   update_meta "$dir" '.levels = {peak_db: $p, rms_db: $r, flat: $f, clipped_pct: $x, clipped: $c}' \
     --argjson p "$peak" --argjson r "$rms" --argjson f "$flat" --argjson x "$pct" --argjson c "$clipped"
   [[ $clipped == true ]] && log "levels: CLIPPED $dir peak=$peak rms=$rms flat=$flat clipped_pct=$pct"
+  return 0
+}
+
+# ------------------------------------------------------- level meter ------
+stop_meter() { [[ "${1:-}" =~ ^[0-9]+$ ]] && kill -TERM "$1" 2>/dev/null; rm -f "$LEVEL_FILE"; return 0; }
+
+# _meter <pulse-source> <recorder-pid>: ffmpeg measures 250 ms frames of the
+# input; _meter_loop turns them into $LEVEL_FILE. Detached from the shell.
+_meter() {
+  local target="$1" recpid="${2:-}"
+  trap 'pkill -TERM -P $$ 2>/dev/null; rm -f "$LEVEL_FILE"; exit 0' TERM INT
+  ffmpeg -nostdin -nostats -v error -f pulse -i "$target" \
+    -af "aformat=sample_rates=$RATE:channel_layouts=mono,asetnsamples=n=$((RATE / 4)),astats=metadata=1:reset=1:measure_perchannel=none:measure_overall=Peak_level+Peak_count,ametadata=print:file=-:direct=1" \
+    -f null - 2>/dev/null | _meter_loop "$LEVEL_FILE" "$recpid" &
+  wait
+  rm -f "$LEVEL_FILE"
+}
+# _meter_loop <file> <recorder-pid> [--keep]: stdin = ametadata lines.
+# Skips the first second (the ADC rails while capture settles), writes
+# {"peak_db","clip","t"} atomically per frame, holds "clip" for 1.5 s so a
+# brief overload is visible, stops when the recorder is gone.
+_meter_loop() {
+  local file="$1" recpid="${2:-}" keep="${3:-}" t=0 peak="" count="" hold=0 clip line
+  while IFS= read -r line; do
+    case "$line" in
+      frame:*) t="${line##*pts_time:}"; t="${t%% *}" ;;
+      lavfi.astats.Overall.Peak_level=*) peak="${line#*=}" ;;
+      lavfi.astats.Overall.Peak_count=*)
+        count="${line#*=}"
+        awk -v t="$t" 'BEGIN{exit !(t >= 1.0)}' || continue
+        [[ "$peak" =~ ^-?[0-9]+([.][0-9]+)?$ ]] || peak="-99"
+        count="${count%%.*}"; [[ "$count" =~ ^[0-9]+$ ]] || count=0   # ffmpeg prints it as a float
+        awk -v p="$peak" -v c="$count" 'BEGIN{exit !(p > -0.5 && c >= 2)}' && hold=6
+        clip=false; if (( hold > 0 )); then clip=true; hold=$((hold - 1)); fi
+        printf '{"peak_db":%s,"clip":%s,"t":%s}\n' "$peak" "$clip" "$(date +%s)" > "$file.tmp" && mv -f "$file.tmp" "$file"
+        [[ -n "$recpid" ]] && ! pid_alive "$recpid" && break ;;
+    esac
+  done
+  [[ "$keep" == "--keep" ]] || rm -f "$file"
   return 0
 }
 
@@ -568,8 +622,16 @@ run_detached() {
 }
 
 _dl_worker() {
-  local name="$1"
-  if voxtype setup --download --model "$name" --quiet --no-post-install >>"$LOG_FILE" 2>&1 && model_installed "$name"; then
+  local name="$1" b; local f="$VOXTYPE_MODELS_DIR/ggml-$name.bin"
+  voxtype setup --download --model "$name" --quiet --no-post-install >>"$LOG_FILE" 2>&1 &
+  local child=$!
+  # Progress = bytes on disk, published into the job entry every 2 s (the UI
+  # only watches state.json; nothing polls the model directory).
+  while pid_alive "$child"; do
+    sleep 2; b=0; [[ -f "$f" ]] && b=$(file_size "$f"); [[ -f "$f.part" ]] && b=$(file_size "$f.part")
+    state_set --arg m "$name" --argjson b "$b" '.jobs |= map(if .type=="download" and .model==$m then .bytes_done=$b else . end)'
+  done
+  if wait "$child" && model_installed "$name"; then
     notify "Model ready · $(model_label "$name")" "You can pick it in the Library now"; log "download ok $name"
   else
     notify "Model download failed · $name" "Check your connection and try again (details: $LOG_FILE)"; log "download FAILED $name"
@@ -619,55 +681,124 @@ cmd_transcribe() {
   echo "transcribing $id with $model"
 }
 
+# seam_near <wav> <t>: a silence midpoint within ±15 s of t (nearest wins), else t.
+# One 30 s decode per seam; no text heuristics, no overlap between pieces.
+seam_near() {
+  local wav="$1" t="$2" ss
+  ss=$(awk -v t="$t" 'BEGIN{s=t-15; if (s<0) s=0; print s}')
+  ffmpeg -nostats -v info -ss "$ss" -t 30 -i "$wav" -af "silencedetect=n=-35dB:d=0.4" -f null - 2>&1 \
+    | awk -v off="$ss" -v t="$t" '
+        /silence_start:/ { for (i=1;i<=NF;i++) if ($i=="silence_start:") st=$(i+1)+off }
+        /silence_end:/   { for (i=1;i<=NF;i++) if ($i=="silence_end:") { en=$(i+1)+off; m=(st+en)/2; d=m-t; if (d<0) d=-d; if (best=="" || d<bd) { best=m; bd=d } } }
+        END { if (best=="") print t; else printf "%.2f\n", best }'
+}
+# plan_chunks <wav> <dur_s> → lines "start end" (seconds). One piece when the
+# take fits in CHUNK_S; otherwise ceil(dur/CHUNK_S) equal pieces (never a tiny tail).
+plan_chunks() {
+  local wav="$1" dur="$2"
+  if (( dur <= CHUNK_S )); then echo "0 $dur"; return 0; fi
+  local n len i start=0 end
+  n=$(( (dur + CHUNK_S - 1) / CHUNK_S )); len=$(( (dur + n - 1) / n ))
+  for (( i = 1; i <= n; i++ )); do
+    if (( i == n )); then end=$dur
+    else
+      end=$(seam_near "$wav" "$(awk -v s="$start" -v l="$len" 'BEGIN{print s+l}')")
+      # never a non-advancing or overlong piece
+      awk -v s="$start" -v e="$end" -v d="$dur" 'BEGIN{exit !(e > s + 1 && e < d)}' || end=$(awk -v s="$start" -v l="$len" 'BEGIN{print s+l}')
+    fi
+    echo "$start $end"; start=$end
+  done
+}
+# learn_rtf <model> <audio_s> <wall_s>: remember this machine's speed (≥ 60 s of audio only)
+learn_rtf() {
+  local model="$1" audio="$2" wall="$3"
+  awk -v a="$audio" 'BEGIN{exit !(a >= 60)}' || return 0
+  local rtf; rtf=$(jq -n --argjson d "$audio" --argjson e "$wall" '(($d / $e) * 100 | round) / 100')
+  mkdir -p "$STATE_DIR"; local bench='{}'; [[ -f "$BENCH_FILE" ]] && bench=$(jq -c . "$BENCH_FILE")
+  write_json "$BENCH_FILE" "$(jq -c --arg m "$model" --argjson r "$rtf" --arg t "$(now_iso)" '.[$m] = {rtf:$r, measured:$t}' <<<"$bench")"
+}
+
 _tx_worker() {
   local id="$1" model="$2" lang="$3" threads="$4" from="$5" to="$6"
   local dir; dir=$(require_dir "$id")
   local ttl; ttl=$(jq -r '.title // empty' "$dir/meta.json"); ttl="${ttl:-$id}"
-  # `omarecorder cancel` stops the unit with SIGTERM: stop our own child (never
-  # the process group — inline runs share it with the caller), leave no partial
-  # files behind and exit 0 so systemd does not report a failed unit.
-  local child=""
-  trap '[[ -n "$child" ]] && kill -TERM "$child" 2>/dev/null; rm -f "$dir/transcript.md.tmp" "$RUN_DIR/tx-$id".*; exit 0' TERM
-  local input="$dir/audio.wav" tmpwav="" dur errlog="$RUN_DIR/tx-$id.err"
-  dur=$(jq -r '.duration_s // 0' "$dir/meta.json")
+  local acc="$dir/transcript.md.tmp" errlog="$RUN_DIR/tx-$id.err" child="" start done_audio=0
   mkdir -p "$RUN_DIR"
+  # `omarecorder cancel` stops the unit with SIGTERM. Stop our own child (never
+  # the process group — inline runs share it with the caller), keep what was
+  # already published (transcript.md + meta already say partial=true), learn the
+  # speed from the pieces that finished, and exit 0 so systemd sees no failure.
+  trap '[[ -n "$child" ]] && kill -TERM "$child" 2>/dev/null
+        [[ -n "$start" ]] && learn_rtf "$model" "$done_audio" "$(awk -v s="$start" -v e="$(date +%s.%N)" "BEGIN{d=e-s; if(d<0.1)d=0.1; printf \"%.1f\", d}")"
+        rm -f "$acc" "$RUN_DIR/tx-$id".*; exit 0' TERM
+  local input="$dir/audio.wav" tmpwav="" dur
+  dur=$(jq -r '.duration_s // 0' "$dir/meta.json")
   if [[ -n "$from" || -n "$to" ]]; then
     tmpwav="$RUN_DIR/tx-$id.wav"
     local -a cut=(); [[ -n "$from" ]] && cut+=(-ss "$from"); [[ -n "$to" ]] && cut+=(-to "$to")
     ffmpeg -v error -y "${cut[@]}" -i "$dir/audio.wav" -c copy "$tmpwav"
-    input="$tmpwav"; dur=$(audio_duration "$tmpwav")
+    input="$tmpwav"; dur=$(audio_duration "$tmpwav"); dur=${dur:-0}
   fi
   local -a opts=(--model "$model" --language "$lang")
   [[ "$threads" =~ ^[1-9][0-9]*$ ]] && opts+=(--threads "$threads")
-  local start rc=0; start=$(date +%s.%N)
-  # whisper's stderr goes to a per-job file (it can echo decoded text), not the shared log.
-  voxtype -q "${opts[@]}" transcribe "$input" 2>"$errlog" | awk 'seen{print} /^$/{seen=1}' > "$dir/transcript.md.tmp" &
-  child=$!; wait "$child" || rc=1; child=""
-  [[ -n "$tmpwav" ]] && rm -f "$tmpwav"
-  if [[ $rc != 0 || ! -s "$dir/transcript.md.tmp" ]]; then
-    rm -f "$dir/transcript.md.tmp"
+  local -a plan; mapfile -t plan < <(plan_chunks "$input" "$dur")
+  local n=${#plan[@]} i=0 piece s e cwav="$input" ctxt="$RUN_DIR/tx-$id.chunk.txt" rc=0 prev_kept=0
+  : > "$acc"
+  start=$(date +%s.%N)
+  for piece in "${plan[@]}"; do
+    i=$((i + 1)); s=${piece% *}; e=${piece#* }
+    state_set --arg id "$id" --argjson n "$i" --argjson N "$n" \
+      '.jobs |= map(if .type=="transcribe" and .id==$id then .progress={chunk:$n, chunks:$N} else . end)'
+    if (( n > 1 )); then
+      cwav="$RUN_DIR/tx-$id.chunk.wav"
+      ffmpeg -v error -y -ss "$s" -to "$e" -i "$input" -c copy "$cwav" || { rc=1; break; }
+    fi
+    # whisper's stderr goes to a per-job file (it can echo decoded text), not the shared log.
+    voxtype -q "${opts[@]}" transcribe "$cwav" 2>"$errlog" | awk 'seen{print} /^$/{seen=1}' > "$ctxt" &
+    child=$!; wait "$child" || rc=1; child=""
+    (( rc == 0 )) || break
+    if grep -q '[^[:space:]]' "$ctxt"; then cat "$ctxt" >> "$acc"; printf '\n' >> "$acc"; fi
+    done_audio=$(awk -v a="$done_audio" -v s="$s" -v e="$e" 'BEGIN{print a + (e - s)}')
+    if (( prev_kept == 0 )); then [[ -f "$dir/transcript.md" ]] && cp -f "$dir/transcript.md" "$dir/transcript.prev.md"; prev_kept=1; fi
+    if (( i < n )); then   # publish what we have so far; the Library shows it growing
+      publish_transcript "$dir" "$acc" "$model" "$lang" "$from" "$to" "$n" true
+      update_meta "$dir" '.transcript = ((.transcript // {}) + {model:$m, language:$l, created:$c, partial:true, chunks:$N, chunks_done:$i})' \
+        --arg m "$model" --arg l "$lang" --arg c "$(now_iso)" --argjson N "$n" --argjson i "$i"
+    fi
+  done
+  rm -f "$tmpwav" "$RUN_DIR/tx-$id.chunk.wav" "$ctxt"
+  if (( rc != 0 )); then
     state_set --arg id "$id" '.jobs |= map(select(.id != $id))'
     local why; why=$(grep -iE 'error|failed|cannot|not found' "$errlog" 2>/dev/null | tail -1 | cut -c1-120)
     mkdir -p "$STATE_DIR"; mv -f "$errlog" "$STATE_DIR/tx-$id.err" 2>/dev/null || true
-    notify "Transcription failed · $ttl" "${why:-voxtype returned no text} (details: $STATE_DIR/tx-$id.err)"; log "transcribe FAILED $id"; return 0
+    if (( i > 1 )) && [[ -s "$acc" ]]; then   # some pieces made it: keep them, say so
+      publish_transcript "$dir" "$acc" "$model" "$lang" "$from" "$to" "$n" true
+      notify "Transcription stopped after $((i - 1))/$n pieces · $ttl" "${why:-voxtype failed} — the finished pieces are kept (details: $STATE_DIR/tx-$id.err)"
+    else
+      notify "Transcription failed · $ttl" "${why:-voxtype returned no text} (details: $STATE_DIR/tx-$id.err)"
+    fi
+    rm -f "$acc"; log "transcribe FAILED $id after piece $i/$n"; return 0
   fi
   rm -f "$errlog"
   local elapsed; elapsed=$(awk -v s="$start" -v e="$(date +%s.%N)" 'BEGIN{d=e-s; if(d<0.1)d=0.1; printf "%.1f", d}')
-  grep -q '[^[:space:]]' "$dir/transcript.md.tmp" || printf '(no speech detected)\n' > "$dir/transcript.md.tmp"
-  [[ -f "$dir/transcript.md" ]] && cp -f "$dir/transcript.md" "$dir/transcript.prev.md"   # re-transcribe keeps the last one
-  { printf '<!-- omarecorder model=%s language=%s created=%s range=%s-%s -->\n' "$model" "$lang" "$(now_iso)" "${from:-0}" "${to:-end}"
-    cat "$dir/transcript.md.tmp"; } > "$dir/transcript.md"
-  rm -f "$dir/transcript.md.tmp"
-  local rtf; rtf=$(jq -n --argjson d "${dur:-0}" --argjson e "$elapsed" '(($d / $e) * 100 | round) / 100')
-  if (( ${dur:-0} >= 60 )); then # only learn speed from clips long enough to amortise model load
-    mkdir -p "$STATE_DIR"; local bench='{}'; [[ -f "$BENCH_FILE" ]] && bench=$(jq -c . "$BENCH_FILE")
-    write_json "$BENCH_FILE" "$(jq -c --arg m "$model" --argjson r "$rtf" --arg t "$(now_iso)" '.[$m] = {rtf:$r, measured:$t}' <<<"$bench")"
-  fi
-  update_meta "$dir" '.transcript = {model:$m, language:$l, created:$c, elapsed_s:$e, rtf:$r}' \
-    --arg m "$model" --arg l "$lang" --arg c "$(now_iso)" --argjson e "$elapsed" --argjson r "$rtf"
+  grep -q '[^[:space:]]' "$acc" || printf '(no speech detected)\n' > "$acc"
+  publish_transcript "$dir" "$acc" "$model" "$lang" "$from" "$to" "$n" false
+  rm -f "$acc"
+  learn_rtf "$model" "$done_audio" "$elapsed"
+  local rtf; rtf=$(jq -n --argjson d "$done_audio" --argjson e "$elapsed" '(($d / $e) * 100 | round) / 100')
+  update_meta "$dir" '.transcript = {model:$m, language:$l, created:$c, elapsed_s:$e, rtf:$r, chunks:$N, chunks_done:$N, partial:false}' \
+    --arg m "$model" --arg l "$lang" --arg c "$(now_iso)" --argjson e "$elapsed" --argjson r "$rtf" --argjson N "$n"
   state_set --arg id "$id" '.jobs |= map(select(.id != $id))'
-  log "transcribe ok $id model=$model elapsed=${elapsed}s rtf=$rtf"
+  log "transcribe ok $id model=$model pieces=$n elapsed=${elapsed}s rtf=$rtf"
   notify "Transcript ready · $ttl" "$(model_label "$model") took $(fmt_hms "${elapsed%.*}") — click to open" -- "$SELF" open "$id"
+}
+# publish_transcript <dir> <body> <model> <lang> <from> <to> <chunks> <partial>: header + body → transcript.md (atomic)
+publish_transcript() {
+  local dir="$1" body="$2" model="$3" lang="$4" from="$5" to="$6" chunks="$7" partial="$8" ptag=""
+  [[ "$partial" == "true" ]] && ptag=" partial=true"
+  { printf '<!-- omarecorder model=%s language=%s created=%s range=%s-%s chunks=%s%s -->\n' "$model" "$lang" "$(now_iso)" "${from:-0}" "${to:-end}" "$chunks" "$ptag"
+    cat "$body"; } > "$dir/transcript.md.new"
+  mv -f "$dir/transcript.md.new" "$dir/transcript.md"
 }
 
 cmd_cancel() {
@@ -676,10 +807,15 @@ cmd_cancel() {
   systemctl --user stop "omarecorder-tx-$id" 2>/dev/null || true
   systemctl --user reset-failed "omarecorder-tx-$id" 2>/dev/null || true
   state_set --arg id "$id" '.jobs |= map(select(.id != $id))'
-  local dir; dir=$(rec_dir "$id" 2>/dev/null || true); [[ -n "$dir" ]] && rm -f "$dir/transcript.md.tmp"
+  local dir; dir=$(rec_dir "$id" 2>/dev/null || true); [[ -n "$dir" ]] && rm -f "$dir/transcript.md.tmp" "$dir/transcript.md.new"
+  rm -f "$RUN_DIR/tx-$id".*
   if (( was )); then
     local ttl; ttl=$(jq -r '.title // empty' "$dir/meta.json" 2>/dev/null); ttl="${ttl:-$id}"
-    notify "Transcription cancelled · $ttl" "The recording is untouched — transcribe it again any time"
+    if [[ -n "$dir" && $(jq -r '.transcript.partial // false' "$dir/meta.json" 2>/dev/null) == "true" ]]; then
+      notify "Transcription cancelled · $ttl" "Kept $(jq -r '"\(.transcript.chunks_done)/\(.transcript.chunks)"' "$dir/meta.json") pieces — re-transcribe any time to finish"
+    else
+      notify "Transcription cancelled · $ttl" "The recording is untouched — transcribe it again any time"
+    fi
     log "transcribe cancelled $id"
   fi
   echo "cancelled $id"
@@ -810,6 +946,8 @@ main() {
     help|--help|-h) usage ;;
     _tx-worker) _tx_worker "$@" ;;
     _dl-worker) _dl_worker "$@" ;;
+    _meter) _meter "$@" ;;
+    _meter-loop) _meter_loop "$@" ;;
     *) usage >&2; exit 2 ;;
   esac
 }
