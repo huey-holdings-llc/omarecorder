@@ -34,7 +34,7 @@ Column {
   }
 
   Button {
-    visible: root.setup && root.setup.voxtype && root.setup.defaultModel_ok === false && !root.dl
+    visible: !!(root.setup && root.setup.voxtype && root.setup.defaultModel_ok === false && !root.dl)
     width: parent.width
     text: "Download " + (root.setup ? root.setup.defaultModel : "") + (root.dlModel ? " (" + root.dlModel.size_mb + " MB)" : "")
     iconText: "󰇚"

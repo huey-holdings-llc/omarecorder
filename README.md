@@ -49,11 +49,18 @@ no microphone), a **Setup** card tells you and offers the one-click fix.
 
 ## Use
 
-* **Bar icon** — left-click opens the popup, right-click starts/stops recording.
-  While recording the glyph turns urgent and shows `HH:MM:SS`.
+* **Bar icon** — a microphone when idle: left-click opens the popup, right-click
+  starts/stops recording. While recording it turns into a red record glyph
+  with a running `HH:MM:SS`.
 * **Popup keys** — `r` record/stop · `l` library · `s` settings · `↑↓` `Enter` on recent rows · `Esc`.
 * **Library keys** — type to search · `↑↓` select · `Enter` transcribe (or open the transcript) · `Space` play/stop · `F2` rename · `Del` delete · `Esc`.
 * **Notifications** — "Recording saved" is clickable: it transcribes with your default model.
+* **Clipping check** — every recording is measured after stop; if the mic was
+  driven into the rails you get "⚠ clipped" in the lists and a warning in the
+  notification. Fix it at the source: lower the input level (Audio popup →
+  Input, or `wpctl set-volume @DEFAULT_AUDIO_SOURCE@ 60%`) and re-check with a
+  short test take — whisper copes with quiet audio far better than with
+  distorted audio.
 
 ### Where things live
 
@@ -81,7 +88,7 @@ The first transcription with each model calibrates the estimate for your machine
 ```
 omarecorder record start [--source mic|system|both] [--title T] | stop | toggle | status [--json]
 omarecorder import <file> [--move] [--title T]
-omarecorder list [--json] | show <id> [--json] | rename <id> <title> | delete <id> [--yes]
+omarecorder list [--json] | show <id> [--json] | rename <id> <title> | delete <id> [--yes] | analyze <id>
 omarecorder transcribe <id> [--model M] [--language L] [--from s --to s] | cancel <id>
 omarecorder models [--json] | model download <name> | estimate <id> --model M
 omarecorder play <id> | stop-play | open <id> | folder <id> | library
@@ -127,7 +134,8 @@ a model you don't have.
 ```bash
 git clone https://github.com/coreytyhurst/omarecorder ~/projects/omarecorder
 cd ~/projects/omarecorder
-scripts/dev-install.sh --enable   # rsync into the plugin dir, validate, reload the shell
+scripts/dev-install.sh --enable   # rsync into the plugin dir, validate, rescan plugins
+omarchy-restart-shell             # QML changes need this: rescan keeps Qt's component cache
 bash tests/cli.test.sh            # CLI tests (uses real voxtype + base.en when present)
 ```
 

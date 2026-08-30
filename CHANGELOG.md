@@ -5,6 +5,45 @@ All notable changes to this project are documented here. Format follows
 
 ## [Unreleased]
 
+## [0.1.1] - 2026-08-30
+
+First polish round, driven by two persona walkthroughs (a first-time user and
+a professional audio recordist — the first-time user's notes weighed more).
+
+### Added
+- Clipping detection: every stop/import measures peak/RMS/flatness with
+  `ffmpeg astats` and stores `levels` in `meta.json`. Clipped takes get a
+  "⚠ clipped" mark in every list, a note in the Library, and a "mic gain too
+  high" warning in the saved notification. `omarecorder analyze <id>` measures
+  existing recordings.
+- Crash recovery: if the recorder died (power loss, shell killed), the next
+  command repairs the WAV header, fills in the duration/levels and notifies.
+- Re-transcribing keeps the previous text as `transcript.prev.md`.
+- Friendly names for untitled recordings ("Recording · Aug 29, 23:56").
+- The in-progress take shows live in Recent and the Library ("Recording… 00:04:25");
+  it cannot be transcribed or deleted until it is stopped.
+- Library: search box in the header, recording count, key hints in a footer,
+  "Renaming — Enter saves, Esc cancels" cue, Space types into a non-empty search.
+
+### Changed
+- Bar: the slot grows with the timer instead of overflowing into neighbours;
+  idle shows a microphone glyph (recording = red record glyph + timer).
+- Popup rows use words for the main action ("Transcribe" / "Open") instead of
+  icons only; opening settings scrolls them into view.
+- Library uses the theme's `[popups]` chrome (same as the bar popup); newest
+  recording is selected on open; delete dialog says "Move to trash" and
+  defaults to Cancel.
+- Notifications name the recording and say what happens next; cancelling a
+  transcription produces "Transcription cancelled" instead of a failed unit.
+- Speed estimates: "≈ 2m (est.)" until measured; the estimate learns only from
+  clips ≥ 60 s and uses sub-second timing.
+- `omarecorder list` prints durations as HH:MM:SS.
+
+### Fixed
+- Importing two files with the same mtime second failed (`date` parse error).
+- Recent rows showed "0s" right after stopping (state bumped after finalize).
+- Cancelling a transcription no longer trips the systemd "failed unit" toast.
+
 ## [0.1.0] — 2026-08-29
 
 ### Added

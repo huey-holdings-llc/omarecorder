@@ -10,7 +10,9 @@ import "ui"
 // Omarecorder Library — fullscreen overlay: every recording on the left,
 // the selected one on the right with its transcript. Summoned with
 //   omarchy-shell shell toggle io.github.coreytyhurst.omarecorder
-// Uses the [menu] surface tokens like the clipboard manager so themes apply.
+// Uses the theme's [popups] surface tokens (same chrome as the bar popup) so
+// the overlay reads as part of the same plugin; list selection reuses the
+// [menu] selection tokens.
 Item {
   id: root
 
@@ -27,35 +29,38 @@ Item {
   property string playingId: ""
   property string transcriptText: ""
 
-  property color background: Color.menu.background
-  property color foreground: Color.menu.text
-  property color border: Color.menu.border
-  property var borderSpec: Border.surfaceSpec("menu", "border", border, Math.max(1, Style.space(2)))
+  property color background: Color.popups.background
+  property color foreground: Color.popups.text
+  property color border: Color.popups.border
+  property var borderSpec: Border.surfaceSpec("popups", "border", border, Math.max(1, Style.space(2)))
   property color scrim: Color.menu.scrim
   property color selectedBackground: Color.menu.selectedBackground
   property color selectedText: Color.menu.selectedText
   readonly property color dim: Qt.darker(foreground, 1.5)
   readonly property color urgent: Color.urgent
   readonly property int cornerRadius: Style.cornerRadius
-  property string fontFamily: Style.font.menuFamily
+  property string fontFamily: Style.font.family
   property int contentMargin: Style.spacing.panelPadding
   property int cardWidth: Math.min(Style.space(1000), panel.width - Style.gapsOut * 2)
   property int cardHeight: Math.min(Style.space(660), panel.height - Style.gapsOut * 2)
-  property int listWidth: Style.space(330)
+  property int listWidth: Style.space(360)
 
   readonly property var rows: filteredRows()
   readonly property int selectedIndex: indexOfId(selectedId)
   readonly property var selected: selectedIndex >= 0 ? rows[selectedIndex] : null
   readonly property var selectedJob: svc && selected ? svc.jobFor(selected.id) : null
   readonly property string modelForRun: chosenModel || (svc ? svc.defaultModel : "base.en")
+  readonly property bool selectedLive: !!(svc && selected && selected.id === svc.activeId)
 
   function open(payloadJson) {
     root.opened = true
     root.filterText = ""
     root.deleteConfirmOpen = false
-    try { var p = JSON.parse(payloadJson || "{}"); if (p && p.id) root.selectedId = String(p.id) } catch (e) {}
-    if (svc) { svc.refresh(); if (!svc.recording) {} }
-    ensureSelection()
+    var requested = ""
+    try { var p = JSON.parse(payloadJson || "{}"); if (p && p.id) requested = String(p.id) } catch (e) {}
+    // Newest recording is selected unless the caller asked for a specific one.
+    root.selectedId = requested || (rows.length > 0 ? rows[0].id : "")
+    if (svc) svc.refresh()
     Qt.callLater(function() { keyCatcher.forceActiveFocus() })
   }
   function close() { root.deleteConfirmOpen = false; root.opened = false; if (playingId && svc) { svc.stopPlay(); playingId = "" } }
@@ -75,6 +80,7 @@ Item {
   }
   function indexOfId(id) { for (var i = 0; i < rows.length; i++) if (rows[i].id === id) return i; return -1 }
   function ensureSelection() { if (selectedIndex < 0 && rows.length > 0) selectedId = rows[0].id }
+  readonly property string hintsText: "↑↓ select   Enter transcribe / open   Space play   F2 rename   Del delete   Esc close"
   function select(delta) {
     if (rows.length === 0) return
     var i = selectedIndex < 0 ? (delta < 0 ? rows.length - 1 : 0) : (selectedIndex + delta + rows.length) % rows.length
@@ -88,7 +94,7 @@ Item {
   // only reachable through the explicit Cancel button (cancelSelected) — a
   // stray Enter must never kill an hour-long job.
   function transcribeSelected() {
-    if (!svc || !selected || selectedJob) return
+    if (!svc || !selected || selectedJob || selectedLive) return
     var m = svc.modelByName(modelForRun)
     if (m && !m.installed) { svc.download(m.name); return }
     svc.transcribe(selected.id, modelForRun, svc.config.language || "en")
@@ -98,7 +104,7 @@ Item {
     if (!svc || !selected) return
     if (playingId === selected.id) { svc.stopPlay(); playingId = "" } else { svc.play(selected.id); playingId = selected.id }
   }
-  function requestDelete() { if (selected) { deleteConfirm.selectedIndex = 1; deleteConfirmOpen = true } }
+  function requestDelete() { if (selected && !selectedLive) { deleteConfirm.selectedIndex = 0; deleteConfirmOpen = true } }
   function confirmDelete() {
     if (svc && selected) { var i = selectedIndex; svc.remove(selected.id); deleteConfirmOpen = false; Qt.callLater(function() { selectAbsolute(Math.max(0, i - 1)) }) }
     Qt.callLater(function() { keyCatcher.forceActiveFocus() })
@@ -162,7 +168,7 @@ Item {
           else if (event.key === Qt.Key_End) { root.selectAbsolute(root.rows.length - 1); event.accepted = true }
           else if (event.key === Qt.Key_Delete) { root.requestDelete(); event.accepted = true }
           else if (event.key === Qt.Key_F2) { titleField.forceActiveFocus(); titleField.selectAll(); event.accepted = true }
-          else if (event.key === Qt.Key_Space) { root.togglePlay(); event.accepted = true }
+          else if (event.key === Qt.Key_Space) { if (root.filterText) root.setFilter(root.filterText + " "); else root.togglePlay(); event.accepted = true }
           else if (event.key === Qt.Key_Return || event.key === Qt.Key_Enter) {
             if (root.selected && root.selected.has_transcript && !(event.modifiers & Qt.ShiftModifier)) root.svc.openTranscript(root.selected.id)
             else root.transcribeSelected()
@@ -178,8 +184,8 @@ Item {
           anchors.fill: parent
           opened: root.deleteConfirmOpen
           z: 10
-          message: root.selected ? "Move \"" + (root.selected.title || root.selected.id) + "\" to trash?" : ""
-          confirmText: "Delete"
+          message: root.selected && root.svc ? "Move \"" + root.svc.displayTitle(root.selected) + "\" to the trash?" : ""
+          confirmText: "Move to trash"
           background: root.background
           foreground: root.foreground
           scrim: root.scrim
@@ -195,29 +201,43 @@ Item {
           anchors.fill: parent
           spacing: Style.spacing.md
 
-          // ---- header ----
+          // ---- header: title + live search ----
           Row {
             width: parent.width
-            spacing: Style.spacing.md
+            spacing: Style.spacing.lg
             Text {
+              anchors.verticalCenter: parent.verticalCenter
               text: "󰑊  Omarecorder"
               color: root.foreground
               font.family: root.fontFamily
               font.pixelSize: Style.font.title
               font.bold: true
             }
-            Text {
+            BorderSurface {
+              id: searchBox
               anchors.verticalCenter: parent.verticalCenter
-              text: root.filterText ? "Search: " + root.filterText + "  (Esc clears)" : "Type to search"
-              color: root.filterText ? root.foreground : root.dim
-              font.family: root.fontFamily
-              font.pixelSize: Style.font.caption
+              width: Style.space(320)
+              height: Style.spacing.controlHeight
+              radius: Style.cornerRadius
+              color: "transparent"
+              borderSpec: Border.controlSpec(root.filterText ? "focus" : "normal", root.foreground, Color.accent)
+              Row {
+                anchors.fill: parent
+                anchors.leftMargin: Style.spacing.controlPaddingX
+                spacing: Style.spacing.sm
+                Text { anchors.verticalCenter: parent.verticalCenter; text: "󰍉"; color: root.dim; font.family: root.fontFamily; font.pixelSize: Style.font.icon }
+                Text {
+                  anchors.verticalCenter: parent.verticalCenter
+                  text: root.filterText ? root.filterText : "Type to search"
+                  color: root.filterText ? root.foreground : root.dim
+                  font.family: root.fontFamily
+                  font.pixelSize: Style.font.body
+                }
+              }
             }
-            Item { width: parent.width - hints.width - Style.space(220) - parent.spacing * 3; height: 1 }
             Text {
-              id: hints
               anchors.verticalCenter: parent.verticalCenter
-              text: "↑↓ select · Enter transcribe/open · Space play · F2 rename · Del delete · Esc close"
+              text: root.rows.length + (root.rows.length === 1 ? " recording" : " recordings") + (root.filterText ? " match" : "")
               color: root.dim
               font.family: root.fontFamily
               font.pixelSize: Style.font.caption
@@ -228,7 +248,7 @@ Item {
 
           Row {
             width: parent.width
-            height: parent.height - y
+            height: parent.height - y - Style.space(28)
             spacing: Style.spacing.lg
 
             // ---- list ----
@@ -255,6 +275,11 @@ Item {
                   fontFamily: root.fontFamily
                   current: index === root.selectedIndex
                   currentFill: root.selectedBackground
+                  displayTitle: root.svc ? root.svc.displayTitle(modelData) : ""
+                  live: !!(root.svc && modelData.id === root.svc.activeId)
+                  elapsedText: root.svc ? root.svc.elapsedText : ""
+                  clipped: !!(root.svc && root.svc.isClipped(modelData))
+                  urgent: root.urgent
                   durationText: root.svc ? root.svc.fmtDuration(modelData.duration_s) : ""
                   dateText: root.svc ? root.svc.fmtDate(modelData.created) : ""
                   onClicked: root.selectAbsolute(index)
@@ -283,7 +308,7 @@ Item {
                 id: titleField
                 width: parent.width
                 text: root.selected ? (root.selected.title || "") : ""
-                placeholderText: root.selected ? root.selected.id + "  (untitled — type a name, Enter to save)" : ""
+                placeholderText: root.selected && root.svc ? root.svc.displayTitle(root.selected) + "  — type a name, Enter to save" : ""
                 foreground: root.foreground
                 font.family: root.fontFamily
                 font.pixelSize: Style.font.subtitle
@@ -292,13 +317,24 @@ Item {
               }
 
               Text {
+                visible: titleField.activeFocus
+                width: parent.width
+                text: "Renaming — Enter saves, Esc cancels"
+                color: Color.accent
+                font.family: root.fontFamily
+                font.pixelSize: Style.font.caption
+              }
+
+              Text {
                 width: parent.width
                 text: root.selected && root.svc
-                  ? root.svc.fmtDate(root.selected.created) + " · " + root.svc.fmtDuration(root.selected.duration_s) + " · " + root.svc.fmtBytes(root.selected.size_bytes)
-                    + " · " + root.selected.source
+                  ? (root.selectedLive ? "Recording now · " + root.svc.elapsedText + " · " + root.svc.sourceLabel(root.selected.source)
+                    : root.svc.fmtDate(root.selected.created) + " · " + root.svc.fmtDuration(root.selected.duration_s) + " · " + root.svc.fmtBytes(root.selected.size_bytes)
+                    + " · " + root.svc.sourceLabel(root.selected.source)
                     + (root.selected.transcript ? " · transcribed with " + root.selected.transcript.model : "")
+                    + (root.svc.isClipped(root.selected) ? " · ⚠ audio clipped (mic gain too high)" : ""))
                   : ""
-                color: root.dim
+                color: root.selectedLive ? root.urgent : root.dim
                 font.family: root.fontFamily
                 font.pixelSize: Style.font.caption
                 elide: Text.ElideRight
@@ -316,11 +352,12 @@ Item {
                   durationS: root.selected ? root.selected.duration_s : 0
                   foreground: root.foreground
                   fontFamily: root.fontFamily
-                  visible: !root.selectedJob
+                  visible: !root.selectedJob && !root.selectedLive
                   onChanged: function(m) { root.chosenModel = m }
                 }
                 Button {
                   anchors.verticalCenter: parent.verticalCenter
+                  visible: !root.selectedLive
                   text: root.selectedJob ? "Cancel  (" + root.svc.fmtHms(root.selectedJob.elapsed_s || 0) + ")"
                     : (picker.currentInstalled ? (root.selected && root.selected.has_transcript ? "Transcribe again" : "Transcribe")
                                                : (picker.download ? "Downloading…" : "Download model"))
@@ -367,7 +404,9 @@ Item {
                 PanelActionButton {
                   anchors.verticalCenter: parent.verticalCenter
                   iconText: "󰆴"
-                  tooltipText: "Delete (Del)"
+                  tooltipText: "Move to trash (Del)"
+                  enabled: !root.selectedLive
+                  opacity: enabled ? 1 : 0.4
                   hoverColor: root.urgent
                   foreground: root.foreground; fontFamily: root.fontFamily
                   onClicked: root.requestDelete()
@@ -399,7 +438,8 @@ Item {
               Text {
                 visible: root.transcriptText.length === 0
                 width: parent.width
-                text: root.selectedJob ? "Transcribing…" : "Not transcribed yet — pick a model above and press Transcribe (or Enter)."
+                text: root.selectedLive ? "Recording in progress — stop it from the bar icon, then transcribe."
+                  : root.selectedJob ? "Transcribing…" : "Not transcribed yet — pick a model above and press Transcribe (or Enter)."
                 color: root.dim
                 wrapMode: Text.Wrap
                 font.family: root.fontFamily
@@ -414,6 +454,17 @@ Item {
               font.family: root.fontFamily
               font.pixelSize: Style.font.body
             }
+          }
+
+          // ---- footer: key hints ----
+          Text {
+            width: parent.width
+            text: root.hintsText
+            color: root.dim
+            font.family: root.fontFamily
+            font.pixelSize: Style.font.caption
+            horizontalAlignment: Text.AlignHCenter
+            elide: Text.ElideRight
           }
         }
       }

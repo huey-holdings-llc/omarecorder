@@ -7,7 +7,7 @@
 # Usage: omarecorder <command> [args]   (run `omarecorder help` for the list)
 set -euo pipefail
 
-VERSION="0.1.0"
+VERSION="0.1.1"
 PLUGIN_ID="io.github.coreytyhurst.omarecorder"
 SELF="$(readlink -f "$0")"
 
@@ -131,7 +131,15 @@ reconcile_state() {
   if [[ $(jq -r '.recording != null' <<<"$st") == "true" ]]; then
     local alive=0 p
     for p in $(jq -r '.recording.pids[]' <<<"$st"); do pid_alive "$p" && alive=1; done
-    if [[ $alive == 0 ]]; then st=$(jq -c '.recording=null' <<<"$st"); changed=1; log "reconcile: cleared dead recording"; fi
+    if [[ $alive == 0 ]]; then
+      local ddir; ddir=$(jq -r '.recording.dir // empty' <<<"$st")
+      st=$(jq -c '.recording=null' <<<"$st"); changed=1; log "reconcile: cleared dead recording"
+      if [[ -n "$ddir" && -f "$ddir/audio.wav" ]]; then
+        repair_audio "$ddir" || true; finalize_audio "$ddir"; analyze_levels "$ddir"
+        local rttl; rttl=$(jq -r '.title // empty' "$ddir/meta.json"); rttl="${rttl:-$(basename "$ddir")}"
+        notify "Recording recovered · $rttl" "The recorder stopped unexpectedly; $(fmt_hms "$(jq -r '.duration_s // 0' "$ddir/meta.json")") of audio was saved."
+      fi
+    fi
   fi
   local keep='[]' j
   while IFS= read -r j; do
@@ -255,7 +263,8 @@ record_start() {
   state_set --arg id "$id" --arg source "$source" --argjson pids "$pids" --argjson files "$files" --arg dir "$dir" --argjson t "$(now_epoch)" \
     '.recording = {id:$id, source:$source, dir:$dir, started_at:$t, pids:$pids, files:$files}'
   log "record start $id source=$source dir=$dir"
-  notify "Recording started" "${title:-$id} · $source"
+  local src_label; case "$source" in mic) src_label="microphone" ;; system) src_label="system audio" ;; both) src_label="microphone + system audio" ;; esac
+  notify "Recording started" "${title:-$id} — $src_label. Click the bar icon or press the toggle to stop."
   echo "$id"
 }
 
@@ -282,9 +291,16 @@ record_stop() {
       || log "amix failed for $id"
   fi
   finalize_audio "$dir"
+  analyze_levels "$dir"
+  bump_state   # duration/levels are in meta now; let the UI re-list
   local dur; dur=$(jq -r '.duration_s // 0' "$dir/meta.json")
   log "record stop $id duration=${dur}s"
-  notify "Recording saved · $(fmt_hms "$dur")" "Click to transcribe with $(cfg defaultModel)" -- "$SELF" transcribe "$id"
+  local ttl; ttl=$(jq -r '.title // empty' "$dir/meta.json"); ttl="${ttl:-$id}"
+  if [[ $(jq -r '.levels.clipped // false' "$dir/meta.json") == "true" ]]; then
+    notify "Recording saved · $(fmt_hms "$dur") — audio is clipping" "$ttl — the microphone gain is too high; lower the input level before the next session. Click to transcribe anyway." -- "$SELF" transcribe "$id"
+  else
+    notify "Recording saved · $(fmt_hms "$dur")" "$ttl — click to transcribe with $(model_label "$(cfg defaultModel)")" -- "$SELF" transcribe "$id"
+  fi
   echo "$id ($(fmt_hms "$dur"))"
 }
 
@@ -294,6 +310,33 @@ finalize_audio() {
   dur=$(audio_duration "$dir/audio.wav"); dur=${dur:-0}
   size=$(file_size "$dir/audio.wav")
   update_meta "$dir" ".duration_s = $dur | .size_bytes = $size"
+}
+
+# repair_audio <dir>: a recorder that died (crash, power loss) leaves a WAV with
+# a zero-length header. Re-muxing with ffmpeg rewrites the header from the data.
+repair_audio() {
+  local dir="$1"; local f="$dir/audio.wav"
+  [[ -f "$f" ]] || return 1
+  local d; d=$(audio_duration "$f")
+  [[ -n "$d" && "$d" != "0" && "$d" != "N/A" ]] && return 0
+  ffmpeg -v error -y -i "$f" -c copy "$f.repair.wav" 2>>"$LOG_FILE" && mv -f "$f.repair.wav" "$f" && log "repaired wav header in $dir"
+}
+
+# analyze_levels <dir>: peak/RMS/flatness via ffmpeg astats → meta.levels.
+# A hard-clipped take sits at ~0 dBFS with many flat (saturated) runs; a
+# healthy one peaks well below that. Cheap (decode only), so run it on every
+# stop and import — it is the only way the user finds out before transcribing.
+analyze_levels() {
+  local dir="$1"; local f="$dir/audio.wav"; [[ -f "$f" ]] || return 0
+  local stats; stats=$(ffmpeg -nostats -i "$f" -af "astats=measure_perchannel=none:measure_overall=Peak_level+RMS_level+Flat_factor" -f null - 2>&1 | grep -E 'Peak level dB|RMS level dB|Flat factor' | tail -3)
+  local peak rms flat
+  peak=$(sed -n 's/.*Peak level dB: *//p' <<<"$stats" | head -1); rms=$(sed -n 's/.*RMS level dB: *//p' <<<"$stats" | head -1); flat=$(sed -n 's/.*Flat factor: *//p' <<<"$stats" | head -1)
+  [[ "$peak" =~ ^-?[0-9.]+$ && "$flat" =~ ^-?[0-9.]+$ ]] || return 0
+  [[ "$rms" =~ ^-?[0-9.]+$ ]] || rms="-99"
+  local clipped=false; awk -v p="$peak" -v fl="$flat" 'BEGIN{exit !(p > -0.5 && fl > 2)}' && clipped=true
+  update_meta "$dir" ".levels = {peak_db: $peak, rms_db: $rms, flat: $flat, clipped: $clipped}"
+  [[ $clipped == true ]] && log "levels: CLIPPED $dir peak=$peak rms=$rms flat=$flat"
+  return 0
 }
 
 # ------------------------------------------------------------ status -------
@@ -332,7 +375,9 @@ cmd_import() {
   [[ -f "$src" ]] || die "file not found: $src"
   mkdir -p "$ROOT"
   local id; id=$(date -r "$src" +%Y-%m-%d_%H%M%S)
-  while rec_dir "$id" >/dev/null 2>&1; do id=$(date -d "$(date -r "$src" +%FT%T) + $((RANDOM % 50 + 1)) sec" +%Y-%m-%d_%H%M%S); done
+  # Same-second collisions (two files from one batch) take the next free second.
+  local base n=0; base=$(date -r "$src" +%s)
+  while rec_dir "$id" >/dev/null 2>&1; do n=$((n+1)); id=$(date -d "@$((base + n))" +%Y-%m-%d_%H%M%S); done
   title=$(sanitize_title "${title:-$(basename "${src%.*}")}")
   local dir="$ROOT/$id"; [[ -n "$title" ]] && dir="$ROOT/$id $title"
   mkdir -p "$dir"
@@ -345,7 +390,7 @@ cmd_import() {
   fi
   write_json "$dir/meta.json" "$(jq -cn --arg id "$id" --arg title "$title" --arg created "$(date -r "$dir/audio.wav" +%FT%T%z)" --argjson rate "$RATE" \
     '{id:$id, title:$title, source:"import", created:$created, duration_s:null, size_bytes:0, sample_rate:$rate, transcript:null, notes:""}')"
-  finalize_audio "$dir"; bump_state
+  finalize_audio "$dir"; analyze_levels "$dir"; bump_state
   log "import $src -> $dir"
   echo "$id"
 }
@@ -359,7 +404,15 @@ cmd_list() {
     arr=$(jq -c --argjson r "$(rec_json "$d")" '. + [$r]' <<<"$arr")
   done < <(find "$ROOT" -mindepth 1 -maxdepth 1 -type d -name '????-??-??_??????*' | sort -r)
   if [[ "${1:-}" == "--json" ]]; then jq . <<<"$arr"; return 0; fi
-  jq -r '.[] | "\(.id)  \(.duration_s // 0 | tostring | . + "s" | .)\t\(if .has_transcript then "✓" else "·" end)  \(.title)"' <<<"$arr"
+  while IFS=$'\t' read -r rid rdur rt rclip rtitle; do
+    printf '%s  %s  %s%s  %s\n' "$rid" "$(fmt_hms "$rdur")" "$rt" "$([[ $rclip == true ]] && echo ' ⚠clipped' || echo '')" "$rtitle"
+  done < <(jq -r '.[] | [.id, (.duration_s // 0), (if .has_transcript then "✓" else "·" end), (.levels.clipped // false), .title] | @tsv' <<<"$arr")
+}
+
+cmd_analyze() { # analyze <id>: (re)measure levels for an existing recording
+  local id="${1:-}"; [[ -n "$id" ]] || die "usage: analyze <id>"
+  local dir; dir=$(require_dir "$id"); analyze_levels "$dir"; bump_state
+  jq -c '.levels // {}' "$dir/meta.json"
 }
 
 cmd_show() {
@@ -390,6 +443,10 @@ cmd_delete() {
 
 # --------------------------------------------------------------- models ----
 model_installed() { [[ -f "$VOXTYPE_MODELS_DIR/ggml-$1.bin" ]]; }
+model_label() { # "Fast (base.en)" or just the name
+  local l; l=$(jq -r --arg m "$1" '.[] | select(.name==$m) | .label' <<<"$MODEL_CATALOG")
+  [[ -n "$l" ]] && echo "$l ($1)" || echo "$1"
+}
 model_rtf() { # measured or default
   local m="$1" v=""
   [[ -f "$BENCH_FILE" ]] && v=$(jq -r --arg m "$m" '.[$m].rtf // empty' "$BENCH_FILE" 2>/dev/null)
@@ -444,9 +501,9 @@ run_detached() {
 _dl_worker() {
   local name="$1"
   if voxtype setup --download --model "$name" --quiet --no-post-install >>"$LOG_FILE" 2>&1 && model_installed "$name"; then
-    notify "Model ready" "$name downloaded — transcriptions can use it now"; log "download ok $name"
+    notify "Model ready · $(model_label "$name")" "You can pick it in the Library now"; log "download ok $name"
   else
-    notify "Model download failed" "$name — see $LOG_FILE"; log "download FAILED $name"
+    notify "Model download failed · $name" "Check your connection and try again (details: $LOG_FILE)"; log "download FAILED $name"
   fi
   bump_state
 }
@@ -454,6 +511,7 @@ _dl_worker() {
 cmd_estimate() {
   local id="${1:-}" model=""; [[ -n "$id" ]] || die "usage: estimate <id> --model <name>"
   [[ "${2:-}" == "--model" ]] && model="${3:-}"; model="${model:-$(cfg defaultModel)}"
+  jq -e --arg m "$model" '.[] | select(.name==$m)' <<<"$MODEL_CATALOG" >/dev/null || die "unknown model: $model"
   local dir; dir=$(require_dir "$id")
   local dur rtf src="default"; dur=$(jq -r '.duration_s // 0' "$dir/meta.json"); rtf=$(model_rtf "$model")
   [[ -f "$BENCH_FILE" ]] && jq -e --arg m "$model" '.[$m]' "$BENCH_FILE" >/dev/null 2>&1 && src="measured"
@@ -473,8 +531,10 @@ cmd_transcribe() {
   local dir; dir=$(require_dir "$id")
   [[ -f "$dir/audio.wav" ]] || die "no audio.wav in $dir"
   have voxtype || die "voxtype not installed"
-  if ! model_installed "$model"; then echo "omarecorder: model '$model' is not downloaded (run: omarecorder model download $model)" >&2; exit 3; fi
   reconcile_state
+  [[ $(jq -r '.recording.id // empty' <<<"$(read_state)") == "$id" ]] && die "$id is still recording — stop it first"
+  [[ $(jq -r '.duration_s // 0' "$dir/meta.json") == "0" ]] && die "$id has no audio yet"
+  if ! model_installed "$model"; then echo "omarecorder: model '$model' is not downloaded (run: omarecorder model download $model)" >&2; exit 3; fi
   [[ $(jq -r --arg id "$id" '.jobs[] | select(.type=="transcribe" and .id==$id)' <<<"$(read_state)") ]] && die "transcription already running for $id"
   local unit="omarecorder-tx-$id"
   state_set --arg id "$id" --arg m "$model" --arg u "$unit" --argjson t "$(now_epoch)" \
@@ -490,6 +550,10 @@ cmd_transcribe() {
 _tx_worker() {
   local id="$1" model="$2" lang="$3" threads="$4" from="$5" to="$6"
   local dir; dir=$(require_dir "$id")
+  local ttl; ttl=$(jq -r '.title // empty' "$dir/meta.json"); ttl="${ttl:-$id}"
+  # `omarecorder cancel` stops the unit with SIGTERM: leave no partial files
+  # behind and exit 0 so systemd does not report a failed unit.
+  trap 'kill -TERM 0 2>/dev/null; rm -f "$dir/transcript.md.tmp" "$RUN_DIR/tx-$id.wav"; exit 0' TERM
   local input="$dir/audio.wav" tmpwav="" dur
   dur=$(jq -r '.duration_s // 0' "$dir/meta.json")
   if [[ -n "$from" || -n "$to" ]]; then
@@ -499,22 +563,24 @@ _tx_worker() {
   fi
   local -a opts=(--model "$model" --language "$lang")
   [[ "$threads" =~ ^[1-9][0-9]*$ ]] && opts+=(--threads "$threads")
-  local start rc=0; start=$(now_epoch)
+  local start rc=0; start=$(date +%s.%N)
   if voxtype -q "${opts[@]}" transcribe "$input" 2>>"$LOG_FILE" | awk 'seen{print} /^$/{seen=1}' > "$dir/transcript.md.tmp"; then
     rc=0; else rc=1; fi
   [[ -n "$tmpwav" ]] && rm -f "$tmpwav"
   if [[ $rc != 0 || ! -s "$dir/transcript.md.tmp" ]]; then
     rm -f "$dir/transcript.md.tmp"
     state_set --arg id "$id" '.jobs |= map(select(.id != $id))'
-    notify "Transcription failed" "$id — see $LOG_FILE"; log "transcribe FAILED $id"; return 1
+    local why; why=$(grep -iE 'error|failed|cannot|not found' "$LOG_FILE" | tail -1 | cut -c1-120)
+    notify "Transcription failed · $ttl" "${why:-voxtype returned no text} (details: $LOG_FILE)"; log "transcribe FAILED $id"; return 0
   fi
-  local elapsed=$(( $(now_epoch) - start )); (( elapsed < 1 )) && elapsed=1
+  local elapsed; elapsed=$(awk -v s="$start" -v e="$(date +%s.%N)" 'BEGIN{d=e-s; if(d<0.1)d=0.1; printf "%.1f", d}')
   grep -q '[^[:space:]]' "$dir/transcript.md.tmp" || printf '(no speech detected)\n' > "$dir/transcript.md.tmp"
+  [[ -f "$dir/transcript.md" ]] && cp -f "$dir/transcript.md" "$dir/transcript.prev.md"   # re-transcribe keeps the last one
   { printf '<!-- omarecorder model=%s language=%s created=%s range=%s-%s -->\n' "$model" "$lang" "$(now_iso)" "${from:-0}" "${to:-end}"
     cat "$dir/transcript.md.tmp"; } > "$dir/transcript.md"
   rm -f "$dir/transcript.md.tmp"
   local rtf; rtf=$(jq -n --argjson d "${dur:-0}" --argjson e "$elapsed" '(($d / $e) * 100 | round) / 100')
-  if (( ${dur:-0} >= 10 )); then # only learn from meaningful clips
+  if (( ${dur:-0} >= 60 )); then # only learn speed from clips long enough to amortise model load
     mkdir -p "$STATE_DIR"; local bench='{}'; [[ -f "$BENCH_FILE" ]] && bench=$(jq -c . "$BENCH_FILE")
     write_json "$BENCH_FILE" "$(jq -c --arg m "$model" --argjson r "$rtf" --arg t "$(now_iso)" '.[$m] = {rtf:$r, measured:$t}' <<<"$bench")"
   fi
@@ -522,14 +588,21 @@ _tx_worker() {
     '.transcript = {model:$m, language:$l, created:$c, elapsed_s:$e, rtf:$r}' "$dir/meta.json")"
   state_set --arg id "$id" '.jobs |= map(select(.id != $id))'
   log "transcribe ok $id model=$model elapsed=${elapsed}s rtf=$rtf"
-  notify "Transcription finished · $(fmt_hms "$elapsed")" "$(jq -r '.title // .id' "$dir/meta.json") — click to open" -- "$SELF" open "$id"
+  notify "Transcript ready · $ttl" "$(model_label "$model") took $(fmt_hms "${elapsed%.*}") — click to open" -- "$SELF" open "$id"
 }
 
 cmd_cancel() {
   local id="${1:-}"; [[ -n "$id" ]] || die "usage: cancel <id>"
+  local was=0; unit_active "omarecorder-tx-$id" && was=1
   systemctl --user stop "omarecorder-tx-$id" 2>/dev/null || true
+  systemctl --user reset-failed "omarecorder-tx-$id" 2>/dev/null || true
   state_set --arg id "$id" '.jobs |= map(select(.id != $id))'
   local dir; dir=$(rec_dir "$id" 2>/dev/null || true); [[ -n "$dir" ]] && rm -f "$dir/transcript.md.tmp"
+  if (( was )); then
+    local ttl; ttl=$(jq -r '.title // empty' "$dir/meta.json" 2>/dev/null); ttl="${ttl:-$id}"
+    notify "Transcription cancelled · $ttl" "The recording is untouched — transcribe it again any time"
+    log "transcribe cancelled $id"
+  fi
   echo "cancelled $id"
 }
 
@@ -588,7 +661,7 @@ omarecorder $VERSION — record, keep, transcribe locally (voxtype)
   record start [--source mic|system|both] [--title T]   start a recording
   record stop | toggle | status [--json]                 control / inspect
   import <file> [--move] [--title T]                     bring an existing audio file in
-  list [--json] | show <id> [--json]                     browse
+  list [--json] | show <id> [--json] | analyze <id>      browse / measure levels
   rename <id> <title> | delete <id> [--yes]              manage (delete → trash)
   transcribe <id> [--model M] [--language L] [--from s --to s]
   cancel <id> | estimate <id> --model M
@@ -611,6 +684,7 @@ main() {
     import) cmd_import "$@" ;;
     list) cmd_list "$@" ;;
     show) cmd_show "$@" ;;
+    analyze) cmd_analyze "$@" ;;
     rename) cmd_rename "$@" ;;
     delete) cmd_delete "$@" ;;
     transcribe) cmd_transcribe "$@" ;;

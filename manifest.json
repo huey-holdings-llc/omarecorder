@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "id": "io.github.coreytyhurst.omarecorder",
   "name": "Omarecorder",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "author": "Corey Tyhurst",
   "license": "MIT",
   "description": "Record conversations and meetings from the Omarchy bar, keep the audio, and transcribe them locally later with voxtype.",
