@@ -1,5 +1,6 @@
 import QtQuick
 import qs.Commons
+import "format.js" as Fmt
 
 // Waveform strip with a playback scrubber; in trim mode two draggable handles
 // pick a range. Pure view: emits seekRequested / rangeChanged, owns no state.
@@ -22,7 +23,7 @@ Item {
   implicitHeight: Style.space(72) + badgeRoom
   readonly property real pxPerSecond: duration > 0 ? width / duration : 0
   function clampT(t) { return Math.max(0, Math.min(duration, t)) }
-  function fmt(s) { s = Math.max(0, Math.floor(s || 0)); var h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), x = s % 60; return (h > 0 ? h + ":" : "") + (m < 10 ? "0" : "") + m + ":" + (x < 10 ? "0" : "") + x }
+  function fmt(s) { return Fmt.fmtClock(s) }
 
   // Room above the strip for the trim badges (they sit outside the clipped area).
   readonly property real badgeRoom: root.trimMode ? Style.space(18) : 0
