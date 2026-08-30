@@ -5,6 +5,10 @@ All notable changes to this project are documented here. Format follows
 
 ## [Unreleased]
 
+### Fixed
+- `show --json` failed with "jq: Argument list too long" on a long transcript
+  (139 KB); the text is now passed to jq as a raw file.
+
 Third persona pass (an efficiency-minded enthusiast): say each fact once.
 
 ### Changed

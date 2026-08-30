@@ -173,12 +173,13 @@ file_size() { stat -c %s "$1" 2>/dev/null || echo 0; }
 
 # rec_json <dir> → meta + dir + derived fields
 rec_json() {
-  local d="$1" has_t=false ttxt=""
+  local d="$1" has_t=false tfile=/dev/null
   [[ -f "$d/transcript.md" ]] && has_t=true
-  [[ "${2:-}" == "--with-text" && -f "$d/transcript.md" ]] && ttxt=$(sed '1{/^<!--/d}' "$d/transcript.md")
-  jq -c --arg dir "$d" --argjson has_t "$has_t" --arg ttxt "$ttxt" \
+  # Text goes in via --rawfile: a long transcript blows past the argv size limit as --arg.
+  [[ "${2:-}" == "--with-text" && -f "$d/transcript.md" ]] && tfile="$d/transcript.md"
+  jq -c --arg dir "$d" --argjson has_t "$has_t" --rawfile ttxt "$tfile" \
     '. + {dir:$dir, audio:($dir+"/audio.wav"), has_transcript:$has_t, transcript_path:(if $has_t then $dir+"/transcript.md" else null end)}
-       + (if $ttxt != "" then {transcript_text:$ttxt} else {} end)' "$d/meta.json"
+       + (if $ttxt != "" then {transcript_text:($ttxt | sub("^<!--[^\n]*-->\n?"; ""))} else {} end)' "$d/meta.json"
 }
 
 resolve_mic() {
