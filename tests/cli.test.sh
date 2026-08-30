@@ -5,7 +5,8 @@
 set -uo pipefail
 HERE="$(cd "$(dirname "$0")" && pwd)"
 CLI="$HERE/../bin/omarecorder"
-TMP="$HERE/tmp/$$"; mkdir -p "$TMP"
+# OMARECORDER_TEST_TMP: put the sandbox elsewhere (CI: under $HOME so `gio trash` has a trash can on the same filesystem)
+TMP="${OMARECORDER_TEST_TMP:-$HERE/tmp}/$$"; mkdir -p "$TMP"
 trap 'rm -rf "$TMP"' EXIT
 
 # Keep PipeWire/Pulse reachable while XDG_RUNTIME_DIR points at the sandbox.
@@ -42,7 +43,7 @@ ffmpeg -v error -y -f lavfi -i "sine=frequency=440:duration=3" -af volume=-12dB 
 ffmpeg -v error -y -f lavfi -i "sine=frequency=440:duration=3" -af volume=20dB -ar 16000 -ac 1 "$TMP/hot.wav"
 ffmpeg -v error -y -f lavfi -i "sine=frequency=440:duration=3" -ar 48000 -ac 2 "$TMP/tone48.wav"
 touch -d "2026-01-02 03:04:05" "$TMP/tone48.wav"
-touch -d "2026-01-03 03:04:05" "$TMP/speech.wav" 2>/dev/null
+[[ -f "$TMP/speech.wav" ]] && touch -d "2026-01-03 03:04:05" "$TMP/speech.wav"
 
 echo "== basics"
 eq "version" "$("$CLI" version)" "$MANIFEST_VERSION"
