@@ -3,6 +3,7 @@ import Quickshell.Io
 import Quickshell.Wayland
 import QtQuick
 import QtQuick.Controls
+import QtMultimedia
 import qs.Commons
 import qs.Ui
 import "ui"
@@ -26,8 +27,16 @@ Item {
   property string selectedId: ""
   property bool deleteConfirmOpen: false
   property string chosenModel: ""
-  property string playingId: ""
   property string transcriptText: ""
+  // playback (in-process, QtMultimedia) and trim mode
+  property bool trimMode: false
+  property real trimFrom: 0
+  property real trimTo: 0
+  property bool trimConfirmOpen: false
+  property bool previewing: false
+  readonly property var player: playerLoader.status === Loader.Ready ? playerLoader.item : null
+  readonly property bool playing: !!(player && player.playbackState === MediaPlayer.PlayingState)
+  readonly property real positionS: player ? player.position / 1000 : 0
 
   property color background: Color.popups.background
   property color foreground: Color.popups.text
@@ -63,7 +72,7 @@ Item {
     if (svc) svc.refresh()
     Qt.callLater(function() { keyCatcher.forceActiveFocus() })
   }
-  function close() { root.deleteConfirmOpen = false; root.opened = false; if (playingId && svc) { svc.stopPlay(); playingId = "" } }
+  function close() { root.deleteConfirmOpen = false; root.trimConfirmOpen = false; root.trimMode = false; root.opened = false; if (player) player.stop() }
   function toggle() { root.opened ? root.close() : root.open("{}") }
 
   function filteredRows() {
@@ -80,7 +89,7 @@ Item {
   }
   function indexOfId(id) { for (var i = 0; i < rows.length; i++) if (rows[i].id === id) return i; return -1 }
   function ensureSelection() { if (selectedIndex < 0 && rows.length > 0) selectedId = rows[0].id }
-  readonly property string hintsText: "↑↓ select   Enter transcribe / open   Space play   F2 rename   Del delete   Esc close"
+  readonly property string hintsText: "↑↓ select   Enter transcribe / open   Space play   ←→ seek   F2 rename   F3 trim   Del delete   Esc close"
   function select(delta) {
     if (rows.length === 0) return
     var i = selectedIndex < 0 ? (delta < 0 ? rows.length - 1 : 0) : (selectedIndex + delta + rows.length) % rows.length
@@ -100,10 +109,31 @@ Item {
     svc.transcribe(selected.id, modelForRun, svc.config.language || "en")
   }
   function cancelSelected() { if (svc && selected && selectedJob) svc.cancel(selected.id) }
+  function audioUrl(rec) { return rec && rec.audio ? "file://" + rec.audio : "" }
+  function loadSelected() { if (player && selected && String(player.source) !== audioUrl(selected)) player.source = audioUrl(selected) }
   function togglePlay() {
-    if (!svc || !selected) return
-    if (playingId === selected.id) { svc.stopPlay(); playingId = "" } else { svc.play(selected.id); playingId = selected.id }
+    if (!player || !selected || selectedLive) return
+    if (playing) { player.pause(); previewing = false } else { loadSelected(); player.play() }
   }
+  function seekTo(seconds) {
+    if (!player || !selected || selectedLive) return
+    loadSelected(); player.position = Math.max(0, Math.round(seconds * 1000))
+  }
+  function startTrim() {
+    if (!selected || selectedLive || selectedJob || !selected.waveform) return
+    trimFrom = 0; trimTo = selected.duration_s || 0; trimMode = true
+  }
+  function previewRange() {
+    if (!player) return
+    if (previewing) { player.pause(); previewing = false; return }
+    seekTo(trimFrom); previewing = true; player.play()
+  }
+  function requestTrim() { if (trimMode && trimTo > trimFrom) { trimConfirm.selectedIndex = 0; trimConfirmOpen = true } }
+  function confirmTrim() {
+    if (svc && selected) { if (player) player.stop(); svc.trim(selected.id, trimFrom.toFixed(2), trimTo.toFixed(2)) }
+    trimConfirmOpen = false; trimMode = false; Qt.callLater(function() { keyCatcher.forceActiveFocus() })
+  }
+  function cancelTrimConfirm() { trimConfirmOpen = false; Qt.callLater(function() { keyCatcher.forceActiveFocus() }) }
   function requestDelete() { if (selected && !selectedLive) { deleteConfirm.selectedIndex = 0; deleteConfirmOpen = true } }
   function confirmDelete() {
     if (svc && selected) { var i = selectedIndex; svc.remove(selected.id); deleteConfirmOpen = false; Qt.callLater(function() { selectAbsolute(Math.max(0, i - 1)) }) }
@@ -114,12 +144,28 @@ Item {
 
   onRowsChanged: ensureSelection()
   onSelectedChanged: {
+    if (player) player.stop()
+    trimMode = false; previewing = false
     if (!selected || !selected.transcript_path) transcriptText = ""
     // Re-transcribe defaults to the model that produced the visible transcript.
     var last = selected && selected.transcript && selected.transcript.model ? selected.transcript.model : ""
     var m = svc && last ? svc.modelByName(last) : null
     chosenModel = m ? last : ""
     picker.value = modelForRun
+  }
+
+  // The audio backend only exists while the Library is open.
+  Loader {
+    id: playerLoader
+    active: root.opened
+    sourceComponent: Component {
+      MediaPlayer {
+        audioOutput: AudioOutput {}
+        onPositionChanged: if (root.previewing && position >= root.trimTo * 1000) { pause(); root.previewing = false }
+        onPlaybackStateChanged: if (playbackState !== MediaPlayer.PlayingState) root.previewing = false
+        onErrorOccurred: function(error, errorString) { if (root.svc) root.svc.lastError = "Playback: " + errorString }
+      }
+    }
   }
 
   FileView {
@@ -164,8 +210,9 @@ Item {
         Keys.priority: Keys.BeforeItem
         Keys.onPressed: function(event) {
           if (root.deleteConfirmOpen) { if (deleteConfirm.handleKey(event)) event.accepted = true; return }
+          if (root.trimConfirmOpen) { if (trimConfirm.handleKey(event)) event.accepted = true; return }
           if (titleField.activeFocus) return
-          if (event.key === Qt.Key_Escape) { if (root.filterText) root.setFilter(""); else root.close(); event.accepted = true }
+          if (event.key === Qt.Key_Escape) { if (root.trimMode) { root.trimMode = false; root.previewing = false } else if (root.filterText) root.setFilter(""); else root.close(); event.accepted = true }
           else if (Util.editsFilter(event, root.filterText)) { root.setFilter(Util.editedFilter(event, root.filterText)); event.accepted = true }
           else if (event.key === Qt.Key_Up) { root.select(-1); event.accepted = true }
           else if (event.key === Qt.Key_Down) { root.select(1); event.accepted = true }
@@ -174,7 +221,10 @@ Item {
           else if (event.key === Qt.Key_Home) { root.selectAbsolute(0); event.accepted = true }
           else if (event.key === Qt.Key_End) { root.selectAbsolute(root.rows.length - 1); event.accepted = true }
           else if (event.key === Qt.Key_Delete) { root.requestDelete(); event.accepted = true }
+          else if (event.key === Qt.Key_Left && !root.filterText) { root.seekTo(root.positionS - 5); event.accepted = true }
+          else if (event.key === Qt.Key_Right && !root.filterText) { root.seekTo(root.positionS + 5); event.accepted = true }
           else if (event.key === Qt.Key_F2) { titleField.forceActiveFocus(); titleField.selectAll(); event.accepted = true }
+          else if (event.key === Qt.Key_F3) { if (root.trimMode) root.trimMode = false; else root.startTrim(); event.accepted = true }
           else if (event.key === Qt.Key_Space) { if (root.filterText) root.setFilter(root.filterText + " "); else root.togglePlay(); event.accepted = true }
           else if (event.key === Qt.Key_Return || event.key === Qt.Key_Enter) {
             if (root.svc && root.selected && root.selected.has_transcript && !(event.modifiers & Qt.ShiftModifier)) root.svc.openTranscript(root.selected.id)
@@ -203,6 +253,24 @@ Item {
           cornerRadius: root.cornerRadius
           onCanceled: root.cancelDelete()
           onConfirmed: root.confirmDelete()
+        }
+
+        ConfirmDialog {
+          id: trimConfirm
+          anchors.fill: parent
+          opened: root.trimConfirmOpen
+          z: 10
+          message: "Keep " + wave.fmt(root.trimFrom) + " – " + wave.fmt(root.trimTo) + " and cut the rest? The original stays as audio.orig.wav."
+          confirmText: "Trim"
+          background: root.background
+          foreground: root.foreground
+          scrim: root.scrim
+          selectedBackground: root.selectedBackground
+          selectedText: root.selectedText
+          fontFamily: root.fontFamily
+          cornerRadius: root.cornerRadius
+          onCanceled: root.cancelTrimConfirm()
+          onConfirmed: root.confirmTrim()
         }
 
         Column {
@@ -344,7 +412,8 @@ Item {
                     + (root.selected.exported_to ? " · in Obsidian" : "")
                     + (root.svc.isClipped(root.selected) ? " · ⚠ clipped" : "")
                     + (root.svc.isPartial(root.selected) ? " · partial transcript" : "")
-                    + (root.playingId === root.selected.id ? " · ▶ playing" : ""))
+                    + (root.selected.trim ? " · trimmed" : "")
+                    + (root.playing ? " · ▶ playing" : ""))
                   : ""
                 textFormat: Text.PlainText
                 color: root.selectedLive ? root.urgent : root.dim
@@ -400,10 +469,29 @@ Item {
                   spacing: Style.spacing.xs
                 PanelActionButton {
                   anchors.verticalCenter: parent.verticalCenter
-                  iconText: root.playingId === (root.selected ? root.selected.id : "") ? "󰓛" : "󰐊"
-                  tooltipText: "Play / stop (Space)"
+                  iconText: root.playing ? "󰏤" : "󰐊"
+                  tooltipText: "Play / pause (Space)"
+                  enabled: !root.selectedLive
+                  opacity: enabled ? 1 : 0.4
                   foreground: root.foreground; fontFamily: root.fontFamily
                   onClicked: root.togglePlay()
+                }
+                PanelActionButton {
+                  anchors.verticalCenter: parent.verticalCenter
+                  iconText: "󰆐"
+                  tooltipText: "Trim (drag the handles on the waveform)"
+                  enabled: !!(root.selected && root.selected.waveform && !root.selectedLive && !root.selectedJob)
+                  opacity: enabled ? 1 : 0.4
+                  foreground: root.trimMode ? Color.accent : root.foreground; fontFamily: root.fontFamily
+                  onClicked: root.trimMode ? (root.trimMode = false) : root.startTrim()
+                }
+                PanelActionButton {
+                  anchors.verticalCenter: parent.verticalCenter
+                  visible: !!(root.selected && root.selected.has_orig)
+                  iconText: "󰕌"
+                  tooltipText: "Restore the untrimmed original"
+                  foreground: root.foreground; fontFamily: root.fontFamily
+                  onClicked: if (root.svc && root.selected) { if (root.player) root.player.stop(); root.svc.restoreTrim(root.selected.id) }
                 }
                 PanelActionButton {
                   anchors.verticalCenter: parent.verticalCenter
@@ -422,6 +510,56 @@ Item {
                   foreground: root.foreground; fontFamily: root.fontFamily
                   onClicked: root.requestDelete()
                 }
+                }
+              }
+
+              Waveform {
+                id: wave
+                visible: !!(root.selected && root.selected.waveform && !root.selectedLive)
+                width: parent.width
+                rec: root.selected
+                position: root.positionS
+                trimMode: root.trimMode
+                trimFrom: root.trimFrom
+                trimTo: root.trimTo
+                foreground: root.foreground
+                fontFamily: root.fontFamily
+                onSeekRequested: function(s) { root.seekTo(s) }
+                onRangeChanged: function(f, t) { root.trimFrom = f; root.trimTo = t }
+              }
+
+              Row {
+                visible: root.trimMode
+                width: parent.width
+                spacing: Style.spacing.sm
+                Text {
+                  anchors.verticalCenter: parent.verticalCenter
+                  text: "Keep " + wave.fmt(root.trimFrom) + " – " + wave.fmt(root.trimTo) + "  ·  drag the handles"
+                  color: root.dim; font.family: root.fontFamily; font.pixelSize: Style.font.caption
+                }
+                Button {
+                  anchors.verticalCenter: parent.verticalCenter
+                  text: root.previewing ? "Stop preview" : "Preview"
+                  iconText: root.previewing ? "󰏤" : "󰐊"
+                  fontSize: Style.font.caption; horizontalPadding: Style.spacing.sm; verticalPadding: Style.spacing.xxs
+                  foreground: root.foreground; fontFamily: root.fontFamily
+                  onClicked: root.previewRange()
+                }
+                Button {
+                  anchors.verticalCenter: parent.verticalCenter
+                  text: "Trim"
+                  iconText: "󰆐"
+                  fontSize: Style.font.caption; horizontalPadding: Style.spacing.sm; verticalPadding: Style.spacing.xxs
+                  foreground: Color.accent; fontFamily: root.fontFamily
+                  enabled: root.trimTo > root.trimFrom + 0.5
+                  onClicked: root.requestTrim()
+                }
+                Button {
+                  anchors.verticalCenter: parent.verticalCenter
+                  text: "Cancel"
+                  fontSize: Style.font.caption; horizontalPadding: Style.spacing.sm; verticalPadding: Style.spacing.xxs
+                  foreground: root.foreground; fontFamily: root.fontFamily
+                  onClicked: { root.trimMode = false; root.previewing = false }
                 }
               }
 

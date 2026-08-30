@@ -530,6 +530,9 @@ cmd_list() {
   local arr='[]' d
   while IFS= read -r d; do
     [[ -f "$d/meta.json" ]] || continue
+    # Recordings made before 1.0 have no waveform yet: draw it once, here, so the
+    # Library can scrub and trim them too (≈0.1 s per file, never repeated).
+    [[ -f "$d/waveform.png" || ! -s "$d/audio.wav" ]] || make_waveform "$d"
     arr=$(jq -c --argjson r "$(rec_json "$d")" '. + [$r]' <<<"$arr")
   done < <(find "$ROOT" -mindepth 1 -maxdepth 1 -type d -name '????-??-??_??????*' | sort -r)
   if [[ "${1:-}" == "--json" ]]; then jq . <<<"$arr"; return 0; fi
@@ -540,7 +543,7 @@ cmd_list() {
 
 cmd_analyze() { # analyze <id>: (re)measure levels for an existing recording
   local id="${1:-}"; [[ -n "$id" ]] || die "usage: analyze <id>"
-  local dir; dir=$(require_dir "$id"); analyze_levels "$dir"; bump_state
+  local dir; dir=$(require_dir "$id"); analyze_levels "$dir"; make_waveform "$dir"; bump_state
   jq -c '.levels // {}' "$dir/meta.json"
 }
 

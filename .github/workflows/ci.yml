@@ -1,0 +1,24 @@
+name: ci
+on:
+  push:
+    branches: [main, "release/**"]
+  pull_request:
+
+jobs:
+  lint-and-test:
+    runs-on: ubuntu-latest
+    container: archlinux:latest
+    steps:
+      - name: Install tools (what an Omarchy install already has)
+        run: pacman -Sy --noconfirm --needed git jq ffmpeg shellcheck glib2 perl
+      - uses: actions/checkout@v4
+      - name: Static checks
+        run: bash tests/lint.sh
+      - name: CLI tests (no microphone, no voxtype, no systemd here — those blocks skip)
+        env:
+          OMARECORDER_TEST_ALLOW_SKIP: "1"
+          XDG_RUNTIME_DIR: /tmp/xdg-runtime-ci
+        run: |
+          mkdir -m 700 -p "$XDG_RUNTIME_DIR"
+          git config --global --add safe.directory "$PWD"
+          bash tests/cli.test.sh
