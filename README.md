@@ -51,13 +51,21 @@ Local first is the rule, not a feature. Everything in 1.0 runs on your machine:
   outside a recording folder, never `rm -rf`s a recording without
   `--permanent`, runs no daemon, polls nothing, and uploads nothing.
 
-**About AI features.** Future versions may offer to clean up or summarize a
-transcript. That will work only through the agent you have already chosen with
-`omarchy default agent` (Claude Code, Codex, Gemini and so on), driven by
-`omarchy agent prompt`: no extra API key, no login, no new package, nothing to
-configure twice. It will be opt-in and off by default, and the moment you use it
-your transcript leaves the machine through that agent's provider. The UI will
-say so at the point of use, every time. If you never turn it on, nothing changes.
+**Local only, by design.** Omarecorder does everything with tools that ship
+with Omarchy and sends nothing anywhere. That includes the transcript
+clean-up: the Tidy pass that breaks the text into paragraphs and removes
+repeated passages is a deterministic script, not a language model. This
+plugin will not call an AI service, hosted or otherwise, and no such feature
+is planned for it.
+
+The author does use AI to polish transcripts further, but does so inside the
+Obsidian vault after Send to Obsidian, with the tools of his choosing. That
+step is a personal workflow outside this plugin, and it stays outside so that
+the plugin's privacy statement remains simple and true.
+
+Should there be real demand for AI-assisted clean-up, the author is open to
+revisiting this decision, most likely as a separate, clearly labelled edition
+rather than a change to this one. Open an issue if that matters to you.
 
 ## Prior art and thanks
 
@@ -192,6 +200,15 @@ are left untouched.
   and the transcript grows as pieces finish. Cancel keeps the finished pieces
   and marks the transcript partial. Transcribing again keeps the old text as
   `transcript.prev.md`.
+* **Tidy**: every transcript also gets a `transcript.tidy.md`: the same words
+  laid out in paragraphs at sentence ends and at the piece boundaries of a long
+  take, with passages that whisper repeated back to back collapsed to one copy
+  (a 2 h 35 m session lost 4,200 words of loops this way, one phrase 208
+  times). It is a deterministic script, local, and it never touches the raw
+  file. The Library shows the tidy version and a Raw / Tidy button switches;
+  `copy` and Send to Obsidian use whichever is showing (`--raw` on the CLI).
+  `omarecorder tidy <id>` rebuilds it; older transcripts get one the first time
+  the Library lists them.
 * **Play and trim**: the waveform strip in the Library is a scrubber. Click to
   seek, `Space` to play or pause. Playback runs in-process (QtMultimedia, loaded
   only while the Library is open); `omarecorder play` uses mpv instead. The
@@ -244,7 +261,8 @@ stay in the folder, so a bad mix can be redone by hand with ffmpeg.
     ├── audio.orig.wav                  only after a trim (unless --replace)
     ├── waveform.png                    800x64 strip, redrawn on stop, import, trim and analyze
     ├── meta.json                       title, source, duration, levels, transcript, trim, exported_to
-    ├── transcript.md                   header line + plain text (voxtype gives no timestamps)
+    ├── transcript.md                   header line + plain text, exactly as whisper wrote it
+    ├── transcript.tidy.md              paragraphs, repeated passages removed (what the Library shows)
     ├── transcript.prev.md              the previous transcript, kept when you transcribe again
     └── mic.wav + system.wav            only for "both"; kept, audio.wav is the mix
 ```
@@ -286,8 +304,9 @@ omarecorder import <file> [--move] [--title T]                     bring an exis
 omarecorder list [--json] | show <id> [--json] | analyze <id>      browse / measure levels
 omarecorder rename <id> <title> | delete <id> [--yes] [--permanent] manage (delete moves to the trash)
 omarecorder trim <id> --from s --to s [--replace] | trim <id> --restore  cut the audio (first original kept)
-omarecorder copy <id> [--print]                                    transcript text to the clipboard
-omarecorder export <id> [--vault P | --dir P] [--no-open]           transcript to an Obsidian note
+omarecorder copy <id> [--raw] [--print]                            transcript text to the clipboard
+omarecorder tidy <id>                                              rebuild transcript.tidy.md (paragraphs, loops removed)
+omarecorder export <id> [--vault P | --dir P] [--no-open] [--raw]   transcript to an Obsidian note
 omarecorder vaults [--json]                                        Obsidian vaults on this machine (* = open)
 omarecorder transcribe <id> [--model M] [--language L] [--from s --to s]
 omarecorder cancel <id> | estimate <id> --model M
@@ -364,6 +383,12 @@ voxtype's `transcribe` returns plain text. Timestamps and speaker attribution
 would need another engine, and the project does not add packages Omarchy does
 not ship. If Omarchy ever ships one, it is on the roadmap.
 
+**Will it ever use AI to clean up or summarize a transcript?**
+Not this plugin. It is local only, by design, and stays that way; see "Local
+only, by design" under Privacy and security for the reasoning and what the
+author does instead. The Tidy pass (paragraphs, repeated passages removed) is
+a plain script and runs on every transcript.
+
 **Does it need Obsidian?**
 No. Without a vault the note lands next to the recording. Everything else works
 the same.
@@ -414,9 +439,6 @@ Design specs: `docs/superpowers/specs/2026-08-29-omarecorder-design.md` and
 
 1.x, in no particular order and with no dates:
 
-* Opt-in clean-up and summary of a transcript through the agent you already
-  chose with `omarchy default agent`. Off by default; see "About AI features"
-  under Privacy and security.
 * Speaker attribution and per-track transcripts for "both", only if Omarchy
   ships an engine for it. No new packages is a rule.
 * A graphical import picker once the Quickshell FileDialog crash is fixed upstream.

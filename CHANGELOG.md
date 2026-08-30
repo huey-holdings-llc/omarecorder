@@ -36,7 +36,13 @@ against the code.
   `obsidian://`. `omarecorder vaults` lists vaults; Settings gets a vault picker;
   config `obsidianVault` / `exportDir`; without Obsidian the note lands next to
   the recording.
-- **Import from the popup** (`i`): a path field → `omarecorder import`.
+- **Tidy transcripts.** Every transcription also writes `transcript.tidy.md`:
+  paragraphs at sentence ends and piece boundaries, and phrases whisper repeated
+  back to back collapsed to one copy (a deterministic awk script, local, raw file
+  untouched). The Library shows it by default with a Raw / Tidy switch; `copy` and
+  `export` use it unless `--raw`; `omarecorder tidy <id>` rebuilds it; older
+  transcripts get one on the next listing.
+- **Import from the popup** (`i`): a path field that runs `omarecorder import`.
 - `omarecorder copy <id>` (transcript → clipboard), `delete --permanent`,
   `import` accepts `~`, `setup check --json` reports `tools[]` / `missing[]` with
   the package for each tool; the Setup card lists them.
