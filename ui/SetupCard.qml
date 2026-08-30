@@ -26,6 +26,7 @@ Column {
       required property var modelData
       width: root.width
       text: "• " + modelData
+      textFormat: Text.PlainText
       color: root.foreground
       font.family: root.fontFamily
       font.pixelSize: Style.font.caption
@@ -69,8 +70,12 @@ Column {
     var s = root.setup, out = []
     if (!s || s.ok !== false) return out
     if (!s.voxtype) out.push("voxtype is not installed — run: omarchy install dictation")
-    if (!s.ffmpeg) out.push("ffmpeg is missing")
-    if (!s.pw_record) out.push("pw-record is missing (pipewire)")
+    // Every tool the CLI could not find, with the package that provides it.
+    var miss = s.missing || []
+    for (var i = 0; i < miss.length; i++) {
+      if (miss[i].tool === "voxtype") continue   // covered above with the Omarchy command
+      out.push(miss[i].tool + " is missing — pacman -S " + miss[i].package + (miss[i].required ? "" : " (only needed for " + miss[i]["for"] + ")"))
+    }
     if (!s.mic_ok) out.push("No microphone found — plug one in or pick 'system' as the source")
     if (!s.recordingsDir_ok) out.push("Cannot write to " + s.recordingsDir)
     if (s.voxtype && s.defaultModel_ok === false) out.push("Model " + s.defaultModel + " is not downloaded yet")
