@@ -1,6 +1,7 @@
 import QtQuick
 import Quickshell
 import Quickshell.Io
+import "ui/format.js" as Fmt
 
 // Omarecorder service — the single source of truth for the plugin's UI.
 // Mounted once by the shell (kind "service", keepLoaded); Panel/Library
@@ -36,7 +37,6 @@ QtObject {
   property var level: null            // {peak_db, clip, t} while recording (watched file)
   readonly property bool clipping: !!(level && level.clip)
   readonly property real peakDb: level && typeof level.peak_db === "number" ? level.peak_db : -99
-  property bool listBusy: false
   property int elapsed: 0
   property int now: Math.floor(Date.now() / 1000)   // ticks once a second while anything runs
 
@@ -60,29 +60,14 @@ QtObject {
   readonly property string defaultModel: config && config.defaultModel ? config.defaultModel : "base.en"
   readonly property string defaultSource: config && config.defaultSource ? config.defaultSource : "mic"
 
-  function fmtHms(s) {
-    s = Math.max(0, Math.floor(s || 0))
-    var h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), x = s % 60
-    return (h < 10 ? "0" : "") + h + ":" + (m < 10 ? "0" : "") + m + ":" + (x < 10 ? "0" : "") + x
-  }
-  function fmtDuration(s) { // compact: 1h 02m / 12m 05s / 45s
-    s = Math.max(0, Math.floor(s || 0))
-    var h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), x = s % 60
-    if (h > 0) return h + "h " + (m < 10 ? "0" : "") + m + "m"
-    if (m > 0) return m + "m " + (x < 10 ? "0" : "") + x + "s"
-    return x + "s"
-  }
-  function fmtDate(iso) { // "2026-08-29T19:27:42-0400" → "Aug 29, 19:27"
-    if (!iso) return ""
-    var d = new Date(String(iso).replace(/([+-]\d\d)(\d\d)$/, "$1:$2"))
-    if (isNaN(d.getTime())) return String(iso).slice(0, 16).replace("T", " ")
-    return Qt.formatDateTime(d, "MMM d, HH:mm")
-  }
+  function fmtHms(s) { return Fmt.fmtHms(s) }
+  function fmtDuration(s) { return Fmt.fmtDuration(s) }
+  function fmtDate(iso) { return Fmt.fmtDate(iso) }
   // Untitled recordings show a friendly name instead of the raw folder id.
   function displayTitle(rec) { if (!rec) return ""; return rec.title ? rec.title : "Recording · " + fmtDate(rec.created) }
   function sourceLabel(src) { return src === "mic" ? "microphone" : src === "system" ? "system audio" : src === "both" ? "mic + system audio" : src === "import" ? "imported" : (src || "") }
   function isClipped(rec) { return !!(rec && rec.levels && rec.levels.clipped) }
-  function fmtBytes(b) { b = b || 0; if (b > 1e9) return (b / 1e9).toFixed(1) + " GB"; if (b > 1e6) return Math.round(b / 1e6) + " MB"; return Math.round(b / 1e3) + " KB" }
+  function fmtBytes(b) { return Fmt.fmtBytes(b) }
 
   function jobFor(id) { for (var i = 0; i < jobs.length; i++) if (jobs[i].type === "transcribe" && jobs[i].id === id) return jobs[i]; return null }
   function downloadFor(model) { for (var i = 0; i < jobs.length; i++) if (jobs[i].type === "download" && jobs[i].model === model) return jobs[i]; return null }
@@ -95,7 +80,7 @@ QtObject {
 
   // ---- loaders ----
   function refresh() { refreshList(); refreshModels(); refreshConfig(); refreshSetup(); refreshVaults() }
-  function refreshList() { if (!listProc.running) { listBusy = true; listProc.running = true } }
+  function refreshList() { if (!listProc.running) listProc.running = true }
   function refreshModels() { if (!modelsProc.running) modelsProc.running = true }
   function refreshVaults() { if (!vaultsProc.running) vaultsProc.running = true }
   function refreshConfig() { if (!configProc.running) configProc.running = true }
@@ -137,8 +122,6 @@ QtObject {
   function importFile(path) { run(["import", path], function(code) { if (code === 0) root.refreshList() }) }
   function trim(id, from, to) { run(["trim", id, "--from", String(from), "--to", String(to)]) }
   function restoreTrim(id) { run(["trim", id, "--restore"]) }
-  function play(id) { run(["play", id]) }
-  function stopPlay() { run(["stop-play"]) }
   function openTranscript(id) { Quickshell.execDetached([cli, "open", id]) }
   function openFolder(id) { Quickshell.execDetached([cli, "folder", id]) }
   // The CLI does the copy (argv only — no shell string is ever built from a title).
@@ -196,7 +179,6 @@ QtObject {
     command: [root.cli, "list", "--json"]
     stdout: StdioCollector { id: listOut; waitForEnd: true }
     onExited: function(code) {
-      root.listBusy = false
       if (code === 0) { try { root.recordings = JSON.parse(listOut.text) } catch (e) { root.recordings = [] } }
     }
   }
