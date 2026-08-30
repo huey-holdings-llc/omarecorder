@@ -151,7 +151,7 @@ the "session library" shape.
 
 ## Roadmap
 
-* v0.2 — trim (start/end with preview), waveform strip, playback scrubber, import from the popup, marketplace listing
+* v0.2 — live input level meter with clip indicator, trim (start/end with preview), waveform strip, playback scrubber, import from the popup, marketplace listing
 * v0.3 — optional `whisper-cpp` engine for timestamps (click-to-seek, SRT), speaker attribution, per-track transcripts for "both"
 
 ## License
