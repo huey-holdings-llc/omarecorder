@@ -15,11 +15,11 @@ Flickable {
   contentHeight: body.implicitHeight + Style.spacing.md
   boundsBehavior: Flickable.StopAtBounds
   flickableDirection: Flickable.VerticalFlick
-  ScrollBar.vertical: ScrollBar { policy: ScrollBar.AsNeeded }
+  ScrollBar.vertical: ThinScrollBar { id: bar; foreground: root.foreground }
 
   TextEdit {
     id: body
-    width: root.width - Style.spacing.sm
+    width: root.width - bar.width - Style.spacing.sm   // text never runs under the bar
     text: root.text
     readOnly: true
     selectByMouse: true

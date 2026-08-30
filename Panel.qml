@@ -139,11 +139,11 @@ Panel {
         boundsBehavior: Flickable.StopAtBounds
         flickableDirection: Flickable.VerticalFlick
         interactive: contentHeight > height
-        ScrollBar.vertical: ScrollBar { policy: ScrollBar.AsNeeded }
+        ScrollBar.vertical: ThinScrollBar { id: panelBar; foreground: root.foreground }
 
         Column {
           id: column
-          width: panelFlick.width
+          width: panelFlick.width - (panelFlick.contentHeight > panelFlick.height ? panelBar.width + Style.spacing.xs : 0)
           spacing: Style.spacing.md
 
           PanelHero {
