@@ -20,19 +20,34 @@ Item {
   readonly property bool currentInstalled: !!(current && current.installed)
   readonly property var download: svc && current ? svc.downloadFor(current.name) : null
 
-  implicitWidth: parent ? parent.width : Style.space(300)
+  // Wide enough for the longest option, no wider.
+  implicitWidth: Math.ceil(metrics.width) + Style.space(52)
   implicitHeight: dropdown.implicitHeight
+
+  TextMetrics {
+    id: metrics
+    font.family: root.fontFamily
+    font.pixelSize: Style.font.body
+    text: {
+      var longest = ""
+      var opts = root.buildOptions()
+      for (var i = 0; i < opts.length; i++) if (opts[i].label.length > longest.length) longest = opts[i].label
+      return longest
+    }
+  }
 
   function findModel(name) { for (var i = 0; i < models.length; i++) if (models[i].name === name) return models[i]; return null }
   function estimateText(m) {
     if (!m || !durationS) return ""
     var s = Math.ceil(durationS / (m.rtf || 3))
-    return "≈ " + (svc ? svc.fmtDuration(s) : s + "s") + (m.rtf_source === "measured" ? "" : " (est.)")
+    return "≈ " + (svc ? svc.fmtDuration(s) : s + "s")
   }
+  // "Accurate · large-v3-turbo · ≈ 52m"  /  "Balanced · small.en · 466 MB download"
   function optionLabel(m) {
-    var head = m.label ? m.label + " · " + m.name : m.name
-    var tail = m.installed ? estimateText(m) : "download " + m.size_mb + " MB"
-    return head + (tail ? "  —  " + tail : "")
+    var parts = [m.label || m.name]
+    if (m.label) parts.push(m.name)
+    parts.push(m.installed ? estimateText(m) : m.size_mb + " MB download")
+    return parts.filter(function(x) { return x }).join(" · ")
   }
   function buildOptions() {
     var presets = [], more = []
@@ -47,7 +62,6 @@ Item {
   Dropdown {
     id: dropdown
     width: parent.width
-    label: "Model"
     value: root.value
     options: root.buildOptions()
     foreground: root.foreground

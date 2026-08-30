@@ -43,7 +43,7 @@ Item {
   property int contentMargin: Style.spacing.panelPadding
   property int cardWidth: Math.min(Style.space(1000), panel.width - Style.gapsOut * 2)
   property int cardHeight: Math.min(Style.space(660), panel.height - Style.gapsOut * 2)
-  property int listWidth: Style.space(360)
+  property int listWidth: Style.space(300)
 
   readonly property var rows: filteredRows()
   readonly property int selectedIndex: indexOfId(selectedId)
@@ -355,9 +355,8 @@ Item {
                 spacing: Style.spacing.sm
                 ModelPicker {
                   id: picker
-                  // Take whatever the main button and the icon actions leave over,
-                  // so a longer label ("Transcribe again") never pushes actions off-card.
-                  width: Math.max(Style.space(200), parent.width - mainButton.width - iconActions.width - parent.spacing * 2)
+                  // Sized to its longest label; the main button and icon actions follow.
+                  width: Math.min(picker.implicitWidth, parent.width - mainButton.width - iconActions.width - parent.spacing * 2)
                   anchors.verticalCenter: parent.verticalCenter
                   svc: root.svc
                   durationS: root.selected ? root.selected.duration_s : 0
@@ -371,7 +370,7 @@ Item {
                   anchors.verticalCenter: parent.verticalCenter
                   visible: !root.selectedLive
                   text: root.selectedJob ? "Cancel"
-                    : (picker.currentInstalled ? (root.selected && root.selected.has_transcript ? "Transcribe again" : "Transcribe")
+                    : (picker.currentInstalled ? (root.selected && root.selected.has_transcript ? "Re-transcribe" : "Transcribe")
                                                : (picker.download ? "Downloading…" : "Download model"))
                   iconText: root.selectedJob ? "󰅖" : (picker.currentInstalled ? "󰗊" : "󰇚")
                   active: !!root.selectedJob
