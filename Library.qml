@@ -89,7 +89,9 @@ Item {
   }
   function indexOfId(id) { for (var i = 0; i < rows.length; i++) if (rows[i].id === id) return i; return -1 }
   function ensureSelection() { if (selectedIndex < 0 && rows.length > 0) selectedId = rows[0].id }
-  readonly property string hintsText: "↑↓ select   Enter transcribe / open   Space play   ←→ seek   F2 rename   F3 trim   Del delete   Esc close"
+  readonly property string hintsText: root.trimMode
+    ? "Space play   ←→ seek   [ ] mark start / end at the playhead   Esc leave trim mode"
+    : "↑↓ select   Enter transcribe / open   Space play   ←→ seek   F2 rename   F3 trim   Del delete   Esc close"
   function select(delta) {
     if (rows.length === 0) return
     var i = selectedIndex < 0 ? (delta < 0 ? rows.length - 1 : 0) : (selectedIndex + delta + rows.length) % rows.length
@@ -128,6 +130,9 @@ Item {
     if (previewing) { player.pause(); previewing = false; return }
     seekTo(trimFrom); previewing = true; player.play()
   }
+  // [ and ] in trim mode: put the start / end where the playhead is.
+  function markStart() { if (positionS < trimTo - 0.5) trimFrom = positionS }
+  function markEnd() { if (positionS > trimFrom + 0.5) trimTo = positionS }
   function requestTrim() { if (trimMode && trimTo > trimFrom) { trimConfirm.selectedIndex = 0; trimConfirmOpen = true } }
   function confirmTrim() {
     if (svc && selected) { if (player) player.stop(); svc.trim(selected.id, trimFrom.toFixed(2), trimTo.toFixed(2)) }
@@ -205,7 +210,12 @@ Item {
 
       Item {
         id: keyCatcher
+        // BorderSurface.padding is advisory: content insets itself.
         anchors.fill: parent
+        anchors.topMargin: card.contentTopInset
+        anchors.bottomMargin: card.contentBottomInset
+        anchors.leftMargin: card.contentLeftInset
+        anchors.rightMargin: card.contentRightInset
         focus: true
         Keys.priority: Keys.BeforeItem
         Keys.onPressed: function(event) {
@@ -225,6 +235,8 @@ Item {
           else if (event.key === Qt.Key_Right && !root.filterText) { root.seekTo(root.positionS + 5); event.accepted = true }
           else if (event.key === Qt.Key_F2) { titleField.forceActiveFocus(); titleField.selectAll(); event.accepted = true }
           else if (event.key === Qt.Key_F3) { if (root.trimMode) root.trimMode = false; else root.startTrim(); event.accepted = true }
+          else if (root.trimMode && event.key === Qt.Key_BracketLeft) { root.markStart(); event.accepted = true }
+          else if (root.trimMode && event.key === Qt.Key_BracketRight) { root.markEnd(); event.accepted = true }
           else if (event.key === Qt.Key_Space) { if (root.filterText) root.setFilter(root.filterText + " "); else root.togglePlay(); event.accepted = true }
           else if (event.key === Qt.Key_Return || event.key === Qt.Key_Enter) {
             if (root.svc && root.selected && root.selected.has_transcript && !(event.modifiers & Qt.ShiftModifier)) root.svc.openTranscript(root.selected.id)
@@ -534,10 +546,13 @@ Item {
                 spacing: Style.spacing.sm
                 Text {
                   anchors.verticalCenter: parent.verticalCenter
-                  text: "Keep " + wave.fmt(root.trimFrom) + " – " + wave.fmt(root.trimTo) + "  ·  drag the handles"
+                  width: parent.width - previewButton.width - trimButton.width - cancelButton.width - parent.spacing * 3
+                  text: "Keep " + wave.fmt(root.trimFrom) + " – " + wave.fmt(root.trimTo) + "  ·  drag the handles, or play and press [ ] at the playhead"
+                  elide: Text.ElideRight
                   color: root.dim; font.family: root.fontFamily; font.pixelSize: Style.font.caption
                 }
                 Button {
+                  id: previewButton
                   anchors.verticalCenter: parent.verticalCenter
                   text: root.previewing ? "Stop preview" : "Preview"
                   iconText: root.previewing ? "󰏤" : "󰐊"
@@ -546,6 +561,7 @@ Item {
                   onClicked: root.previewRange()
                 }
                 Button {
+                  id: trimButton
                   anchors.verticalCenter: parent.verticalCenter
                   text: "Trim"
                   iconText: "󰆐"
@@ -555,6 +571,7 @@ Item {
                   onClicked: root.requestTrim()
                 }
                 Button {
+                  id: cancelButton
                   anchors.verticalCenter: parent.verticalCenter
                   text: "Cancel"
                   fontSize: Style.font.caption; horizontalPadding: Style.spacing.sm; verticalPadding: Style.spacing.xxs

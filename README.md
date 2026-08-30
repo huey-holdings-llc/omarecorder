@@ -88,7 +88,7 @@ Your recordings in `~/Recordings` and `~/.config/omarecorder` are left untouched
   running `HH:MM:SS` — replaced by **CLIP** while the input is on the rails.
   An hourglass means a transcription is running.
 * **Popup keys** — `r` record/stop · `l` library · `i` import · `s` settings · `↑↓` `Enter` on recent rows · `Esc`.
-* **Library keys** — type to search · `↑↓` `PgUp` `PgDn` `Home` `End` select · `Enter` open the transcript (or transcribe; `Shift+Enter` re-transcribes) · `Space` play/pause · `←` `→` ±5 s (with an empty search box) · `F2` rename · `F3` trim · `Del` move to trash (confirmed, defaults to Cancel) · `Esc` leaves trim mode, clears the search, then closes.
+* **Library keys** — type to search · `↑↓` `PgUp` `PgDn` `Home` `End` select · `Enter` open the transcript (or transcribe; `Shift+Enter` re-transcribes) · `Space` play/pause · `←` `→` ±5 s (with an empty search box) · `F2` rename · `F3` trim (then `[` `]` mark start / end at the playhead) · `Del` move to trash (confirmed, defaults to Cancel) · `Esc` leaves trim mode, clears the search, then closes.
 * **Notifications** — "Recording saved · 00:24:36" is clickable: it transcribes
   with your default model. "Transcript ready" is clickable: it opens the text.
   A take whose recorder died (power loss, shell killed) is repaired and
@@ -113,7 +113,8 @@ Your recordings in `~/Recordings` and `~/.config/omarecorder` are left untouched
 * **Play and trim** — the waveform strip in the Library is a scrubber: click to
   seek, `Space` to play/pause. Playback is in-process (QtMultimedia, loaded
   only while the Library is open); `omarecorder play` uses mpv instead. The
-  scissors button (or `F3`) enters trim mode with two drag handles; **Preview**
+  scissors button (or `F3`) enters trim mode: two drag handles with start/end
+  badges, or play and press `[` / `]` to mark the range at the playhead; **Preview**
   plays the range, **Trim** asks once ("Keep 00:12 – 24:36 and cut the rest?")
   and cuts losslessly (`-c copy`). The first original is kept as
   `audio.orig.wav`; a restore button appears while it exists. The meta line
