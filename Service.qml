@@ -67,7 +67,9 @@ QtObject {
   }
   // Untitled recordings show a friendly name instead of the raw folder id.
   function displayTitle(rec) { if (!rec) return ""; return rec.title ? rec.title : "Recording · " + fmtDate(rec.created) }
-  function sourceLabel(src) { return src === "mic" ? "microphone" : src === "system" ? "system audio" : src === "both" ? "microphone + system" : (src || "") }
+  function sourceLabel(src) { return src === "mic" ? "microphone" : src === "system" ? "system audio" : src === "both" ? "microphone + system" : src === "import" ? "imported" : (src || "") }
+  // The plain microphone is the default and says nothing; only other sources are worth a word.
+  function sourceNote(src) { return src && src !== "mic" ? " · " + sourceLabel(src) : "" }
   function isClipped(rec) { return !!(rec && rec.levels && rec.levels.clipped) }
   function fmtBytes(b) { b = b || 0; if (b > 1e9) return (b / 1e9).toFixed(1) + " GB"; if (b > 1e6) return Math.round(b / 1e6) + " MB"; return Math.round(b / 1e3) + " KB" }
 
