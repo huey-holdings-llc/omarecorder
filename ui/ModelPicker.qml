@@ -37,9 +37,8 @@ Item {
 
   function findModel(name) { for (var i = 0; i < models.length; i++) if (models[i].name === name) return models[i]; return null }
   function estimateText(m) {
-    if (!m || !durationS) return ""
-    var s = Math.ceil(durationS / (m.rtf || 3))
-    return "≈ " + (svc ? svc.fmtDuration(s) : s + "s")
+    if (!m || !durationS || !svc) return ""
+    return "≈ " + svc.fmtDuration(svc.estimateSeconds(durationS, m.name))
   }
   // "Accurate · large-v3-turbo · ≈ 52m"  /  "Balanced · small.en · 466 MB download"
   function optionLabel(m) {
