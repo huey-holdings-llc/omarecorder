@@ -1,0 +1,633 @@
+#!/usr/bin/env bash
+# omarecorder — record conversations and meetings, keep the audio, transcribe
+# them locally later with voxtype. This CLI is the only place logic lives; the
+# Omarchy shell plugin (Panel.qml / Library.qml / Service.qml) is a thin view
+# over it and reacts to $XDG_RUNTIME_DIR/omarecorder/state.json.
+#
+# Usage: omarecorder <command> [args]   (run `omarecorder help` for the list)
+set -euo pipefail
+
+VERSION="0.1.0"
+PLUGIN_ID="io.github.coreytyhurst.omarecorder"
+SELF="$(readlink -f "$0")"
+
+# ---------------------------------------------------------------- paths -----
+XDG_CONFIG_HOME="${XDG_CONFIG_HOME:-$HOME/.config}"
+XDG_STATE_HOME="${XDG_STATE_HOME:-$HOME/.local/state}"
+XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/tmp}"
+CONFIG_DIR="$XDG_CONFIG_HOME/omarecorder"
+CONFIG_FILE="$CONFIG_DIR/config.json"
+STATE_DIR="$XDG_STATE_HOME/omarecorder"
+BENCH_FILE="$STATE_DIR/bench.json"
+LOG_FILE="$STATE_DIR/omarecorder.log"
+RUN_DIR="$XDG_RUNTIME_DIR/omarecorder"
+STATE_FILE="$RUN_DIR/state.json"
+PLAY_PID_FILE="$RUN_DIR/play.pid"
+VOXTYPE_MODELS_DIR="${VOXTYPE_MODELS_DIR:-$HOME/.local/share/voxtype/models}"
+
+RATE=16000
+
+# Whisper model catalog voxtype can download. size_mb from ggml file sizes;
+# rtf = default realtime factor (audio seconds per wall second), replaced by
+# measured values in bench.json after the first run on this machine.
+MODEL_CATALOG='[
+  {"name":"tiny.en","size_mb":75,"rtf":20,"label":""},
+  {"name":"tiny","size_mb":75,"rtf":20,"label":""},
+  {"name":"base.en","size_mb":142,"rtf":10,"label":"Fast"},
+  {"name":"base","size_mb":142,"rtf":10,"label":""},
+  {"name":"small.en","size_mb":466,"rtf":4,"label":"Balanced"},
+  {"name":"small","size_mb":466,"rtf":4,"label":""},
+  {"name":"medium.en","size_mb":1500,"rtf":1.5,"label":""},
+  {"name":"medium","size_mb":1500,"rtf":1.5,"label":""},
+  {"name":"large-v3-turbo","size_mb":1600,"rtf":3,"label":"Accurate"},
+  {"name":"large-v3","size_mb":3100,"rtf":1,"label":""}
+]'
+
+# -------------------------------------------------------------- helpers -----
+die() { echo "omarecorder: $*" >&2; exit 1; }
+log() { mkdir -p "$STATE_DIR"; printf '%s %s\n' "$(date +%FT%T)" "$*" >> "$LOG_FILE"; }
+have() { command -v "$1" >/dev/null 2>&1; }
+now_iso() { date +%FT%T%z; }
+now_epoch() { date +%s; }
+
+notify() { # notify <headline> [description] [-- exec args...]
+  [[ "${OMARECORDER_QUIET:-0}" == "1" ]] && return 0
+  local head="$1" desc="${2:-}"; shift; [[ $# -gt 0 ]] && shift
+  local -a extra=()
+  if [[ "${1:-}" == "--" ]]; then shift; extra=(--exec "$@"); fi
+  if have omarchy-notification-send; then
+    omarchy-notification-send --app-name Omarecorder -g "󰑊" -t 8000 "$head" "$desc" "${extra[@]}" 2>/dev/null || true
+  elif have notify-send; then
+    notify-send -a Omarecorder -t 8000 "$head" "$desc" 2>/dev/null || true
+  fi
+}
+
+fmt_hms() { local s=${1%.*}; s=${s:-0}; printf '%02d:%02d:%02d' $((s / 3600)) $((s % 3600 / 60)) $((s % 60)); }
+
+# Atomic JSON write: write_json <file> <json>
+write_json() { mkdir -p "$(dirname "$1")"; printf '%s\n' "$2" > "$1.tmp.$$"; mv -f "$1.tmp.$$" "$1"; }
+
+# ---------------------------------------------------------------- config ----
+CONFIG_DEFAULTS=$(jq -cn --arg dir "${OMARECORDER_DIR:-$HOME/Recordings}" '{
+  recordingsDir: $dir, defaultSource: "mic", defaultModel: "base.en",
+  language: "en", keepAwake: true, threads: 0 }')
+
+load_config() {
+  local file='{}'
+  [[ -f "$CONFIG_FILE" ]] && file=$(jq -c . "$CONFIG_FILE" 2>/dev/null || echo '{}')
+  CONFIG=$(jq -cn --argjson d "$CONFIG_DEFAULTS" --argjson f "$file" '$d + $f')
+  # OMARECORDER_DIR env always wins (tests, one-off runs)
+  if [[ -n "${OMARECORDER_DIR:-}" ]]; then
+    CONFIG=$(jq -c --arg dir "$OMARECORDER_DIR" '.recordingsDir = $dir' <<<"$CONFIG")
+  fi
+  ROOT=$(jq -r '.recordingsDir' <<<"$CONFIG"); ROOT="${ROOT/#\~/$HOME}"
+}
+cfg() { jq -r --arg k "$1" '.[$k]' <<<"$CONFIG"; }
+
+cmd_config() {
+  local sub="${1:-get}"; shift || true
+  case "$sub" in
+    get)
+      if [[ "${1:-}" == "--json" || -z "${1:-}" ]]; then jq . <<<"$CONFIG"; else cfg "$1"; fi ;;
+    set)
+      local key="${1:-}" val="${2:-}"; [[ -n "$key" && -n "$val" ]] || die "usage: config set <key> <value>"
+      case "$key" in
+        recordingsDir|defaultModel|language) ;;
+        defaultSource) [[ "$val" =~ ^(mic|system|both)$ ]] || die "defaultSource must be mic|system|both" ;;
+        keepAwake) [[ "$val" =~ ^(true|false)$ ]] || die "keepAwake must be true|false" ;;
+        threads) [[ "$val" =~ ^[0-9]+$ ]] || die "threads must be an integer" ;;
+        *) die "unknown config key: $key" ;;
+      esac
+      local cur='{}'; [[ -f "$CONFIG_FILE" ]] && cur=$(jq -c . "$CONFIG_FILE")
+      local j
+      if [[ "$val" =~ ^(true|false|[0-9]+)$ ]]; then j=$(jq -c --arg k "$key" --argjson v "$val" '.[$k]=$v' <<<"$cur")
+      else j=$(jq -c --arg k "$key" --arg v "$val" '.[$k]=$v' <<<"$cur"); fi
+      write_json "$CONFIG_FILE" "$j"; load_config; bump_state; echo "$key=$val" ;;
+    *) die "usage: config get [key|--json] | config set <key> <value>" ;;
+  esac
+}
+
+# ----------------------------------------------------------------- state ----
+EMPTY_STATE='{"recording":null,"jobs":[],"version":0}'
+read_state() { # always normalized to {recording, jobs, version}
+  { [[ -f "$STATE_FILE" ]] && cat "$STATE_FILE" 2>/dev/null || echo "$EMPTY_STATE"; } \
+    | jq -c '{recording: (.recording // null), jobs: (.jobs // []), version: (.version // 0)}' 2>/dev/null || echo "$EMPTY_STATE"
+}
+# save_state <json>: bumps version and writes atomically
+save_state() { write_json "$STATE_FILE" "$(jq -c '.version = ((.version // 0) + 1)' <<<"$1")"; }
+bump_state() { save_state "$(read_state)"; }
+# state_set [jq args...] <filter>: apply a jq filter to the state and save it
+state_set() { save_state "$(jq -c "$@" <<<"$(read_state)")"; }
+
+pid_alive() { kill -0 "$1" 2>/dev/null; }
+
+unit_active() { systemctl --user is-active --quiet "$1" 2>/dev/null; }
+
+# Drop dead recordings/jobs from state (called by status & before mutations).
+reconcile_state() {
+  local st changed=0
+  st=$(read_state)
+  if [[ $(jq -r '.recording != null' <<<"$st") == "true" ]]; then
+    local alive=0 p
+    for p in $(jq -r '.recording.pids[]' <<<"$st"); do pid_alive "$p" && alive=1; done
+    if [[ $alive == 0 ]]; then st=$(jq -c '.recording=null' <<<"$st"); changed=1; log "reconcile: cleared dead recording"; fi
+  fi
+  local keep='[]' j
+  while IFS= read -r j; do
+    [[ -z "$j" ]] && continue
+    local unit; unit=$(jq -r '.unit // empty' <<<"$j")
+    if [[ -n "$unit" ]] && ! unit_active "$unit"; then changed=1; log "reconcile: dropped finished job $unit"; continue; fi
+    keep=$(jq -c --argjson j "$j" '. + [$j]' <<<"$keep")
+  done < <(jq -c '.jobs[]' <<<"$st")
+  st=$(jq -c --argjson k "$keep" '.jobs=$k' <<<"$st")
+  [[ $changed == 1 ]] && save_state "$st"
+  return 0
+}
+
+# ------------------------------------------------------------ recordings ----
+new_id() { date +%Y-%m-%d_%H%M%S; }
+id_valid() { [[ "$1" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}_[0-9]{6}$ ]]; }
+
+# rec_dir <id> → path (dir name is "<id>" or "<id> <title>")
+rec_dir() {
+  local id="$1" d
+  id_valid "$id" || die "invalid recording id: $id"
+  for d in "$ROOT/$id" "$ROOT/$id "*; do [[ -d "$d" ]] && { echo "$d"; return 0; }; done
+  return 1
+}
+require_dir() { rec_dir "$1" || die "no recording with id $1"; }
+
+sanitize_title() { # strip slashes/control chars, collapse spaces, ≤80 chars
+  local t="$1"; t="${t//\//-}"; t=$(printf '%s' "$t" | tr -d '\000-\037' | sed -E 's/[[:space:]]+/ /g; s/^ //; s/ $//'); printf '%s' "${t:0:80}"
+}
+
+meta_path() { echo "$1/meta.json"; }
+read_meta() { jq -c . "$1/meta.json"; }
+update_meta() { write_json "$1/meta.json" "$(jq -c "$2" "$1/meta.json")"; }
+
+audio_duration() { ffprobe -v error -show_entries format=duration -of csv=p=0 "$1" 2>/dev/null | cut -d. -f1; }
+file_size() { stat -c %s "$1" 2>/dev/null || echo 0; }
+
+# rec_json <dir> → meta + dir + derived fields
+rec_json() {
+  local d="$1" has_t=false ttxt=""
+  [[ -f "$d/transcript.md" ]] && has_t=true
+  [[ "${2:-}" == "--with-text" && -f "$d/transcript.md" ]] && ttxt=$(sed '1{/^<!--/d}' "$d/transcript.md")
+  jq -c --arg dir "$d" --argjson has_t "$has_t" --arg ttxt "$ttxt" \
+    '. + {dir:$dir, audio:($dir+"/audio.wav"), has_transcript:$has_t, transcript_path:(if $has_t then $dir+"/transcript.md" else null end)}
+       + (if $ttxt != "" then {transcript_text:$ttxt} else {} end)' "$d/meta.json"
+}
+
+resolve_mic() {
+  local def; def=$(pactl get-default-source 2>/dev/null || true)
+  if [[ -n "$def" && "$def" != *.monitor ]] && pactl list short sources 2>/dev/null | awk '{print $2}' | grep -qx "$def"; then echo "$def"; return 0; fi
+  pactl list short sources 2>/dev/null | awk '$2 !~ /\.monitor$/ {print $2; exit}'
+}
+resolve_system() { local s; s=$(pactl get-default-sink 2>/dev/null || true); [[ -n "$s" ]] && echo "$s.monitor"; }
+
+# ------------------------------------------------------------ record -------
+cmd_record() {
+  local sub="${1:-status}"; shift || true
+  case "$sub" in
+    start) record_start "$@" ;;
+    stop) record_stop ;;
+    toggle) reconcile_state; if [[ $(jq -r '.recording != null' <<<"$(read_state)") == "true" ]]; then record_stop; else record_start "$@"; fi ;;
+    status) cmd_status "$@" ;;
+    *) die "usage: record start [--source mic|system|both] [--title T] | stop | toggle | status" ;;
+  esac
+}
+
+record_start() {
+  local source; source=$(cfg defaultSource); local title=""
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --source) source="$2"; shift 2 ;;
+      --title) title="$2"; shift 2 ;;
+      *) die "unknown option: $1" ;;
+    esac
+  done
+  [[ "$source" =~ ^(mic|system|both)$ ]] || die "source must be mic|system|both"
+  reconcile_state
+  [[ $(jq -r '.recording != null' <<<"$(read_state)") == "true" ]] && die "already recording"
+  have pw-record || die "pw-record not found (pipewire)"
+  mkdir -p "$ROOT" "$RUN_DIR"
+  local id; id=$(new_id)
+  while [[ -d "$ROOT/$id" ]]; do sleep 1; id=$(new_id); done
+  title=$(sanitize_title "$title")
+  local dir="$ROOT/$id"; [[ -n "$title" ]] && dir="$ROOT/$id $title"
+  mkdir -p "$dir"
+
+  local -a inputs=() # "target|file"
+  local mic sys
+  case "$source" in
+    mic) mic=$(resolve_mic); [[ -n "$mic" ]] || { rmdir "$dir"; die "no microphone source found"; }; inputs+=("$mic|$dir/audio.wav") ;;
+    system) sys=$(resolve_system); [[ -n "$sys" ]] || { rmdir "$dir"; die "no output sink found"; }; inputs+=("$sys|$dir/audio.wav") ;;
+    both) mic=$(resolve_mic); sys=$(resolve_system)
+      [[ -n "$mic" && -n "$sys" ]] || { rmdir "$dir"; die "need both a microphone and an output sink"; }
+      inputs+=("$mic|$dir/mic.wav" "$sys|$dir/system.wav") ;;
+  esac
+
+  local pids='[]' files='[]' in target file pid
+  for in in "${inputs[@]}"; do
+    target="${in%%|*}"; file="${in#*|}"
+    setsid pw-record --target "$target" --rate "$RATE" --channels 1 --format s16 "$file" >/dev/null 2>&1 < /dev/null &
+    pid=$!
+    local i=0
+    while (( i < 30 )) && pid_alive "$pid" && [[ ! -f "$file" ]]; do sleep 0.1; i=$((i+1)); done
+    if ! pid_alive "$pid"; then
+      for p in $(jq -r '.[]' <<<"$pids"); do kill -INT "$p" 2>/dev/null || true; done
+      rm -rf "$dir"; notify "Recording failed" "pw-record could not open $target"
+      die "pw-record exited immediately for $target"
+    fi
+    pids=$(jq -c --argjson p "$pid" '. + [$p]' <<<"$pids")
+    files=$(jq -c --arg f "$file" '. + [$f]' <<<"$files")
+  done
+
+  if [[ $(cfg keepAwake) == "true" ]] && have systemd-inhibit; then
+    local first; first=$(jq -r '.[0]' <<<"$pids")
+    setsid systemd-inhibit --what=idle:sleep --who=omarecorder --why="Recording audio" \
+      tail --pid="$first" -f /dev/null >/dev/null 2>&1 < /dev/null &
+  fi
+
+  write_json "$dir/meta.json" "$(jq -cn --arg id "$id" --arg title "$title" --arg source "$source" --arg created "$(now_iso)" --argjson rate "$RATE" \
+    '{id:$id, title:$title, source:$source, created:$created, duration_s:null, size_bytes:0, sample_rate:$rate, transcript:null, notes:""}')"
+  state_set --arg id "$id" --arg source "$source" --argjson pids "$pids" --argjson files "$files" --arg dir "$dir" --argjson t "$(now_epoch)" \
+    '.recording = {id:$id, source:$source, dir:$dir, started_at:$t, pids:$pids, files:$files}'
+  log "record start $id source=$source dir=$dir"
+  notify "Recording started" "${title:-$id} · $source"
+  echo "$id"
+}
+
+record_stop() {
+  reconcile_state
+  local st; st=$(read_state)
+  [[ $(jq -r '.recording != null' <<<"$st") == "true" ]] || die "not recording"
+  local id dir source; id=$(jq -r '.recording.id' <<<"$st"); dir=$(jq -r '.recording.dir' <<<"$st"); source=$(jq -r '.recording.source' <<<"$st")
+  local p
+  for p in $(jq -r '.recording.pids[]' <<<"$st"); do kill -INT "$p" 2>/dev/null || true; done
+  local i=0
+  while (( i < 50 )); do
+    local any=0
+    for p in $(jq -r '.recording.pids[]' <<<"$st"); do pid_alive "$p" && any=1; done
+    [[ $any == 0 ]] && break; sleep 0.2; i=$((i+1))
+  done
+  for p in $(jq -r '.recording.pids[]' <<<"$st"); do pid_alive "$p" && kill -TERM "$p" 2>/dev/null || true; done
+  state_set '.recording = null'
+  [[ -d "$dir" ]] || die "recording folder vanished: $dir"
+
+  if [[ "$source" == "both" ]]; then
+    ffmpeg -v error -y -i "$dir/mic.wav" -i "$dir/system.wav" \
+      -filter_complex "amix=inputs=2:duration=longest:normalize=0" -ar "$RATE" -ac 1 -c:a pcm_s16le "$dir/audio.wav" \
+      || log "amix failed for $id"
+  fi
+  finalize_audio "$dir"
+  local dur; dur=$(jq -r '.duration_s // 0' "$dir/meta.json")
+  log "record stop $id duration=${dur}s"
+  notify "Recording saved · $(fmt_hms "$dur")" "Click to transcribe with $(cfg defaultModel)" -- "$SELF" transcribe "$id"
+  echo "$id ($(fmt_hms "$dur"))"
+}
+
+# finalize_audio <dir>: fill duration/size in meta.json from audio.wav
+finalize_audio() {
+  local dir="$1" dur size
+  dur=$(audio_duration "$dir/audio.wav"); dur=${dur:-0}
+  size=$(file_size "$dir/audio.wav")
+  update_meta "$dir" ".duration_s = $dur | .size_bytes = $size"
+}
+
+# ------------------------------------------------------------ status -------
+cmd_status() {
+  reconcile_state
+  local st; st=$(read_state)
+  local out; out=$(jq -c --argjson now "$(now_epoch)" --arg mdir "$VOXTYPE_MODELS_DIR" '
+    .recording |= (if . == null then null else . + {elapsed_s: ($now - .started_at)} end)
+    | .jobs |= map(. + {elapsed_s: ($now - .started_at)})' <<<"$st")
+  # download progress: bytes present for model files
+  out=$(jq -c --arg mdir "$VOXTYPE_MODELS_DIR" '.jobs |= map(if .type=="download" then . + {file: ($mdir + "/ggml-" + .model + ".bin")} else . end)' <<<"$out")
+  local jobs='[]' j f b
+  while IFS= read -r j; do
+    [[ -z "$j" ]] && continue
+    if [[ $(jq -r '.type' <<<"$j") == "download" ]]; then
+      f=$(jq -r '.file' <<<"$j"); b=0; [[ -f "$f" ]] && b=$(file_size "$f")
+      [[ -f "$f.part" ]] && b=$(file_size "$f.part")
+      j=$(jq -c --argjson b "$b" '. + {bytes_done:$b}' <<<"$j")
+    fi
+    jobs=$(jq -c --argjson j "$j" '. + [$j]' <<<"$jobs")
+  done < <(jq -c '.jobs[]' <<<"$out")
+  out=$(jq -c --argjson jobs "$jobs" '.jobs=$jobs' <<<"$out")
+  if [[ "${1:-}" == "--json" ]]; then jq . <<<"$out"; return 0; fi
+  if [[ $(jq -r '.recording != null' <<<"$out") == "true" ]]; then
+    echo "recording $(jq -r '.recording.id' <<<"$out") ($(fmt_hms "$(jq -r '.recording.elapsed_s' <<<"$out")"), $(jq -r '.recording.source' <<<"$out"))"
+  else echo "idle"; fi
+  jq -r '.jobs[] | "job: \(.type) \(.id // .model) (\(.elapsed_s)s)"' <<<"$out"
+}
+
+# --------------------------------------------------------------- import ----
+cmd_import() {
+  local src="" move=0 title=""
+  while [[ $# -gt 0 ]]; do
+    case "$1" in --move) move=1; shift ;; --title) title="$2"; shift 2 ;; *) src="$1"; shift ;; esac
+  done
+  [[ -f "$src" ]] || die "file not found: $src"
+  mkdir -p "$ROOT"
+  local id; id=$(date -r "$src" +%Y-%m-%d_%H%M%S)
+  while rec_dir "$id" >/dev/null 2>&1; do id=$(date -d "$(date -r "$src" +%FT%T) + $((RANDOM % 50 + 1)) sec" +%Y-%m-%d_%H%M%S); done
+  title=$(sanitize_title "${title:-$(basename "${src%.*}")}")
+  local dir="$ROOT/$id"; [[ -n "$title" ]] && dir="$ROOT/$id $title"
+  mkdir -p "$dir"
+  local probe; probe=$(ffprobe -v error -select_streams a:0 -show_entries stream=sample_rate,channels,codec_name -of csv=p=0 "$src" 2>/dev/null || true)
+  if [[ "$probe" == "pcm_s16le,$RATE,1" ]]; then
+    if (( move )); then mv "$src" "$dir/audio.wav"; else cp "$src" "$dir/audio.wav"; fi
+  else
+    ffmpeg -v error -y -i "$src" -ar "$RATE" -ac 1 -c:a pcm_s16le "$dir/audio.wav" || { rm -rf "$dir"; die "ffmpeg failed to convert $src"; }
+    (( move )) && rm -f "$src"
+  fi
+  write_json "$dir/meta.json" "$(jq -cn --arg id "$id" --arg title "$title" --arg created "$(date -r "$dir/audio.wav" +%FT%T%z)" --argjson rate "$RATE" \
+    '{id:$id, title:$title, source:"import", created:$created, duration_s:null, size_bytes:0, sample_rate:$rate, transcript:null, notes:""}')"
+  finalize_audio "$dir"; bump_state
+  log "import $src -> $dir"
+  echo "$id"
+}
+
+# ----------------------------------------------------------- list/show -----
+cmd_list() {
+  mkdir -p "$ROOT"
+  local arr='[]' d
+  while IFS= read -r d; do
+    [[ -f "$d/meta.json" ]] || continue
+    arr=$(jq -c --argjson r "$(rec_json "$d")" '. + [$r]' <<<"$arr")
+  done < <(find "$ROOT" -mindepth 1 -maxdepth 1 -type d -name '????-??-??_??????*' | sort -r)
+  if [[ "${1:-}" == "--json" ]]; then jq . <<<"$arr"; return 0; fi
+  jq -r '.[] | "\(.id)  \(.duration_s // 0 | tostring | . + "s" | .)\t\(if .has_transcript then "✓" else "·" end)  \(.title)"' <<<"$arr"
+}
+
+cmd_show() {
+  local id="${1:-}"; [[ -n "$id" ]] || die "usage: show <id> [--json]"
+  local dir; dir=$(require_dir "$id")
+  if [[ "${2:-}" == "--json" ]]; then rec_json "$dir" --with-text | jq .; else
+    read_meta "$dir" | jq .; [[ -f "$dir/transcript.md" ]] && { echo; cat "$dir/transcript.md"; }; fi
+}
+
+cmd_rename() {
+  local id="${1:-}" title="${2:-}"; [[ -n "$id" ]] || die "usage: rename <id> <title>"
+  local dir; dir=$(require_dir "$id")
+  title=$(sanitize_title "$title")
+  local new="$ROOT/$id"; [[ -n "$title" ]] && new="$ROOT/$id $title"
+  if [[ "$new" != "$dir" ]]; then mv "$dir" "$new"; fi
+  write_json "$new/meta.json" "$(jq -c --arg t "$title" '.title = $t' "$new/meta.json")"
+  bump_state; log "rename $id -> '$title'"; echo "$new"
+}
+
+cmd_delete() {
+  local id="${1:-}" yes=0; [[ -n "$id" ]] || die "usage: delete <id> [--yes]"
+  [[ "${2:-}" == "--yes" ]] && yes=1
+  local dir; dir=$(require_dir "$id")
+  if (( ! yes )) && [[ -t 0 ]]; then read -r -p "Delete '$dir'? [y/N] " a; [[ "$a" =~ ^[Yy]$ ]] || exit 1; fi
+  if have gio && gio trash "$dir" 2>/dev/null; then log "delete $id (trash)"; else rm -rf "$dir"; log "delete $id (rm)"; fi
+  bump_state; echo "deleted $id"
+}
+
+# --------------------------------------------------------------- models ----
+model_installed() { [[ -f "$VOXTYPE_MODELS_DIR/ggml-$1.bin" ]]; }
+model_rtf() { # measured or default
+  local m="$1" v=""
+  [[ -f "$BENCH_FILE" ]] && v=$(jq -r --arg m "$m" '.[$m].rtf // empty' "$BENCH_FILE" 2>/dev/null)
+  [[ -n "$v" ]] && { echo "$v"; return 0; }
+  jq -r --arg m "$m" '.[] | select(.name==$m) | .rtf' <<<"$MODEL_CATALOG"
+}
+cmd_models() {
+  local bench='{}'; [[ -f "$BENCH_FILE" ]] && bench=$(jq -c . "$BENCH_FILE")
+  local out; out=$(jq -c --arg mdir "$VOXTYPE_MODELS_DIR" --argjson bench "$bench" --arg def "$(cfg defaultModel)" '
+    map(. + {installed: false, default: (.name == $def), rtf_source: "default"}
+        | if $bench[.name] then .rtf = $bench[.name].rtf | .rtf_source = "measured" else . end)' <<<"$MODEL_CATALOG")
+  local res='[]' m name
+  while IFS= read -r m; do
+    name=$(jq -r '.name' <<<"$m")
+    if model_installed "$name"; then m=$(jq -c '.installed=true' <<<"$m"); fi
+    res=$(jq -c --argjson m "$m" '. + [$m]' <<<"$res")
+  done < <(jq -c '.[]' <<<"$out")
+  if [[ "${1:-}" == "--json" ]]; then jq . <<<"$res"; return 0; fi
+  jq -r '.[] | "\(if .installed then "✓" else " " end) \(.name)\t\(.size_mb) MB\t~\(.rtf)x realtime (\(.rtf_source))\t\(.label)"' <<<"$res"
+}
+
+cmd_model() {
+  local sub="${1:-}"; shift || true
+  case "$sub" in
+    download)
+      local name="${1:-}"; [[ -n "$name" ]] || die "usage: model download <name>"
+      jq -e --arg m "$name" '.[] | select(.name==$m)' <<<"$MODEL_CATALOG" >/dev/null || die "unknown model: $name"
+      model_installed "$name" && { echo "already installed: $name"; return 0; }
+      have voxtype || die "voxtype not installed"
+      reconcile_state
+      [[ $(jq -r --arg m "$name" '.jobs[] | select(.type=="download" and .model==$m)' <<<"$(read_state)") ]] && die "download already running"
+      local unit="omarecorder-dl-${name//./-}" size
+      size=$(jq -r --arg m "$name" '.[] | select(.name==$m) | .size_mb' <<<"$MODEL_CATALOG")
+      run_detached "$unit" "Omarecorder download $name" "$SELF" _dl-worker "$name"
+      state_set --arg m "$name" --arg u "$unit" --argjson t "$(now_epoch)" --argjson b $((size * 1000000)) \
+        '.jobs += [{type:"download", model:$m, unit:$u, started_at:$t, expected_bytes:$b}]'
+      log "model download $name ($unit)"; echo "downloading $name" ;;
+    *) die "usage: model download <name>" ;;
+  esac
+}
+
+# run_detached <unit> <description> <cmd...>: systemd-run (or inline when OMARECORDER_SYNC=1)
+run_detached() {
+  local unit="$1" desc="$2"; shift 2
+  if [[ "${OMARECORDER_SYNC:-0}" == "1" ]] || ! have systemd-run; then "$@"; return $?; fi
+  systemd-run --user --quiet --collect --service-type=oneshot -u "$unit" --description="$desc" \
+    --setenv=OMARECORDER_DIR="${OMARECORDER_DIR:-}" --setenv=XDG_CONFIG_HOME="$XDG_CONFIG_HOME" \
+    --setenv=XDG_STATE_HOME="$XDG_STATE_HOME" --setenv=VOXTYPE_MODELS_DIR="$VOXTYPE_MODELS_DIR" \
+    --setenv=OMARECORDER_QUIET="${OMARECORDER_QUIET:-0}" --setenv=PATH="$PATH" "$@"
+}
+
+_dl_worker() {
+  local name="$1"
+  if voxtype setup --download --model "$name" --quiet --no-post-install >>"$LOG_FILE" 2>&1 && model_installed "$name"; then
+    notify "Model ready" "$name downloaded — transcriptions can use it now"; log "download ok $name"
+  else
+    notify "Model download failed" "$name — see $LOG_FILE"; log "download FAILED $name"
+  fi
+  bump_state
+}
+
+cmd_estimate() {
+  local id="${1:-}" model=""; [[ -n "$id" ]] || die "usage: estimate <id> --model <name>"
+  [[ "${2:-}" == "--model" ]] && model="${3:-}"; model="${model:-$(cfg defaultModel)}"
+  local dir; dir=$(require_dir "$id")
+  local dur rtf src="default"; dur=$(jq -r '.duration_s // 0' "$dir/meta.json"); rtf=$(model_rtf "$model")
+  [[ -f "$BENCH_FILE" ]] && jq -e --arg m "$model" '.[$m]' "$BENCH_FILE" >/dev/null 2>&1 && src="measured"
+  jq -cn --arg m "$model" --argjson d "$dur" --argjson r "$rtf" --arg s "$src" '{model:$m, duration_s:$d, rtf:$r, seconds:(($d / $r) | ceil), source:$s}'
+}
+
+# ----------------------------------------------------------- transcribe ----
+cmd_transcribe() {
+  local id="${1:-}"; [[ -n "$id" ]] || die "usage: transcribe <id> [--model M] [--language L] [--from s --to s]"; shift
+  local model; model=$(cfg defaultModel); local lang; lang=$(cfg language); local threads; threads=$(cfg threads); local from="" to=""
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --model) model="$2"; shift 2 ;; --language) lang="$2"; shift 2 ;; --threads) threads="$2"; shift 2 ;;
+      --from) from="$2"; shift 2 ;; --to) to="$2"; shift 2 ;; *) die "unknown option: $1" ;;
+    esac
+  done
+  local dir; dir=$(require_dir "$id")
+  [[ -f "$dir/audio.wav" ]] || die "no audio.wav in $dir"
+  have voxtype || die "voxtype not installed"
+  if ! model_installed "$model"; then echo "omarecorder: model '$model' is not downloaded (run: omarecorder model download $model)" >&2; exit 3; fi
+  reconcile_state
+  [[ $(jq -r --arg id "$id" '.jobs[] | select(.type=="transcribe" and .id==$id)' <<<"$(read_state)") ]] && die "transcription already running for $id"
+  local unit="omarecorder-tx-$id"
+  state_set --arg id "$id" --arg m "$model" --arg u "$unit" --argjson t "$(now_epoch)" \
+    '.jobs += [{type:"transcribe", id:$id, model:$m, unit:$u, started_at:$t}]'
+  log "transcribe $id model=$model lang=$lang range=${from:-0}-${to:-end}"
+  if ! run_detached "$unit" "Omarecorder transcribe $id" "$SELF" _tx-worker "$id" "$model" "$lang" "$threads" "$from" "$to"; then
+    state_set --arg id "$id" '.jobs |= map(select(.id != $id))'
+    die "could not start transcription job"
+  fi
+  echo "transcribing $id with $model"
+}
+
+_tx_worker() {
+  local id="$1" model="$2" lang="$3" threads="$4" from="$5" to="$6"
+  local dir; dir=$(require_dir "$id")
+  local input="$dir/audio.wav" tmpwav="" dur
+  dur=$(jq -r '.duration_s // 0' "$dir/meta.json")
+  if [[ -n "$from" || -n "$to" ]]; then
+    mkdir -p "$RUN_DIR"; tmpwav="$RUN_DIR/tx-$id.wav"
+    ffmpeg -v error -y ${from:+-ss "$from"} ${to:+-to "$to"} -i "$dir/audio.wav" -c copy "$tmpwav"
+    input="$tmpwav"; dur=$(audio_duration "$tmpwav")
+  fi
+  local -a opts=(--model "$model" --language "$lang")
+  [[ "$threads" =~ ^[1-9][0-9]*$ ]] && opts+=(--threads "$threads")
+  local start rc=0; start=$(now_epoch)
+  if voxtype -q "${opts[@]}" transcribe "$input" 2>>"$LOG_FILE" | awk 'seen{print} /^$/{seen=1}' > "$dir/transcript.md.tmp"; then
+    rc=0; else rc=1; fi
+  [[ -n "$tmpwav" ]] && rm -f "$tmpwav"
+  if [[ $rc != 0 || ! -s "$dir/transcript.md.tmp" ]]; then
+    rm -f "$dir/transcript.md.tmp"
+    state_set --arg id "$id" '.jobs |= map(select(.id != $id))'
+    notify "Transcription failed" "$id — see $LOG_FILE"; log "transcribe FAILED $id"; return 1
+  fi
+  local elapsed=$(( $(now_epoch) - start )); (( elapsed < 1 )) && elapsed=1
+  { printf '<!-- omarecorder model=%s language=%s created=%s range=%s-%s -->\n' "$model" "$lang" "$(now_iso)" "${from:-0}" "${to:-end}"
+    cat "$dir/transcript.md.tmp"; } > "$dir/transcript.md"
+  rm -f "$dir/transcript.md.tmp"
+  local rtf; rtf=$(jq -n --argjson d "${dur:-0}" --argjson e "$elapsed" '(($d / $e) * 100 | round) / 100')
+  if (( ${dur:-0} >= 10 )); then # only learn from meaningful clips
+    mkdir -p "$STATE_DIR"; local bench='{}'; [[ -f "$BENCH_FILE" ]] && bench=$(jq -c . "$BENCH_FILE")
+    write_json "$BENCH_FILE" "$(jq -c --arg m "$model" --argjson r "$rtf" --arg t "$(now_iso)" '.[$m] = {rtf:$r, measured:$t}' <<<"$bench")"
+  fi
+  write_json "$dir/meta.json" "$(jq -c --arg m "$model" --arg l "$lang" --arg c "$(now_iso)" --argjson e "$elapsed" --argjson r "$rtf" \
+    '.transcript = {model:$m, language:$l, created:$c, elapsed_s:$e, rtf:$r}' "$dir/meta.json")"
+  state_set --arg id "$id" '.jobs |= map(select(.id != $id))'
+  log "transcribe ok $id model=$model elapsed=${elapsed}s rtf=$rtf"
+  notify "Transcription finished · $(fmt_hms "$elapsed")" "$(jq -r '.title // .id' "$dir/meta.json") — click to open" -- "$SELF" open "$id"
+}
+
+cmd_cancel() {
+  local id="${1:-}"; [[ -n "$id" ]] || die "usage: cancel <id>"
+  systemctl --user stop "omarecorder-tx-$id" 2>/dev/null || true
+  state_set --arg id "$id" '.jobs |= map(select(.id != $id))'
+  local dir; dir=$(rec_dir "$id" 2>/dev/null || true); [[ -n "$dir" ]] && rm -f "$dir/transcript.md.tmp"
+  echo "cancelled $id"
+}
+
+# -------------------------------------------------------- play / open ------
+cmd_play() {
+  local id="${1:-}" from=""; [[ -n "$id" ]] || die "usage: play <id> [--from s]"
+  [[ "${2:-}" == "--from" ]] && from="${3:-}"
+  local dir; dir=$(require_dir "$id")
+  cmd_stop_play >/dev/null 2>&1 || true
+  mkdir -p "$RUN_DIR"
+  if have mpv; then
+    setsid mpv --no-video --really-quiet ${from:+--start="$from"} "$dir/audio.wav" >/dev/null 2>&1 < /dev/null &
+  else
+    setsid pw-play "$dir/audio.wav" >/dev/null 2>&1 < /dev/null &
+  fi
+  echo $! > "$PLAY_PID_FILE"; echo "playing $id"
+}
+cmd_stop_play() {
+  [[ -f "$PLAY_PID_FILE" ]] || { echo "not playing"; return 0; }
+  local p; p=$(cat "$PLAY_PID_FILE"); kill "$p" 2>/dev/null || true; rm -f "$PLAY_PID_FILE"; echo "stopped"
+}
+cmd_open() {
+  local id="${1:-}"; [[ -n "$id" ]] || die "usage: open <id>"
+  local dir; dir=$(require_dir "$id")
+  local f="$dir/transcript.md"; [[ -f "$f" ]] || die "no transcript yet for $id"
+  if have omarchy-launch-editor; then omarchy-launch-editor "$f"; else xdg-open "$f"; fi
+}
+cmd_folder() { local dir; dir=$(require_dir "${1:-}"); setsid xdg-open "$dir" >/dev/null 2>&1 < /dev/null & echo "$dir"; }
+cmd_library() { have omarchy-shell || die "omarchy-shell not found"; omarchy-shell shell toggle "$PLUGIN_ID"; }
+
+# --------------------------------------------------------------- setup -----
+cmd_setup() {
+  [[ "${1:-}" == "check" ]] || die "usage: setup check [--json]"
+  local voxtype_ok=false backend="" ffmpeg_ok=false jq_ok=true pw_ok=false mic="" root_ok=false installed='[]' m
+  have voxtype && voxtype_ok=true && backend=$(voxtype setup gpu --status 2>/dev/null | sed -n 's/^Active backend: //p' | head -1)
+  have ffmpeg && ffmpeg_ok=true; have pw-record && pw_ok=true
+  mic=$(resolve_mic || true)
+  mkdir -p "$ROOT" 2>/dev/null && [[ -w "$ROOT" ]] && root_ok=true
+  for m in $(jq -r '.[].name' <<<"$MODEL_CATALOG"); do model_installed "$m" && installed=$(jq -c --arg m "$m" '. + [$m]' <<<"$installed"); done
+  local default_ok=false; model_installed "$(cfg defaultModel)" && default_ok=true
+  local ok=false; [[ $voxtype_ok == true && $ffmpeg_ok == true && $pw_ok == true && -n "$mic" && $root_ok == true && $default_ok == true ]] && ok=true
+  local out; out=$(jq -cn --argjson ok "$ok" --argjson v "$voxtype_ok" --arg b "$backend" --argjson f "$ffmpeg_ok" --argjson j "$jq_ok" --argjson p "$pw_ok" \
+    --arg mic "$mic" --arg root "$ROOT" --argjson r "$root_ok" --argjson inst "$installed" --arg dm "$(cfg defaultModel)" --argjson dmok "$default_ok" --arg ver "$VERSION" \
+    '{ok:$ok, version:$ver, voxtype:$v, backend:$b, ffmpeg:$f, jq:$j, pw_record:$p, mic:$mic, mic_ok:($mic != ""), recordingsDir:$root, recordingsDir_ok:$r,
+      installed_models:$inst, defaultModel:$dm, defaultModel_ok:$dmok}')
+  if [[ "${2:-}" == "--json" ]]; then jq . <<<"$out"; else
+    jq -r 'to_entries[] | "\(.key): \(.value)"' <<<"$out"; fi
+  [[ $ok == true ]]
+}
+
+# ---------------------------------------------------------------- main -----
+usage() {
+  cat <<EOF
+omarecorder $VERSION — record, keep, transcribe locally (voxtype)
+
+  record start [--source mic|system|both] [--title T]   start a recording
+  record stop | toggle | status [--json]                 control / inspect
+  import <file> [--move] [--title T]                     bring an existing audio file in
+  list [--json] | show <id> [--json]                     browse
+  rename <id> <title> | delete <id> [--yes]              manage (delete → trash)
+  transcribe <id> [--model M] [--language L] [--from s --to s]
+  cancel <id> | estimate <id> --model M
+  models [--json] | model download <name>
+  play <id> [--from s] | stop-play | open <id> | folder <id>
+  config get [key|--json] | config set <key> <value>
+  setup check [--json] | library | status [--json] | version
+
+Files: $ROOT (recordings), $CONFIG_FILE, $STATE_FILE
+EOF
+}
+
+main() {
+  load_config
+  mkdir -p "$RUN_DIR" 2>/dev/null || true
+  local cmd="${1:-help}"; shift || true
+  case "$cmd" in
+    record) cmd_record "$@" ;;
+    status) cmd_status "$@" ;;
+    import) cmd_import "$@" ;;
+    list) cmd_list "$@" ;;
+    show) cmd_show "$@" ;;
+    rename) cmd_rename "$@" ;;
+    delete) cmd_delete "$@" ;;
+    transcribe) cmd_transcribe "$@" ;;
+    cancel) cmd_cancel "$@" ;;
+    estimate) cmd_estimate "$@" ;;
+    models) cmd_models "$@" ;;
+    model) cmd_model "$@" ;;
+    play) cmd_play "$@" ;;
+    stop-play) cmd_stop_play ;;
+    open) cmd_open "$@" ;;
+    folder) cmd_folder "$@" ;;
+    library) cmd_library ;;
+    config) cmd_config "$@" ;;
+    setup) cmd_setup "$@" ;;
+    version|--version|-V) echo "$VERSION" ;;
+    help|--help|-h) usage ;;
+    _tx-worker) _tx_worker "$@" ;;
+    _dl-worker) _dl_worker "$@" ;;
+    *) usage >&2; exit 2 ;;
+  esac
+}
+main "$@"
