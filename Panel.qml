@@ -33,7 +33,7 @@ Panel {
   readonly property string barLabel: recording && !vertical ? "  " + svc.elapsedText : ""
   readonly property string stateText: !ready ? "Service unavailable"
     : recording ? "Recording " + svc.elapsedText + " · " + svc.sourceLabel(svc.activeRecording.source)
-    : transcribing ? "Transcribing…"
+    : transcribing ? "Transcribing · " + svc.transcribeElapsedText
     : (svc.downloading ? "Downloading model…" : "Idle")
 
   property bool settingsOpen: false

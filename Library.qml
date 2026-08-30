@@ -361,7 +361,7 @@ Item {
                   id: mainButton
                   anchors.verticalCenter: parent.verticalCenter
                   visible: !root.selectedLive
-                  text: root.selectedJob ? "Cancel  (" + root.svc.fmtHms(root.selectedJob.elapsed_s || 0) + ")"
+                  text: root.selectedJob ? "Cancel"
                     : (picker.currentInstalled ? (root.selected && root.selected.has_transcript ? "Transcribe again" : "Transcribe")
                                                : (picker.download ? "Downloading…" : "Download model"))
                   iconText: root.selectedJob ? "󰅖" : (picker.currentInstalled ? "󰗊" : "󰇚")
@@ -425,8 +425,8 @@ Item {
                 visible: !!root.selectedJob
                 width: parent.width
                 text: root.selectedJob && root.svc
-                  ? "Transcribing with " + root.selectedJob.model + " — " + root.svc.fmtHms(root.selectedJob.elapsed_s || 0)
-                    + " elapsed, ≈ " + root.svc.fmtDuration(root.svc.estimateSeconds(root.selected.duration_s, root.selectedJob.model)) + " expected"
+                  ? "Transcribing with " + root.selectedJob.model + " · " + root.svc.fmtHms(root.svc.jobElapsed(root.selectedJob))
+                    + " elapsed · ≈ " + root.svc.fmtDuration(root.svc.estimateSeconds(root.selected.duration_s, root.selectedJob.model)) + " expected"
                   : ""
                 color: Color.accent
                 font.family: root.fontFamily

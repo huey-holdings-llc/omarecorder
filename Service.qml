@@ -29,6 +29,7 @@ QtObject {
   property string lastError: ""
   property bool listBusy: false
   property int elapsed: 0
+  property int now: Math.floor(Date.now() / 1000)   // ticks once a second while anything runs
 
   readonly property bool recording: !!(state && state.recording)
   readonly property var activeRecording: recording ? state.recording : null
@@ -38,6 +39,10 @@ QtObject {
   readonly property bool downloading: jobs.some(function(j) { return j.type === "download" })
   readonly property bool busy: transcribing || downloading
   readonly property string elapsedText: fmtHms(elapsed)
+  readonly property var activeJob: jobs.find(function(j) { return j.type === "transcribe" }) || null
+  // Jobs in state.json carry started_at only (elapsed_s is a `status` extra).
+  function jobElapsed(j) { return j && j.started_at ? Math.max(0, now - j.started_at) : 0 }
+  readonly property string transcribeElapsedText: fmtHms(jobElapsed(activeJob))
   readonly property string defaultModel: config && config.defaultModel ? config.defaultModel : "base.en"
   readonly property string defaultSource: config && config.defaultSource ? config.defaultSource : "mic"
 
@@ -91,6 +96,7 @@ QtObject {
     } catch (e) { /* partial write; FileView will fire again */ }
   }
   function updateElapsed() {
+    now = Math.floor(Date.now() / 1000)
     if (activeRecording) elapsed = Math.max(0, Math.floor(Date.now() / 1000) - activeRecording.started_at)
     else elapsed = 0
   }
