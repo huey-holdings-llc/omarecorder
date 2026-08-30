@@ -1,4 +1,8 @@
 name: ci
+
+# The token gets read access and nothing else; this workflow needs no secrets.
+permissions:
+  contents: read
 on:
   push:
     branches: [main, "release/**"]
