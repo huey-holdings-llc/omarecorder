@@ -326,6 +326,13 @@ if command -v voxtype >/dev/null && [[ -f "${VOXTYPE_MODELS_DIR:-$HOME/.local/sh
   check "range header" bash -c "head -1 '$D3/transcript.md' | grep -q 'range=0-3'"
   check "previous transcript kept on re-run" bash -c "head -1 '$D3/transcript.prev.md' | grep -q 'range=0-end'"
 
+  echo "== transcribe (planner failure)"
+  cp "$D3/transcript.md" "$TMP/t3.before"
+  "$CLI" cancel "$ID3" >/dev/null 2>&1; env OMARECORDER_CHUNK_S=abc "$CLI" transcribe "$ID3" --model base.en >/dev/null 2>&1
+  check "a failed piece plan leaves the transcript untouched" cmp -s "$D3/transcript.md" "$TMP/t3.before"
+  check "and does not write '(no speech detected)'" bash -c "! grep -q 'no speech detected' '$D3/transcript.md'"
+  eq "and leaves no job behind" "$("$CLI" status --json | jq -r '.jobs|length')" "0"
+
   echo "== transcribe (chunked, OMARECORDER_CHUNK_S=25 on the 60 s clip)"
   D6="$OMARECORDER_DIR/$ID6 Speech 60s"
   check "chunked transcribe succeeds" env OMARECORDER_CHUNK_S=25 "$CLI" transcribe "$ID6" --model base.en

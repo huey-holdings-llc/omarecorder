@@ -960,7 +960,10 @@ _tx_worker() {
   local -a opts=(--model "$model" --language "$lang")
   [[ "$threads" =~ ^[1-9][0-9]*$ ]] && opts+=(--threads "$threads")
   local -a plan; mapfile -t plan < <(plan_chunks "$input" "$dur")
-  local n=${#plan[@]} i=0 piece s e cwav="$input" ctxt="$RUN_DIR/tx-$id.chunk.txt" rc=0 prev_kept=0
+  local n=${#plan[@]} i=0 piece s e cwav="$input" ctxt="$RUN_DIR/tx-$id.chunk.txt" rc=0 prev_kept=0 why=""
+  # mapfile hides a failed planner (process substitution): an empty plan must
+  # take the failure path, never publish an empty transcript over a good one.
+  if (( n == 0 )); then rc=1; why="could not plan the pieces (duration ${dur}s, OMARECORDER_CHUNK_S=$CHUNK_S)"; fi
   : > "$acc"
   start=$(date +%s.%N)
   for piece in "${plan[@]}"; do
@@ -987,7 +990,7 @@ _tx_worker() {
   rm -f "$tmpwav" "$RUN_DIR/tx-$id.chunk.wav" "$ctxt"
   if (( rc != 0 )); then
     state_set --arg id "$id" '.jobs |= map(select(.id != $id))' || true
-    local why; why=$(grep -iE 'error|failed|cannot|not found' "$errlog" 2>/dev/null | tail -1 | cut -c1-120)
+    [[ -n "$why" ]] || why=$(grep -iE 'error|failed|cannot|not found' "$errlog" 2>/dev/null | tail -1 | cut -c1-120)
     mkdir -p "$STATE_DIR"; mv -f "$errlog" "$STATE_DIR/tx-$id.err" 2>/dev/null || true
     if (( i > 1 )) && [[ -s "$acc" ]]; then   # some pieces made it: keep them, say so
       publish_transcript "$dir" "$acc" "$model" "$lang" "$from" "$to" "$n" true
