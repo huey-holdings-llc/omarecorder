@@ -1,0 +1,5 @@
+tests/tmp/
+*.wav
+*.png
+!preview.png
+.spike/
