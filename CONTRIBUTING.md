@@ -67,6 +67,34 @@ to them is easy to merge; one that breaks them will get a conversation first.
   transcription, `~/.local/state/omarecorder/tx-<id>.err`. Never paste a
   transcript you would not want public.
 
+## Help wanted
+
+Pull requests are welcome anywhere, but these are the areas where the project
+most needs someone who knows more than its author:
+
+* **Languages other than English.** The presets are the `.en` whisper models.
+  voxtype also ships multilingual ones (`base`, `small`, `large-v3-turbo`) and
+  a language setting exists, but nobody has tested a non-English take end to
+  end, the UI strings are English only, and `language: auto` has had no real
+  use. Someone who records in another language would find the gaps in an hour.
+* **UI improvements that keep it simple.** The popup and the Library were built
+  by one person against one theme on one laptop. Reviews from people who use
+  other Omarchy themes, a vertical bar, more than one monitor, or a high-DPI
+  screen are all valuable. So is anything that makes a screen easier to read
+  without adding controls.
+* **Accessibility.** Keyboard reach is good; screen reader behaviour and
+  contrast under every theme have not been checked.
+* **Other hardware.** CPU-only machines, CUDA, different microphones and USB
+  interfaces. The speed estimates and the clipping detector were tuned on one
+  laptop.
+* **The Quickshell file dialog crash.** A QtQuick `FileDialog` crashes
+  Quickshell on Omarchy 4 (crash folders are noted in the README's roadmap
+  item). Anyone who can diagnose it upstream unblocks a graphical picker.
+* **Per-track transcripts for "both" takes.** The raw tracks are already kept;
+  transcribing them separately and interleaving the result is the missing piece.
+* **Transcript quality.** Better seam choices for long takes, or a cheaper way
+  to detect whisper's repetition loops after the fact.
+
 ## Ideas that fit
 
 Anything on the README roadmap, better estimates, a nicer Setup card, more

@@ -16,7 +16,9 @@ behaviour has a test, the security posture was audited and fixed before release,
 and every claim in this README was checked against the code. Please read the
 source with that in mind, and if you know better, open an issue or a pull
 request. Contributions from people who do this for a living are very welcome.
-See [CONTRIBUTING.md](CONTRIBUTING.md) for the principles the project follows.
+See [CONTRIBUTING.md](CONTRIBUTING.md) for the principles the project follows
+and a "help wanted" list: languages other than English, UI improvements that
+keep it simple, accessibility, other hardware.
 
 This is a part-time project. Issues and pull requests are read and handled as
 time allows, not on a schedule. If you need something sooner, fork it and make
