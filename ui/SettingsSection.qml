@@ -36,6 +36,15 @@ Column {
     foreground: root.foreground; fontFamily: root.fontFamily
     onChanged: function(v) { if (root.svc) root.svc.setConfig("language", v) }
   }
+  Dropdown {
+    // Only offered when Obsidian has vaults on this machine; "" = the CLI picks the open vault.
+    width: parent.width; label: "Obsidian vault"
+    visible: root.svc && root.svc.vaults.length > 0
+    value: root.cfg.obsidianVault || ""
+    options: [{ value: "", label: "Automatic (the open vault)" }].concat((root.svc ? root.svc.vaults : []).map(function(v) { return { value: v.path, label: v.name + " · " + v.folder.replace(v.path + "/", "").replace(v.path, "/") } }))
+    foreground: root.foreground; fontFamily: root.fontFamily
+    onChanged: function(v) { if (root.svc) root.svc.setConfig("obsidianVault", v) }
+  }
   Toggle {
     width: parent.width
     label: "Keep awake while recording"
