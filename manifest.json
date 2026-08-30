@@ -5,7 +5,7 @@
   "version": "1.0.0",
   "author": "Corey Tyhurst",
   "license": "MIT",
-  "description": "Omarchy shell plugin: record conversations, keep the audio, transcribe locally later using tools that come with Omarchy.",
+  "description": "A local-only recorder and transcriber built entirely from what's already on your Omarchy box.",
   "kinds": [
     "service",
     "bar-widget",
