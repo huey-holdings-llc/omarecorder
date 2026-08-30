@@ -202,7 +202,12 @@ Panel {
             width: parent.width
             label: "Source"
             value: root.ready ? root.svc.defaultSource : "mic"
-            options: [{ value: "mic", label: "Microphone" }, { value: "system", label: "System audio" }, { value: "both", label: "Mic + system audio" }]
+            // Say what each option captures: a mic on speakers hears the computer too.
+            options: [
+              { value: "mic", label: "Microphone (what the mic hears)" },
+              { value: "system", label: "System audio (what the computer plays)" },
+              { value: "both", label: "Mic + system audio (two tracks, mixed)" }
+            ]
             foreground: root.foreground
             fontFamily: root.fontFamily
             onChanged: function(v) { root.svc.setConfig("defaultSource", v) }
@@ -243,19 +248,12 @@ Panel {
                 required property int index
                 width: recentColumn.width
                 rec: modelData
-                job: root.ready ? root.svc.jobFor(modelData.id) : null
+                svc: root.svc
                 foreground: root.foreground
                 dimColor: root.dim
                 fontFamily: root.fontFamily
                 current: root.cursorActive && root.cursorIndex === index
-                displayTitle: root.ready ? root.svc.displayTitle(modelData) : ""
-                live: root.ready && modelData.id === root.svc.activeId
-                elapsedText: root.ready ? root.svc.elapsedText : ""
-                jobElapsedText: root.ready ? root.svc.jobProgressText(root.svc.jobFor(modelData.id)) + root.svc.fmtHms(root.svc.jobElapsed(root.svc.jobFor(modelData.id))) : ""
-                clipped: root.ready && root.svc.isClipped(modelData)
                 urgent: root.urgent
-                durationText: root.ready ? root.svc.fmtDuration(modelData.duration_s) : ""
-                dateText: root.ready ? root.svc.fmtDate(modelData.created) : ""
                 onClicked: { root.cursorActive = true; root.cursorIndex = index; root.openLibrary() }
                 onTranscribeRequested: root.svc.transcribe(modelData.id)
                 onOpenRequested: root.svc.openTranscript(modelData.id)

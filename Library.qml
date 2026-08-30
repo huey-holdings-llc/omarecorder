@@ -356,21 +356,14 @@ Item {
                   required property int index
                   width: list.width - Style.spacing.sm
                   rec: modelData
-                  job: root.svc ? root.svc.jobFor(modelData.id) : null
+                  svc: root.svc
                   showActions: false
                   foreground: root.foreground
                   dimColor: root.dim
                   fontFamily: root.fontFamily
                   current: index === root.selectedIndex
                   currentFill: root.selectedBackground
-                  displayTitle: root.svc ? root.svc.displayTitle(modelData) : ""
-                  live: !!(root.svc && modelData.id === root.svc.activeId)
-                  elapsedText: root.svc ? root.svc.elapsedText : ""
-                  jobElapsedText: root.svc ? root.svc.jobProgressText(root.svc.jobFor(modelData.id)) + root.svc.fmtHms(root.svc.jobElapsed(root.svc.jobFor(modelData.id))) : ""
-                  clipped: !!(root.svc && root.svc.isClipped(modelData))
                   urgent: root.urgent
-                  durationText: root.svc ? root.svc.fmtDuration(modelData.duration_s) : ""
-                  dateText: root.svc ? root.svc.fmtDate(modelData.created) : ""
                   onClicked: root.selectAbsolute(index)
                 }
               }
