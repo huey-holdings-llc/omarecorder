@@ -85,7 +85,8 @@ valid_seconds() { [[ "$1" =~ ^[0-9]+([.][0-9]+)?$ ]]; }
 # ---------------------------------------------------------------- config ----
 CONFIG_DEFAULTS=$(jq -cn --arg dir "${OMARECORDER_DIR:-$HOME/Recordings}" '{
   recordingsDir: $dir, defaultSource: "mic", defaultModel: "base.en",
-  language: "en", keepAwake: true, threads: 0 }')
+  language: "en", keepAwake: true, threads: 0,
+  obsidianVault: "", exportDir: "" }')   # "" = automatic (see resolve_export_target)
 
 load_config() {
   local file='{}'
@@ -106,10 +107,13 @@ cmd_config() {
       if [[ "${1:-}" == "--json" || -z "${1:-}" ]]; then jq . <<<"$CONFIG"
       else jq -e --arg k "$1" 'has($k)' <<<"$CONFIG" >/dev/null || die "unknown config key: $1"; cfg "$1"; fi ;;
     set)
-      local key="${1:-}" val="${2:-}"; [[ -n "$key" && -n "$val" ]] || die "usage: config set <key> <value>"
+      local key="${1:-}" val="${2:-}"; [[ -n "$key" ]] || die "usage: config set <key> <value>"
+      # An empty value is only meaningful for the export targets ("" = automatic).
+      [[ -n "$val" || "$key" =~ ^(obsidianVault|exportDir)$ ]] || die "usage: config set <key> <value>"
       case "$key" in
         recordingsDir) local d="${val/#\~/$HOME}"; [[ -d "$d" && -w "$d" ]] || die "recordingsDir must be an existing writable directory: $val" ;;
-        defaultModel|language) ;;
+        obsidianVault) [[ -z "$val" || -d "${val/#\~/$HOME}" ]] || die "obsidianVault must be an existing directory (or \"\" for automatic): $val" ;;
+        defaultModel|language|exportDir) ;;
         defaultSource) [[ "$val" =~ ^(mic|system|both)$ ]] || die "defaultSource must be mic|system|both" ;;
         keepAwake) [[ "$val" =~ ^(true|false)$ ]] || die "keepAwake must be true|false" ;;
         threads) [[ "$val" =~ ^[0-9]+$ ]] || die "threads must be an integer" ;;
@@ -510,6 +514,123 @@ cmd_copy() {
   echo "copied $id"
 }
 
+# --------------------------------------------------------------- export ----
+# "Send to Obsidian": the transcript becomes a Markdown note with YAML
+# frontmatter in the folder where Obsidian itself would file a new note.
+OBSIDIAN_JSON="$XDG_CONFIG_HOME/obsidian/obsidian.json"   # Obsidian's own vault registry
+
+# vault_new_file_location <vault> → newFileLocation from .obsidian/app.json ("" if unset)
+vault_new_file_location() { [[ -f "$1/.obsidian/app.json" ]] && jq -r '.newFileLocation // ""' "$1/.obsidian/app.json" 2>/dev/null; return 0; }
+# vault_folder <vault> → where a new note goes: <vault>/<newFileFolderPath> when
+# Obsidian is set to "folder", the vault root for "root"/"current"/unset.
+vault_folder() {
+  local v="$1" sub=""
+  if [[ "$(vault_new_file_location "$v")" == "folder" ]]; then
+    sub=$(jq -r '.newFileFolderPath // ""' "$v/.obsidian/app.json" 2>/dev/null || true); sub="${sub#/}"; sub="${sub%/}"
+  fi
+  if [[ -n "$sub" ]]; then echo "$v/$sub"; else echo "$v"; fi
+}
+vault_json() { # vault_json <path> <open:true|false> <ts>
+  jq -cn --arg p "$1" --argjson o "$2" --argjson t "$3" --arg loc "$(vault_new_file_location "$1")" --arg f "$(vault_folder "$1")" \
+    '{path:$p, name:($p | split("/") | last), open:$o, ts:$t, newFileLocation:$loc, folder:$f}'
+}
+
+# vaults [--json]: the vaults Obsidian knows about, open one first, then most recent.
+cmd_vaults() {
+  local arr='[]' p o t
+  if [[ -f "$OBSIDIAN_JSON" ]]; then
+    while IFS=$'\t' read -r p o t; do
+      p="${p%/}"; [[ -n "$p" && -d "$p" ]] || continue
+      arr=$(jq -c --argjson v "$(vault_json "$p" "$o" "$t")" '. + [$v]' <<<"$arr")
+    done < <(jq -r '.vaults // {} | to_entries[] | .value | [(.path // ""), (.open == true), ((.ts // 0) | tonumber? // 0)] | @tsv' "$OBSIDIAN_JSON" 2>/dev/null || true)
+    arr=$(jq -c 'sort_by((if .open then 0 else 1 end), -.ts)' <<<"$arr")
+  fi
+  if [[ "${1:-}" == "--json" ]]; then jq . <<<"$arr"; return 0; fi
+  jq -r '.[] | "\(if .open then "*" else " " end) \(.name)  \(.folder)"' <<<"$arr"
+}
+
+# resolve_export_target <recdir> [--vault P] [--dir P] → "<folder>\t<vault or empty>"
+# --dir wins; then an explicit/configured vault (must exist — never silently
+# another one); then the open/most recent Obsidian vault; then config exportDir;
+# and with no Obsidian at all the note sits next to the recording.
+resolve_export_target() {
+  local recdir="$1" vault="" dir=""; shift
+  while [[ $# -gt 0 ]]; do case "$1" in --vault) vault="${2:-}"; shift 2 ;; --dir) dir="${2:-}"; shift 2 ;; *) die "unknown option: $1" ;; esac; done
+  if [[ -n "$dir" ]]; then printf '%s\t\n' "${dir/#\~/$HOME}"; return 0; fi
+  [[ -n "$vault" ]] || vault=$(cfg obsidianVault)
+  if [[ -n "$vault" ]]; then
+    vault="${vault/#\~/$HOME}"; vault="${vault%/}"
+    [[ -d "$vault" ]] || die "vault not found: $vault"
+    printf '%s\t%s\n' "$(vault_folder "$vault")" "$vault"; return 0
+  fi
+  local first; first=$(cmd_vaults --json | jq -r '.[0] | select(. != null) | [.folder, .path] | @tsv')
+  if [[ -n "$first" ]]; then printf '%s\n' "$first"; return 0; fi
+  local ed; ed=$(cfg exportDir)
+  if [[ -n "$ed" ]]; then printf '%s\t\n' "${ed/#\~/$HOME}"; return 0; fi
+  printf '%s\t\n' "$recdir"
+}
+
+# note_stem <title> <created> → file name (without .md) Obsidian accepts:
+# its illegal characters * " \ / < > : | ? # ^ [ ] become "-".
+note_stem() {
+  local t; t=$(sanitize_title "$1" | tr '*"\\/<>:|?#^[]' '-' | sed -E 's/ +/ /g; s/^ //; s/ $//')
+  [[ -n "$t" ]] || t="Recording ${2:0:10} ${2:11:2}-${2:14:2}"
+  printf '%s' "$t"
+}
+
+# export <id> [--vault P | --dir P] [--no-open]: write the note, remember where, open it in Obsidian
+cmd_export() {
+  local id="${1:-}"; [[ -n "$id" ]] || die "usage: export <id> [--vault P | --dir P] [--no-open]"; shift
+  local -a target=(); local open=1
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --vault|--dir) [[ -n "${2:-}" ]] || die "$1 needs a path"; target+=("$1" "$2"); shift 2 ;;
+      --no-open) open=0; shift ;;
+      *) die "unknown option: $1" ;;
+    esac
+  done
+  local dir; dir=$(require_dir "$id"); local f="$dir/transcript.md"
+  [[ -f "$f" ]] || die "no transcript yet for $id"
+  local line folder vault; line=$(resolve_export_target "$dir" "${target[@]}")
+  IFS=$'\t' read -r folder vault <<<"$line"
+  mkdir -p "$folder" || die "cannot create $folder"
+  local meta title created; meta=$(read_meta "$dir")
+  title=$(jq -r '.title // ""' <<<"$meta"); created=$(jq -r '.created // ""' <<<"$meta")
+  local stem path n=1; stem=$(note_stem "$title" "$created"); path="$folder/$stem.md"
+  while [[ -e "$path" ]]; do n=$((n+1)); path="$folder/$stem ($n).md"; done
+  local src; case "$(jq -r '.source // ""' <<<"$meta")" in
+    mic) src="microphone" ;; system) src="system audio" ;; both) src="mic + system audio" ;; *) src="imported" ;; esac
+  local model; model=$(jq -r '.transcript.model // ""' <<<"$meta"); [[ -n "$model" ]] || model='""'
+  local tmp="$path.tmp.$$"
+  { printf -- '---\n'
+    printf 'title: %s\n' "$(jq -cn --arg t "$title" '$t')"
+    printf 'date: %s\n' "$created"
+    printf 'duration: %s\n' "$(fmt_hms "$(jq -r '.duration_s // 0' <<<"$meta")")"
+    printf 'source: %s\n' "$src"
+    printf 'model: %s\n' "$model"
+    printf 'omarecorder: %s\n' "$id"
+    [[ $(jq -r '.transcript.partial // false' <<<"$meta") == "true" ]] && printf 'partial: true\n'
+    [[ $(jq -r '.transcript.stale // false' <<<"$meta") == "true" ]] && printf 'stale: true\n'
+    printf 'tags: [omarecorder]\n'
+    printf -- '---\n\n'
+    sed '1{/^<!--/d}' "$f"
+  } > "$tmp" && mv -f "$tmp" "$path" || { rm -f "$tmp"; die "could not write $path"; }
+  update_meta "$dir" '.exported_to = $p | .exported_at = $t' --arg p "$path" --arg t "$(now_iso)"
+  bump_state
+  local ttl="${title:-$id}"
+  if [[ -n "$vault" ]]; then
+    if (( open )) && have xdg-open; then
+      setsid xdg-open "obsidian://open?path=$(jq -rn --arg p "$path" '$p | @uri')" >/dev/null 2>&1 </dev/null &
+    fi
+    local rel="${folder#"$vault"}"; rel="${rel#/}"
+    notify "Sent to Obsidian · $ttl" "$(basename "$vault")${rel:+/$rel}"
+  else
+    notify "Transcript exported · $ttl" "$path"
+  fi
+  log "export $id -> $path"
+  echo "$path"
+}
+
 # --------------------------------------------------------------- models ----
 model_installed() { [[ -f "$VOXTYPE_MODELS_DIR/ggml-$1.bin" ]]; }
 model_label() { # "Fast (base.en)" or just the name
@@ -769,6 +890,8 @@ omarecorder $VERSION — record, keep, transcribe locally (voxtype)
   list [--json] | show <id> [--json] | analyze <id>      browse / measure levels
   rename <id> <title> | delete <id> [--yes] [--permanent] manage (delete → trash)
   copy <id> [--print]                                    transcript text → clipboard
+  export <id> [--vault P | --dir P] [--no-open]           transcript → Obsidian note (frontmatter + text)
+  vaults [--json]                                        Obsidian vaults on this machine (* = open)
   transcribe <id> [--model M] [--language L] [--from s --to s]
   cancel <id> | estimate <id> --model M
   models [--json] | model download <name>
@@ -794,6 +917,8 @@ main() {
     rename) cmd_rename "$@" ;;
     delete) cmd_delete "$@" ;;
     copy) cmd_copy "$@" ;;
+    export) cmd_export "$@" ;;
+    vaults) cmd_vaults "$@" ;;
     transcribe) cmd_transcribe "$@" ;;
     cancel) cmd_cancel "$@" ;;
     estimate) cmd_estimate "$@" ;;
