@@ -392,12 +392,17 @@ if pactl list short sources 2>/dev/null | grep -qv '\.monitor'; then
   sleep 1
   check "toggle stops" "$CLI" record toggle
   if pactl get-default-sink >/dev/null 2>&1; then
-    IDS=$("$CLI" record start --source system --title "System check"); sleep 1.5; "$CLI" record stop >/dev/null
+    IDS=$("$CLI" record start --source system --title "System check"); sleep 1.5
+    # The recorder must hang off the sink's monitor ports, not the microphone.
+    check "system source links to the sink monitor" bash -c "pw-link -l | grep -A1 ':monitor_FL' | grep -q 'pw-record'"
+    check "system source does not link to the mic" bash -c "! pw-link -l | grep -A1 'alsa_input.*:capture_FL' | grep -q 'pw-record'"
+    "$CLI" record stop >/dev/null
     DS="$OMARECORDER_DIR/$IDS System check"
     eq "system source recorded" "$(ffprobe -v error -select_streams a:0 -show_entries stream=codec_name -of csv=p=0 "$DS/audio.wav")" "pcm_s16le"
     eq "system source stored in meta" "$(jq -r .source "$DS/meta.json")" "system"
     IDB2=$("$CLI" record start --source both --title "Both check")
     eq "both: meter runs on the mic" "$("$CLI" status --json | jq -r '.recording.meter_pid > 0')" "true"
+    check "both: one recorder on the mic, one on the monitor" bash -c "pw-link -l | grep -A1 ':monitor_FL' | grep -q 'pw-record' && pw-link -l | grep -A1 'alsa_input.*:capture_FL' | grep -q 'pw-record'"
     sleep 1.5; "$CLI" record stop >/dev/null
     DB2="$OMARECORDER_DIR/$IDB2 Both check"
     check "both: mic.wav + system.wav kept" test -s "$DB2/mic.wav" -a -s "$DB2/system.wav"
