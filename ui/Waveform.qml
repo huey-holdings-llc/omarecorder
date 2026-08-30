@@ -51,7 +51,7 @@ Item {
       width: Math.min(parent.width, root.position * root.pxPerSecond)
       color: Util.alpha(root.accent, 0.22)
     }
-    Rectangle {   // playhead (both modes — [ ] mark from it in trim mode)
+    Rectangle {   // playhead (both modes; [ ] mark from it in trim mode)
       visible: root.duration > 0
       x: Math.min(parent.width - width, root.position * root.pxPerSecond); y: 0
       width: Math.max(2, Style.space(2)); height: parent.height

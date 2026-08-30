@@ -1,0 +1,81 @@
+# Contributing to Omarecorder
+
+Thank you for looking at this. Omarecorder is a part-time hobby project, built
+with AI assistance by someone who is not a professional developer. Pull requests
+from people who know this territory better are the best thing that can happen
+to it. Issues and pull requests are handled as time allows, so please be patient,
+and feel free to fork if you would rather move at your own pace.
+
+## Principles
+
+These are the rules the project has followed so far. A pull request that keeps
+to them is easy to merge; one that breaks them will get a conversation first.
+
+1. **Base Omarchy first.** The plugin should work on a fresh Omarchy install
+   with nothing added except `omarchy install dictation` for voxtype. If a
+   feature needs a new package, it does not go in. Prefer what Omarchy already
+   ships (pipewire, ffmpeg, jq, systemd, mpv, wl-clipboard, glib2, Obsidian,
+   Quickshell and Qt) over anything else, and prefer Omarchy's own commands
+   (`omarchy-notification-send`, `omarchy-launch-editor`, `omarchy-shell`) over
+   generic ones where they exist.
+2. **Simplicity and efficiency over features.** No daemons, no polling, no
+   background work the user did not ask for. The shell watches a few small
+   files; everything else happens in the CLI, on demand, and exits. A feature
+   that costs idle CPU, a permanent process, or a second copy of the audio
+   needs a very good reason.
+3. **Follow Omarchy's design and theming.** Use the shell's `qs.Ui` kit
+   (`Panel`, `KeyboardPanel`, `Button`, `Dropdown`, `TextField`,
+   `ConfirmDialog`, and so on) and the theme tokens (`Color.*`, `Style.*`,
+   `bar.foreground` and friends) rather than hard-coded colours, fonts or
+   sizes. Every surface must look right in every Omarchy theme, light or dark,
+   and every action must be reachable from the keyboard with the shortcut shown
+   on screen.
+4. **The CLI is the product; QML is a view.** Anything the UI can do must be an
+   `omarecorder` command first, with a test in `tests/cli.test.sh`. QML files
+   render state and call commands; they hold no logic that a keybinding or a
+   script could not reach.
+5. **Local-first and private by default.** Nothing leaves the machine. Files
+   are created private to the user (`umask 077`), runtime state lives only in
+   `$XDG_RUNTIME_DIR`, and the plugin never edits the user's Hyprland, Omarchy
+   or Obsidian configuration. Read those, do not write them.
+6. **Data is never code.** Titles, paths and ids go through argument arrays and
+   `jq --arg`, never into a shell string, a `jq` filter or a systemd unit body.
+   `tests/lint.sh` greps for `bash -c` in QML and will fail the build if one
+   appears.
+7. **Say what it does.** A button that says "Move to trash" must never
+   `rm -rf`. A README sentence must describe what the code does today, not what
+   is planned. If you change behaviour, change the README and the CHANGELOG in
+   the same pull request.
+
+## Practical bits
+
+* **Dev loop**: `scripts/dev-install.sh --enable`, then `omarchy-restart-shell`
+  for QML changes. `bash tests/cli.test.sh` (about three minutes, uses the real
+  microphone and voxtype) and `bash tests/lint.sh` must both pass. CI runs the
+  lint script and the skip-tolerant subset of the tests in an Arch container.
+* **Tests first** for CLI changes. The harness is plain bash (`check`, `eq`,
+  `fails`); fixtures are generated with ffmpeg; the sandbox is a throwaway XDG
+  tree.
+* **Small pull requests** with one change each merge faster than one big one.
+* **Second-model review**: pull requests get an automated review from OpenAI
+  Codex (see `AGENTS.md`). Treat its findings as a starting point for the
+  discussion, not as a verdict either way.
+* **Style**: bash with `set -euo pipefail` and shellcheck clean; QML in the
+  style of the existing files; plain, direct English in docs and messages.
+* **Reporting a bug**: include `omarecorder setup check --json`, the relevant
+  lines of `~/.local/state/omarecorder/omarecorder.log`, and, for a failed
+  transcription, `~/.local/state/omarecorder/tx-<id>.err`. Never paste a
+  transcript you would not want public.
+
+## Ideas that fit
+
+Anything on the README roadmap, better estimates, a nicer Setup card, more
+languages, accessibility, and anything that makes the code simpler without
+changing what it does. Ideas that do not fit: new engines or models that need
+packages Omarchy does not ship, cloud services, or features that need a
+resident process.
+
+## License
+
+By contributing you agree that your contribution is licensed under the MIT
+license, like the rest of the project.

@@ -324,7 +324,7 @@ record_start() {
     '.recording = {id:$id, source:$source, dir:$dir, started_at:$t, pids:$pids, files:$files, meter_pid:$mp}'
   log "record start $id source=$source dir=$dir"
   local src_label; case "$source" in mic) src_label="microphone" ;; system) src_label="system audio" ;; both) src_label="microphone + system audio" ;; esac
-  notify "Recording started" "${title:-$id} — $src_label. Click the bar icon or press the toggle to stop."
+  notify "Recording started" "${title:-$id}, $src_label. Click the bar icon or press the toggle to stop."
   echo "$id"
 }
 
@@ -349,7 +349,7 @@ record_stop() {
   if [[ "$source" == "both" ]] && ! mix_both "$dir"; then
     bump_state
     notify "Recording saved, but mixing failed · ${id}" "mic.wav and system.wav are kept in the recording folder; audio.wav could not be produced (details: $LOG_FILE)"
-    die "amix failed for $id — mic.wav and system.wav are kept in $dir"
+    die "amix failed for $id; mic.wav and system.wav are kept in $dir"
   fi
   finalize_audio "$dir"
   analyze_levels "$dir"
@@ -358,9 +358,9 @@ record_stop() {
   log "record stop $id duration=${dur}s"
   local ttl; ttl=$(jq -r '.title // empty' "$dir/meta.json"); ttl="${ttl:-$id}"
   if [[ $(jq -r '.levels.clipped // false' "$dir/meta.json") == "true" ]]; then
-    notify "Recording saved · $(fmt_hms "$dur") — audio is clipping" "$ttl — the microphone gain is too high; lower the input level before the next session. Click to transcribe anyway." -- "$SELF" transcribe "$id"
+    notify "Recording saved · $(fmt_hms "$dur") (audio is clipping)" "$ttl: the microphone gain is too high; lower the input level before the next session. Click to transcribe anyway." -- "$SELF" transcribe "$id"
   else
-    notify "Recording saved · $(fmt_hms "$dur")" "$ttl — click to transcribe with $(model_label "$(cfg defaultModel)")" -- "$SELF" transcribe "$id"
+    notify "Recording saved · $(fmt_hms "$dur")" "$ttl. Click to transcribe with $(model_label "$(cfg defaultModel)")" -- "$SELF" transcribe "$id"
   fi
   echo "$id ($(fmt_hms "$dur"))"
 }
@@ -568,8 +568,8 @@ cmd_trim() {
   local dir; dir=$(require_dir "$id")
   reconcile_state
   local st; st=$(read_state)
-  [[ $(jq -r '.recording.id // empty' <<<"$st") == "$id" ]] && die "$id is still recording — stop it first"
-  [[ $(jq -r --arg id "$id" '.jobs[] | select(.type=="transcribe" and .id==$id)' <<<"$st") ]] && die "transcription running for $id — wait for it or cancel it first"
+  [[ $(jq -r '.recording.id // empty' <<<"$st") == "$id" ]] && die "$id is still recording; stop it first"
+  [[ $(jq -r --arg id "$id" '.jobs[] | select(.type=="transcribe" and .id==$id)' <<<"$st") ]] && die "transcription running for $id; wait for it or cancel it first"
   if (( restore )); then
     [[ -f "$dir/audio.orig.wav" ]] || die "nothing to restore: $id has no audio.orig.wav"
     mv -f "$dir/audio.orig.wav" "$dir/audio.wav"
@@ -861,7 +861,7 @@ cmd_transcribe() {
   [[ -f "$dir/audio.wav" ]] || die "no audio.wav in $dir"
   have voxtype || die "voxtype not installed"
   reconcile_state
-  [[ $(jq -r '.recording.id // empty' <<<"$(read_state)") == "$id" ]] && die "$id is still recording — stop it first"
+  [[ $(jq -r '.recording.id // empty' <<<"$(read_state)") == "$id" ]] && die "$id is still recording; stop it first"
   [[ $(jq -r '.duration_s // 0' "$dir/meta.json") == "0" ]] && die "$id has no audio yet"
   if ! model_installed "$model"; then echo "omarecorder: model '$model' is not downloaded (run: omarecorder model download $model)" >&2; exit 3; fi
   [[ $(jq -r --arg id "$id" '.jobs[] | select(.type=="transcribe" and .id==$id)' <<<"$(read_state)") ]] && die "transcription already running for $id"
@@ -968,7 +968,7 @@ _tx_worker() {
     mkdir -p "$STATE_DIR"; mv -f "$errlog" "$STATE_DIR/tx-$id.err" 2>/dev/null || true
     if (( i > 1 )) && [[ -s "$acc" ]]; then   # some pieces made it: keep them, say so
       publish_transcript "$dir" "$acc" "$model" "$lang" "$from" "$to" "$n" true
-      notify "Transcription stopped after $((i - 1))/$n pieces · $ttl" "${why:-voxtype failed} — the finished pieces are kept (details: $STATE_DIR/tx-$id.err)"
+      notify "Transcription stopped after $((i - 1))/$n pieces · $ttl" "${why:-voxtype failed}. The finished pieces are kept (details: $STATE_DIR/tx-$id.err)"
     else
       notify "Transcription failed · $ttl" "${why:-voxtype returned no text} (details: $STATE_DIR/tx-$id.err)"
     fi
@@ -985,7 +985,7 @@ _tx_worker() {
     --arg m "$model" --arg l "$lang" --arg c "$(now_iso)" --argjson e "$elapsed" --argjson r "$rtf" --argjson N "$n"
   state_set --arg id "$id" '.jobs |= map(select(.id != $id))'
   log "transcribe ok $id model=$model pieces=$n elapsed=${elapsed}s rtf=$rtf"
-  notify "Transcript ready · $ttl" "$(model_label "$model") took $(fmt_hms "${elapsed%.*}") — click to open" -- "$SELF" open "$id"
+  notify "Transcript ready · $ttl" "$(model_label "$model") took $(fmt_hms "${elapsed%.*}"). Click to open" -- "$SELF" open "$id"
 }
 # publish_transcript <dir> <body> <model> <lang> <from> <to> <chunks> <partial>: header + body → transcript.md (atomic)
 publish_transcript() {
@@ -1007,9 +1007,9 @@ cmd_cancel() {
   if (( was )); then
     local ttl; ttl=$(jq -r '.title // empty' "$dir/meta.json" 2>/dev/null); ttl="${ttl:-$id}"
     if [[ -n "$dir" && $(jq -r '.transcript.partial // false' "$dir/meta.json" 2>/dev/null) == "true" ]]; then
-      notify "Transcription cancelled · $ttl" "Kept $(jq -r '"\(.transcript.chunks_done)/\(.transcript.chunks)"' "$dir/meta.json") pieces — re-transcribe any time to finish"
+      notify "Transcription cancelled · $ttl" "Kept $(jq -r '"\(.transcript.chunks_done)/\(.transcript.chunks)"' "$dir/meta.json") pieces. Re-transcribe any time to finish"
     else
-      notify "Transcription cancelled · $ttl" "The recording is untouched — transcribe it again any time"
+      notify "Transcription cancelled · $ttl" "The recording is untouched. Transcribe it again any time"
     fi
     log "transcribe cancelled $id"
   fi
@@ -1092,7 +1092,7 @@ cmd_setup() {
 # ---------------------------------------------------------------- main -----
 usage() {
   cat <<EOF
-omarecorder $VERSION — record, keep, transcribe locally (voxtype)
+omarecorder $VERSION: record, keep, transcribe locally (voxtype)
 
   record start [--source mic|system|both] [--title T]   start a recording
   record stop | toggle | status [--json]                 control / inspect

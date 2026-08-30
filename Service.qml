@@ -222,7 +222,7 @@ QtObject {
   }
 
   Component.onCompleted: {
-    if (!root.runtimeDir) { root.lastError = "XDG_RUNTIME_DIR is not set — Omarecorder cannot run"; return }
+    if (!root.runtimeDir) { root.lastError = "XDG_RUNTIME_DIR is not set, so Omarecorder cannot run"; return }
     // `status` reconciles stale state and creates the (0700) runtime dir and
     // state.json, so the FileView above has a real file to watch from the start.
     run(["status"], function() { root.stateView.reload(); root.refresh() })
