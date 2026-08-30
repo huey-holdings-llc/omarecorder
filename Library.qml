@@ -171,7 +171,6 @@ Item {
   onSelectedChanged: {
     stopPlayback()
     trimMode = false; previewing = false; showRaw = false
-    transcriptText = ""   // never show the previous recording's text while the file loads
     // Re-transcribe defaults to the model that produced the visible transcript.
     var last = selected && selected.transcript && selected.transcript.model ? selected.transcript.model : ""
     var m = svc && last ? svc.modelByName(last) : null
@@ -228,6 +227,9 @@ Item {
     path: !root.selected ? "" : (root.hasTidy && !root.showRaw ? root.selected.tidy_path : (root.selected.transcript_path || ""))
     watchChanges: true
     printErrors: false
+    // Clearing here (not on selection) prevents the previous recording's text
+    // flashing, without wiping the view on list refreshes that keep the path.
+    onPathChanged: root.transcriptText = ""
     onLoaded: root.transcriptText = root.stripHeader(text())
     onLoadFailed: root.transcriptText = ""
     onFileChanged: reload()
