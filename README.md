@@ -160,11 +160,6 @@ are left untouched.
   starts or stops recording. While recording it becomes a red record glyph with
   a running `HH:MM:SS`, replaced by CLIP while the input is on the rails. An
   hourglass means a transcription is running.
-* **Source picker**: Microphone records what the mic hears, which on speakers includes
-  whatever the computer is playing; use headphones for a clean voice-only take. System
-  audio is a clean digital copy of what the computer plays, with no room and no mic.
-  Mic + system audio records both as separate tracks (`mic.wav`, `system.wav`) and
-  mixes them into `audio.wav`.
 * **Popup keys**: `r` record/stop, `l` library, `i` import, `s` settings,
   `Up`/`Down` and `Enter` on recent rows, `Esc`.
 * **Library keys**: type to search. `Up`/`Down`, `PgUp`/`PgDn`, `Home`/`End`
@@ -219,6 +214,24 @@ are left untouched.
   16 kHz mono, and the id comes from the file's modification time. There is
   deliberately no graphical file picker: a QtQuick FileDialog crashes Quickshell
   on Omarchy 4.
+
+### Which source to pick
+
+Tested on a laptop with its built-in microphone and speakers, playing a video
+while talking:
+
+| Source | What ends up in the file | How it transcribed |
+|---|---|---|
+| Microphone | Your voice, plus whatever the speakers play, as the mic hears it (room sound, echo). Sounds rough. | Well. whisper kept to the voice and mostly ignored the speaker bleed. |
+| System audio | A clean digital copy of what the computer plays. No room, no mic, none of you. | Well. |
+| Mic + system audio | Both tracks kept (`mic.wav`, `system.wav`) and mixed into `audio.wav`. On speakers the mix carries the video twice, once clean and once through the mic. | Your voice was fine; the parts where the video was playing were not. |
+
+So: for a call or a video, **System audio**. For your own voice, **Microphone**.
+For a conversation where you talk and the computer plays the other side,
+**Mic + system audio**, and wear headphones: then the mic only hears you, the
+monitor only carries them, and the mix is clean. Headphones are the single
+biggest improvement for any take that involves the speakers. The raw tracks
+stay in the folder, so a bad mix can be redone by hand with ffmpeg.
 
 ### Where things live
 
