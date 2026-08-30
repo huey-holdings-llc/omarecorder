@@ -3,7 +3,6 @@ import Quickshell.Io
 import Quickshell.Wayland
 import QtQuick
 import QtQuick.Controls
-import QtMultimedia
 import qs.Commons
 import "ui/format.js" as Fmt
 import qs.Ui
@@ -31,15 +30,18 @@ Item {
   property string transcriptText: ""
   property bool showRaw: false            // the tidy transcript is the default view
   readonly property bool hasTidy: !!(selected && selected.tidy_path)
-  // playback (in-process, QtMultimedia) and trim mode
+  // Playback runs in mpv, outside the shell (an in-process QtMultimedia player
+  // crashed quickshell on multi-hour takes). The CLI starts mpv with an IPC
+  // socket; this file observes time-pos/pause over it and sends seeks.
   property bool trimMode: false
   property real trimFrom: 0
   property real trimTo: 0
   property bool trimConfirmOpen: false
   property bool previewing: false
-  readonly property var player: playerLoader.status === Loader.Ready ? playerLoader.item : null
-  readonly property bool playing: !!(player && player.playbackState === MediaPlayer.PlayingState)
-  readonly property real positionS: player ? player.position / 1000 : 0
+  property string playingId: ""
+  property bool mpvPaused: false
+  property real positionS: 0
+  readonly property bool playing: playingId !== "" && !mpvPaused
 
   property color background: Color.popups.background
   property color foreground: Color.popups.text
@@ -75,7 +77,7 @@ Item {
     if (svc) svc.refresh()
     Qt.callLater(function() { keyCatcher.forceActiveFocus() })
   }
-  function close() { root.deleteConfirmOpen = false; root.trimConfirmOpen = false; root.trimMode = false; root.opened = false; if (player) player.stop() }
+  function close() { root.deleteConfirmOpen = false; root.trimConfirmOpen = false; root.trimMode = false; root.opened = false; stopPlayback() }
   function toggle() { root.opened ? root.close() : root.open("{}") }
 
   function filteredRows() {
@@ -114,24 +116,37 @@ Item {
     svc.transcribe(selected.id, modelForRun, svc.config.language || "en")
   }
   function cancelSelected() { if (svc && selected && selectedJob) svc.cancel(selected.id) }
-  function audioUrl(rec) { return rec && rec.audio ? Fmt.fileUrl(rec.audio) : "" }
-  function loadSelected() { if (player && selected && String(player.source) !== audioUrl(selected)) player.source = audioUrl(selected) }
+  function mpvSend(cmd) { if (mpvSock.connected) mpvSock.write(JSON.stringify({ command: cmd }) + "\n") }
+  function stopPlayback() {
+    if (playingId !== "" && svc) svc.stopPlay()
+    playingId = ""; mpvPaused = false; positionS = 0; previewing = false
+  }
+  function startPlayback(seconds) {
+    if (!svc || !selected) return
+    playingId = selected.id; mpvPaused = false; positionS = seconds
+    if (seconds > 0) svc.playFrom(selected.id, seconds.toFixed(2)); else svc.play(selected.id)
+    mpvRetry.tries = 0; mpvRetry.restart()
+  }
   function togglePlay() {
-    if (!player || !selected || selectedLive) return
-    if (playing) { player.pause(); previewing = false } else { loadSelected(); player.play() }
+    if (!svc || !selected || selectedLive) return
+    if (playingId === selected.id) { mpvSend(["set_property", "pause", !mpvPaused]); previewing = false }
+    else startPlayback(0)
   }
   function seekTo(seconds) {
-    if (!player || !selected || selectedLive) return
-    loadSelected(); player.position = Math.max(0, Math.round(seconds * 1000))
+    if (!svc || !selected || selectedLive) return
+    seconds = Math.max(0, seconds)
+    if (playingId === selected.id && mpvSock.connected) { mpvSend(["seek", seconds, "absolute"]); positionS = seconds }
+    else startPlayback(seconds)
   }
   function startTrim() {
     if (!selected || selectedLive || selectedJob || !selected.waveform) return
     trimFrom = 0; trimTo = selected.duration_s || 0; trimMode = true
   }
   function previewRange() {
-    if (!player) return
-    if (previewing) { player.pause(); previewing = false; return }
-    seekTo(trimFrom); previewing = true; player.play()
+    if (previewing) { mpvSend(["set_property", "pause", true]); previewing = false; return }
+    previewing = true
+    seekTo(trimFrom)
+    if (mpvPaused) mpvSend(["set_property", "pause", false])
   }
   // [ and ] in trim mode: put the start / end where the playhead is.
   function markStart() { if (positionS < trimTo - 0.5) trimFrom = positionS }
@@ -140,7 +155,7 @@ Item {
   // dialog defaults to Trim; delete keeps defaulting to Cancel.
   function requestTrim() { if (trimMode && trimTo > trimFrom + 0.5) { trimConfirm.selectedIndex = 1; trimConfirmOpen = true } }
   function confirmTrim() {
-    if (svc && selected) { if (player) player.stop(); svc.trim(selected.id, trimFrom.toFixed(2), trimTo.toFixed(2)) }
+    if (svc && selected) { stopPlayback(); svc.trim(selected.id, trimFrom.toFixed(2), trimTo.toFixed(2)) }
     trimConfirmOpen = false; trimMode = false; Qt.callLater(function() { keyCatcher.forceActiveFocus() })
   }
   function cancelTrimConfirm() { trimConfirmOpen = false; Qt.callLater(function() { keyCatcher.forceActiveFocus() }) }
@@ -154,7 +169,7 @@ Item {
 
   onRowsChanged: ensureSelection()
   onSelectedChanged: {
-    if (player) player.stop()
+    stopPlayback()
     trimMode = false; previewing = false; showRaw = false
     transcriptText = ""   // never show the previous recording's text while the file loads
     // Re-transcribe defaults to the model that produced the visible transcript.
@@ -164,16 +179,46 @@ Item {
     picker.value = modelForRun
   }
 
-  // The audio backend only exists while the Library is open.
-  Loader {
-    id: playerLoader
-    active: root.opened
-    sourceComponent: Component {
-      MediaPlayer {
-        audioOutput: AudioOutput {}
-        onPositionChanged: if (root.previewing && position >= root.trimTo * 1000) { pause(); root.previewing = false }
-        onPlaybackStateChanged: if (playbackState !== MediaPlayer.PlayingState) root.previewing = false
-        onErrorOccurred: function(error, errorString) { if (root.svc) root.svc.lastError = "Playback: " + errorString }
+  // mpv's IPC socket appears shortly after the CLI starts the player; retry
+  // until it does, then observe position and pause state.
+  Timer {
+    id: mpvRetry
+    property int tries: 0
+    interval: 250; repeat: true
+    onTriggered: {
+      if (root.playingId === "") { stop(); return }
+      if (mpvSock.connected) { stop(); return }
+      tries++
+      if (tries > 20) { stop(); root.stopPlayback(); return }   // mpv never came up
+      mpvSock.connected = false
+      mpvSock.connected = true
+    }
+  }
+  Socket {
+    id: mpvSock
+    path: root.svc && root.svc.runtimeDir ? root.svc.runtimeDir + "/mpv.sock" : ""
+    onConnectedChanged: {
+      if (connected) {
+        write(JSON.stringify({ command: ["observe_property", 1, "time-pos"] }) + "\n")
+        write(JSON.stringify({ command: ["observe_property", 2, "pause"] }) + "\n")
+      } else if (root.playingId !== "" && !mpvRetry.running) {
+        root.stopPlayback()   // mpv exited (end of file, or stop-play)
+      }
+    }
+    parser: SplitParser {
+      onRead: function(line) {
+        var msg
+        try { msg = JSON.parse(line) } catch (e) { return }
+        if (msg.event === "property-change") {
+          if (msg.name === "time-pos" && typeof msg.data === "number") {
+            root.positionS = msg.data
+            if (root.previewing && msg.data >= root.trimTo) { root.mpvSend(["set_property", "pause", true]); root.previewing = false }
+          } else if (msg.name === "pause") {
+            root.mpvPaused = msg.data === true
+          }
+        } else if (msg.event === "end-file") {
+          root.stopPlayback()
+        }
       }
     }
   }
@@ -515,7 +560,7 @@ Item {
                   iconText: "󰕌"
                   tooltipText: "Restore the untrimmed original"
                   foreground: root.foreground; fontFamily: root.fontFamily
-                  onClicked: if (root.svc && root.selected) { if (root.player) root.player.stop(); root.svc.restoreTrim(root.selected.id) }
+                  onClicked: if (root.svc && root.selected) { root.stopPlayback(); root.svc.restoreTrim(root.selected.id) }
                 }
                 PanelActionButton {
                   anchors.verticalCenter: parent.verticalCenter

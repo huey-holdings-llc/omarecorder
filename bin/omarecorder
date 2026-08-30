@@ -1194,7 +1194,12 @@ cmd_play() {
   cmd_stop_play >/dev/null 2>&1 || true
   mkdir -p "$RUN_DIR"
   local -a player
-  if have mpv; then player=(mpv --no-video --really-quiet); [[ -n "$from" ]] && player+=("--start=$from"); player+=("$dir/audio.wav")
+  if have mpv; then
+    # The IPC socket lets the Library scrub and pause; playback stays outside the
+    # shell process (an in-shell QtMultimedia player crashed quickshell on 2 h takes).
+    player=(mpv --no-video --really-quiet --input-ipc-server="$RUN_DIR/mpv.sock" --keep-open=no)
+    [[ -n "$from" ]] && player+=("--start=$from")
+    player+=("$dir/audio.wav")
   else player=(pw-play "$dir/audio.wav"); fi
   setsid "${player[@]}" >/dev/null 2>&1 < /dev/null &
   echo $! > "$PLAY_PID_FILE"; echo "playing $id"
