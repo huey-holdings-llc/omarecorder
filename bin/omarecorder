@@ -1197,7 +1197,11 @@ cmd_play() {
   if have mpv; then
     # The IPC socket lets the Library scrub and pause; playback stays outside the
     # shell process (an in-shell QtMultimedia player crashed quickshell on 2 h takes).
-    player=(mpv --no-video --really-quiet --input-ipc-server="$RUN_DIR/mpv.sock" --keep-open=no)
+    # --ao=pulse: the pulse layer of PipeWire, deliberately. mpv's native pipewire
+    # output takes a realtime thread via rtkit, and a machine under RT-budget
+    # pressure then has the kernel SIGKILL the player (RLIMIT_RTTIME) with no
+    # trace. The pulse path is immune and costs nothing.
+    player=(mpv --no-video --really-quiet --ao=pulse --input-ipc-server="$RUN_DIR/mpv.sock" --keep-open=no)
     [[ -n "$from" ]] && player+=("--start=$from")
     player+=("$dir/audio.wav")
   else player=(pw-play "$dir/audio.wav"); fi
