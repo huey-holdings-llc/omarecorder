@@ -337,7 +337,7 @@ if command -v voxtype >/dev/null && [[ -f "${VOXTYPE_MODELS_DIR:-$HOME/.local/sh
   "$CLI" cancel "$ID6" >/dev/null
 
   echo "== transcribe (detached systemd-run unit)"
-  if command -v systemd-run >/dev/null && systemctl --user is-system-running >/dev/null 2>&1; then
+  if command -v systemd-run >/dev/null && systemctl --user show -p Version >/dev/null 2>&1; then
     rm -f "$D3/transcript.md"
     check "detached transcribe starts" env OMARECORDER_SYNC=0 "$CLI" transcribe "$ID3" --model base.en
     eq "job registered with its unit" "$("$CLI" status --json | jq -r '.jobs[0].unit')" "omarecorder-tx-$ID3"
