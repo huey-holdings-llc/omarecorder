@@ -24,11 +24,12 @@ This is a part-time project. Issues and pull requests are read and handled as
 time allows, not on a schedule. If you need something sooner, fork it and make
 it your own; the MIT license is there for exactly that.
 
-If you are on macOS or Windows, have a look at
-[Samurai Scribe](https://samuraiscribe.com/). It is a more polished and far more
-feature-rich local transcription app, its developer has been generous with
-advice, and its "record, keep, transcribe, browse" shape inspired this plugin.
-Omarecorder exists because nothing like it fit an Omarchy desktop.
+If you are on macOS or Windows, go look at
+[Samurai Scribe](https://samuraiscribe.com/) instead: a polished, far more
+feature-rich local transcription app whose "record, keep, transcribe, browse"
+shape inspired this plugin. To be clear, its developer had no discussion with
+or input into Omarecorder; the inspiration was entirely from admiring their
+work. Omarecorder exists because nothing like it fit an Omarchy desktop.
 
 ## Privacy and security
 
@@ -70,9 +71,10 @@ rather than a change to this one. Open an issue if that matters to you.
 ## Prior art and thanks
 
 * [Samurai Scribe](https://samuraiscribe.com/), a local transcription app for
-  macOS and Windows. It shaped the whole "record, keep, transcribe, browse" idea,
-  and its developer's advice shaped this plugin. If you are on either platform,
-  use it; it is far more polished than this.
+  macOS and Windows. Its "record, keep, transcribe, browse" idea inspired this
+  plugin, from a distance: its developer had no involvement in Omarecorder and
+  deserves none of the blame for it. If you are on either platform, use Samurai
+  Scribe; it is far more polished than this.
 * [voxtype](https://github.com/peteonrails/voxtype), the push-to-talk dictation
   engine Omarchy ships. Omarecorder is a library around its `transcribe` command.
 * [omarchy-voxtype-osd](https://github.com/rmacy/omarchy-voxtype-osd) for the
