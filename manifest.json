@@ -1,0 +1,30 @@
+{
+  "schemaVersion": 1,
+  "id": "io.github.coreytyhurst.omarecorder",
+  "name": "Omarecorder",
+  "version": "0.1.0",
+  "author": "Corey Tyhurst",
+  "license": "MIT",
+  "description": "Record conversations and meetings from the Omarchy bar, keep the audio, and transcribe them locally later with voxtype.",
+  "kinds": ["service", "bar-widget", "overlay"],
+  "keepLoaded": true,
+  "entryPoints": {
+    "service": "Service.qml",
+    "barWidget": "Panel.qml",
+    "overlay": "Library.qml"
+  },
+  "barWidget": {
+    "displayName": "Omarecorder",
+    "description": "One-click audio recording with a local transcription library.",
+    "category": "Productivity",
+    "aliases": ["recorder", "record", "transcribe", "meeting"],
+    "allowMultiple": false,
+    "defaultSection": "right",
+    "defaults": {
+      "recentCount": 5
+    },
+    "schema": [
+      { "key": "recentCount", "type": "integer", "label": "Recent recordings shown in popup", "min": 0, "max": 10, "step": 1, "defaultValue": 5 }
+    ]
+  }
+}
