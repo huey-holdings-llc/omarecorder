@@ -43,6 +43,7 @@ QtObject {
   // Jobs in state.json carry started_at only (elapsed_s is a `status` extra).
   function jobElapsed(j) { return j && j.started_at ? Math.max(0, now - j.started_at) : 0 }
   readonly property string transcribeElapsedText: fmtHms(jobElapsed(activeJob))
+  readonly property string activeJobTitle: activeJob ? displayTitle(recordingById(activeJob.id) || { id: activeJob.id, created: "" }) || activeJob.id : ""
   readonly property string defaultModel: config && config.defaultModel ? config.defaultModel : "base.en"
   readonly property string defaultSource: config && config.defaultSource ? config.defaultSource : "mic"
 

@@ -113,7 +113,14 @@ Item {
   function stripHeader(t) { return String(t || "").replace(/^<!--[^\n]*-->\n?/, "").trim() }
 
   onRowsChanged: ensureSelection()
-  onSelectedChanged: if (!selected || !selected.transcript_path) transcriptText = ""
+  onSelectedChanged: {
+    if (!selected || !selected.transcript_path) transcriptText = ""
+    // Re-transcribe defaults to the model that produced the visible transcript.
+    var last = selected && selected.transcript && selected.transcript.model ? selected.transcript.model : ""
+    var m = svc && last ? svc.modelByName(last) : null
+    chosenModel = m ? last : ""
+    picker.value = modelForRun
+  }
 
   FileView {
     id: transcriptFile
@@ -278,6 +285,7 @@ Item {
                   displayTitle: root.svc ? root.svc.displayTitle(modelData) : ""
                   live: !!(root.svc && modelData.id === root.svc.activeId)
                   elapsedText: root.svc ? root.svc.elapsedText : ""
+                  jobElapsedText: root.svc ? root.svc.fmtHms(root.svc.jobElapsed(root.svc.jobFor(modelData.id))) : ""
                   clipped: !!(root.svc && root.svc.isClipped(modelData))
                   urgent: root.urgent
                   durationText: root.svc ? root.svc.fmtDuration(modelData.duration_s) : ""
@@ -308,7 +316,7 @@ Item {
                 id: titleField
                 width: parent.width
                 text: root.selected ? (root.selected.title || "") : ""
-                placeholderText: root.selected && root.svc ? root.svc.displayTitle(root.selected) + "  — type a name, Enter to save" : ""
+                placeholderText: root.selected && root.svc ? root.svc.displayTitle(root.selected) : ""
                 foreground: root.foreground
                 font.family: root.fontFamily
                 font.pixelSize: Style.font.subtitle
@@ -332,7 +340,8 @@ Item {
                     : root.svc.fmtDate(root.selected.created) + " · " + root.svc.fmtDuration(root.selected.duration_s) + " · " + root.svc.fmtBytes(root.selected.size_bytes)
                     + " · " + root.svc.sourceLabel(root.selected.source)
                     + (root.selected.transcript ? " · transcribed with " + root.selected.transcript.model : "")
-                    + (root.svc.isClipped(root.selected) ? " · ⚠ clipped" : ""))
+                    + (root.svc.isClipped(root.selected) ? " · ⚠ clipped" : "")
+                    + (root.playingId === root.selected.id ? " · ▶ playing" : ""))
                   : ""
                 color: root.selectedLive ? root.urgent : root.dim
                 font.family: root.fontFamily
@@ -444,10 +453,11 @@ Item {
                 fontFamily: root.fontFamily
               }
               Text {
-                visible: root.transcriptText.length === 0
+                // The progress line above already says "Transcribing…"; say nothing twice.
+                visible: root.transcriptText.length === 0 && !root.selectedJob
                 width: parent.width
                 text: root.selectedLive ? "Recording in progress — stop it from the bar icon, then transcribe."
-                  : root.selectedJob ? "Transcribing…" : "Not transcribed yet — pick a model above and press Transcribe (or Enter)."
+                  : "Not transcribed yet — pick a model above and press Transcribe (or Enter)."
                 color: root.dim
                 wrapMode: Text.Wrap
                 font.family: root.fontFamily

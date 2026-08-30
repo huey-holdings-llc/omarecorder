@@ -17,6 +17,7 @@ CursorSurface {
   property string displayTitle: ""     // friendly title from Service.displayTitle
   property bool live: false            // this recording is in progress right now
   property string elapsedText: ""      // live elapsed, HH:MM:SS
+  property string jobElapsedText: ""   // elapsed of this row's transcription job
   property bool clipped: false
   property color urgent: Color.urgent
 
@@ -32,7 +33,7 @@ CursorSurface {
   readonly property string titleText: displayTitle ? displayTitle : (rec && rec.title ? rec.title : (rec && rec.id ? rec.id : ""))
   readonly property string subtitleText: live
     ? "Recording… " + elapsedText
-    : working ? "Transcribing with " + job.model + "…"
+    : working ? "Transcribing " + (jobElapsedText ? jobElapsedText + " · " : "") + job.model
     : ((untitled ? "" : dateText) + (durationText ? (untitled ? "" : " · ") + durationText : "") + (clipped ? " · ⚠ clipped" : "") + (transcribed ? " · " + rec.transcript.model : ""))
 
   width: parent ? parent.width : Style.space(300)
@@ -66,7 +67,7 @@ CursorSurface {
     Column {
       id: col
       anchors.verticalCenter: parent.verticalCenter
-      width: parent.width - Style.space(18) - actions.width - parent.spacing * 2
+      width: parent.width - Style.space(18) - (actions.visible ? actions.width + parent.spacing : 0) - parent.spacing
       spacing: 1
       Text {
         width: parent.width

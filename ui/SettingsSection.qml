@@ -23,13 +23,6 @@ Column {
   PanelSectionHeader { text: "SETTINGS"; foreground: root.foreground; fontFamily: root.fontFamily }
 
   Dropdown {
-    width: parent.width; label: "Default source"
-    value: root.cfg.defaultSource || "mic"
-    options: [{ value: "mic", label: "Microphone" }, { value: "system", label: "System audio" }, { value: "both", label: "Microphone + system" }]
-    foreground: root.foreground; fontFamily: root.fontFamily
-    onChanged: function(v) { if (root.svc) root.svc.setConfig("defaultSource", v) }
-  }
-  Dropdown {
     width: parent.width; label: "Default model"
     value: root.cfg.defaultModel || "base.en"
     options: root.installedModels.length ? root.installedModels : [{ value: root.cfg.defaultModel || "base.en", label: root.cfg.defaultModel || "base.en" }]

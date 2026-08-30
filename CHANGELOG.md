@@ -5,7 +5,17 @@ All notable changes to this project are documented here. Format follows
 
 ## [Unreleased]
 
+Third persona pass (an efficiency-minded enthusiast): say each fact once.
+
 ### Changed
+- Popup hero: names the job ("Transcribing 00:24:36 · Sons of Suds…") with an
+  hourglass icon; the take being recorded is no longer repeated in Recent; the
+  hero toggle switch is gone (the Start/Stop button with its `r` hint remains).
+- Recent rows show the transcription's elapsed time; the Library shows it once
+  (progress line) and the Cancel button is just "Cancel".
+- Settings no longer duplicate the popup's Source control.
+- Library: rename hint shown once; re-transcribe preselects the model that made
+  the visible transcript; "▶ playing" in the meta line while playback runs.
 - Model choice is just the three presets — Fast (base.en), Balanced (small.en),
   Accurate (large-v3-turbo); missing ones still show "download N MB".
 - Clipping detection skips the first 2 s (the ADC rails briefly when capture

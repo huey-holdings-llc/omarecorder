@@ -33,13 +33,14 @@ Panel {
   readonly property string barLabel: recording && !vertical ? "  " + svc.elapsedText : ""
   readonly property string stateText: !ready ? "Service unavailable"
     : recording ? "Recording " + svc.elapsedText + " · " + svc.sourceLabel(svc.activeRecording.source)
-    : transcribing ? "Transcribing · " + svc.transcribeElapsedText
+    : transcribing ? "Transcribing " + svc.transcribeElapsedText + " · " + svc.activeJobTitle
     : (svc.downloading ? "Downloading model…" : "Idle")
 
   property bool settingsOpen: false
   property bool cursorActive: false
   property int cursorIndex: -1
-  readonly property var recent: ready ? svc.recordings.slice(0, recentCount) : []
+  // The take being recorded is the hero's status line already; Recent lists the rest.
+  readonly property var recent: ready ? svc.recordings.filter(function(r) { return r.id !== svc.activeId }).slice(0, recentCount) : []
 
   implicitWidth: button.implicitWidth
   implicitHeight: button.implicitHeight
@@ -142,8 +143,8 @@ Panel {
             // Inside iconComponent/trailingControl `root` resolves to the hero,
             // so panel state is exposed here under distinct names.
             readonly property bool rec: root.recording
+            readonly property bool busy: root.transcribing
             readonly property color recColor: root.urgent
-            function toggleRec() { root.toggleRecording() }
             width: parent.width
             title: "Omarecorder"
             meta: root.stateText
@@ -151,17 +152,10 @@ Panel {
             fontFamily: root.fontFamily
             iconComponent: Component {
               Text {
-                text: hero.rec ? "󰑊" : "󰍬"
-                color: hero.rec ? hero.recColor : hero.foreground
+                text: hero.rec ? "󰑊" : (hero.busy ? "󰔟" : "󰍬")
+                color: hero.rec ? hero.recColor : (hero.busy ? Color.accent : hero.foreground)
                 font.family: hero.fontFamily
                 font.pixelSize: Style.font.display
-              }
-            }
-            trailingControl: Component {
-              ToggleSwitch {
-                checked: hero.rec
-                foreground: hero.foreground
-                onToggled: hero.toggleRec()
               }
             }
           }
@@ -238,6 +232,7 @@ Panel {
                 displayTitle: root.ready ? root.svc.displayTitle(modelData) : ""
                 live: root.ready && modelData.id === root.svc.activeId
                 elapsedText: root.ready ? root.svc.elapsedText : ""
+                jobElapsedText: root.ready ? root.svc.fmtHms(root.svc.jobElapsed(root.svc.jobFor(modelData.id))) : ""
                 clipped: root.ready && root.svc.isClipped(modelData)
                 urgent: root.urgent
                 durationText: root.ready ? root.svc.fmtDuration(modelData.duration_s) : ""
