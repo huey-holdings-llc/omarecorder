@@ -183,7 +183,7 @@ Panel {
             width: parent.width
             label: "Source"
             value: root.ready ? root.svc.defaultSource : "mic"
-            options: [{ value: "mic", label: "Microphone" }, { value: "system", label: "System audio" }, { value: "both", label: "Microphone + system" }]
+            options: [{ value: "mic", label: "Microphone" }, { value: "system", label: "System audio" }, { value: "both", label: "Mic + system audio" }]
             foreground: root.foreground
             fontFamily: root.fontFamily
             onChanged: function(v) { root.svc.setConfig("defaultSource", v) }
