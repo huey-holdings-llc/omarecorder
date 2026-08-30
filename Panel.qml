@@ -164,6 +164,7 @@ Panel {
             visible: root.ready && root.svc.lastError.length > 0
             width: parent.width
             text: root.ready ? root.svc.lastError : ""
+            textFormat: Text.PlainText
             color: root.urgent
             font.family: root.fontFamily
             font.pixelSize: Style.font.caption

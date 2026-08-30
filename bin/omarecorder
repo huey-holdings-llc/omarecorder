@@ -782,7 +782,7 @@ EOF
 
 main() {
   load_config
-  mkdir -p "$RUN_DIR" 2>/dev/null || true   # 0700 via umask
+  mkdir -p "$RUN_DIR" 2>/dev/null && chmod 700 "$RUN_DIR" 2>/dev/null || true   # private even if it pre-dates umask 077
   local cmd="${1:-help}"; shift || true
   case "$cmd" in
     record) cmd_record "$@" ;;

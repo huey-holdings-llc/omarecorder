@@ -72,6 +72,7 @@ CursorSurface {
       Text {
         width: parent.width
         text: root.titleText
+        textFormat: Text.PlainText
         color: root.foreground
         font.family: root.fontFamily
         font.pixelSize: Style.font.body
@@ -80,6 +81,7 @@ CursorSurface {
       Text {
         width: parent.width
         text: root.subtitleText
+        textFormat: Text.PlainText
         color: root.live ? root.urgent : root.dimColor
         font.family: root.fontFamily
         font.pixelSize: Style.font.caption

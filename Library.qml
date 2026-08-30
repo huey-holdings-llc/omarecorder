@@ -177,7 +177,7 @@ Item {
           else if (event.key === Qt.Key_F2) { titleField.forceActiveFocus(); titleField.selectAll(); event.accepted = true }
           else if (event.key === Qt.Key_Space) { if (root.filterText) root.setFilter(root.filterText + " "); else root.togglePlay(); event.accepted = true }
           else if (event.key === Qt.Key_Return || event.key === Qt.Key_Enter) {
-            if (root.selected && root.selected.has_transcript && !(event.modifiers & Qt.ShiftModifier)) root.svc.openTranscript(root.selected.id)
+            if (root.svc && root.selected && root.selected.has_transcript && !(event.modifiers & Qt.ShiftModifier)) root.svc.openTranscript(root.selected.id)
             else root.transcribeSelected()
             event.accepted = true
           }
@@ -191,7 +191,8 @@ Item {
           anchors.fill: parent
           opened: root.deleteConfirmOpen
           z: 10
-          message: root.selected && root.svc ? "Move \"" + root.svc.displayTitle(root.selected) + "\" to the trash?" : ""
+          // The kit dialog renders AutoText: keep markup-looking characters out of the title.
+          message: root.selected && root.svc ? "Move \"" + root.svc.displayTitle(root.selected).replace(/[<>]/g, "") + "\" to the trash?" : ""
           confirmText: "Move to trash"
           background: root.background
           foreground: root.foreground
@@ -343,6 +344,7 @@ Item {
                     + (root.svc.isClipped(root.selected) ? " · ⚠ clipped" : "")
                     + (root.playingId === root.selected.id ? " · ▶ playing" : ""))
                   : ""
+                textFormat: Text.PlainText
                 color: root.selectedLive ? root.urgent : root.dim
                 font.family: root.fontFamily
                 font.pixelSize: Style.font.caption
@@ -396,7 +398,7 @@ Item {
                   iconText: "󰉋"
                   tooltipText: "Open folder"
                   foreground: root.foreground; fontFamily: root.fontFamily
-                  onClicked: root.svc.openFolder(root.selected.id)
+                  onClicked: if (root.svc && root.selected) root.svc.openFolder(root.selected.id)
                 }
                 PanelActionButton {
                   anchors.verticalCenter: parent.verticalCenter
@@ -435,13 +437,13 @@ Item {
                   iconText: "󰈙"
                   tooltipText: "Open in editor (Enter)"
                   foreground: root.foreground; fontFamily: root.fontFamily
-                  onClicked: root.svc.openTranscript(root.selected.id)
+                  onClicked: if (root.svc && root.selected) root.svc.openTranscript(root.selected.id)
                 }
                 PanelActionButton {
                   iconText: "󰆏"
                   tooltipText: "Copy transcript"
                   foreground: root.foreground; fontFamily: root.fontFamily
-                  onClicked: { root.svc.copyTranscript(root.selected.id); copiedFlash.restart() }
+                  onClicked: if (root.svc && root.selected) root.svc.copyTranscript(root.selected.id, function(code) { if (code === 0) copiedFlash.restart() })
                 }
                 Text {
                   anchors.verticalCenter: parent.verticalCenter
