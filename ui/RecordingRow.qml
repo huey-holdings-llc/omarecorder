@@ -6,20 +6,23 @@ import qs.Ui
 CursorSurface {
   id: root
   property var rec: ({})
-  property var job: null              // active transcribe job for this rec, or null
+  property var svc: null               // the Service singleton; every derived string comes from it
   property color foreground: Color.foreground
   property color dimColor: Qt.darker(foreground, 1.55)
   property color accent: Color.accent
   property string fontFamily: Style.font.family
   property bool showActions: true
-  property string durationText: ""
-  property string dateText: ""
-  property string displayTitle: ""     // friendly title from Service.displayTitle
-  property bool live: false            // this recording is in progress right now
-  property string elapsedText: ""      // live elapsed, HH:MM:SS
-  property string jobElapsedText: ""   // elapsed of this row's transcription job
-  property bool clipped: false
   property color urgent: Color.urgent
+
+  // Derived from rec + svc so the two lists (popup, Library) do not repeat the wiring.
+  readonly property var job: svc && rec ? svc.jobFor(rec.id) : null
+  readonly property string displayTitle: svc ? svc.displayTitle(rec) : ""
+  readonly property bool live: !!(svc && rec && rec.id === svc.activeId)
+  readonly property string elapsedText: svc ? svc.elapsedText : ""
+  readonly property string jobElapsedText: svc && job ? svc.jobProgressText(job) + svc.fmtHms(svc.jobElapsed(job)) : ""
+  readonly property bool clipped: !!(svc && svc.isClipped(rec))
+  readonly property string durationText: svc && rec ? svc.fmtDuration(rec.duration_s) : ""
+  readonly property string dateText: svc && rec ? svc.fmtDate(rec.created) : ""
 
   signal clicked()
   signal transcribeRequested()
