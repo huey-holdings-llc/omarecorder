@@ -200,9 +200,47 @@ if command -v voxtype >/dev/null && [[ -f "${VOXTYPE_MODELS_DIR:-$HOME/.local/sh
   check "range transcribe" "$CLI" transcribe "$ID3" --model base.en --from 0 --to 3
   check "range header" bash -c "head -1 '$D3/transcript.md' | grep -q 'range=0-3'"
   check "previous transcript kept on re-run" bash -c "head -1 '$D3/transcript.prev.md' | grep -q 'range=0-end'"
+
+  echo "== transcribe (chunked, OMARECORDER_CHUNK_S=25 on the 60 s clip)"
+  D6="$OMARECORDER_DIR/$ID6 Speech 60s"
+  check "chunked transcribe succeeds" env OMARECORDER_CHUNK_S=25 "$CLI" transcribe "$ID6" --model base.en
+  eq "60 s clip split into 3 pieces" "$(jq -r '.transcript.chunks' "$D6/meta.json")" "3"
+  eq "all pieces done" "$(jq -r '.transcript.chunks_done' "$D6/meta.json")" "3"
+  eq "not partial" "$(jq -r '.transcript.partial' "$D6/meta.json")" "false"
+  check "final header has chunks=3, no partial" bash -c "head -1 '$D6/transcript.md' | grep -q 'chunks=3' && ! head -1 '$D6/transcript.md' | grep -q partial"
+  check "chunked transcript mentions 'right'" bash -c "grep -qi right '$D6/transcript.md'"
+  check "progress line gone from state" bash -c "[ \"\$(\"$CLI\" status --json | jq -r '.jobs|length')\" = 0 ]"
+  check "range + chunks" env OMARECORDER_CHUNK_S=25 "$CLI" transcribe "$ID6" --model base.en --from 0 --to 50
+  eq "50 s range → 2 pieces" "$(jq -r '.transcript.chunks' "$D6/meta.json")" "2"
+  # cancel keeps the pieces that finished: run the worker directly, TERM it after piece 1
+  rm -f "$D6/transcript.md"
+  jq -cn --arg id "$ID6" '{recording:null,jobs:[{type:"transcribe",id:$id,model:"base.en",started_at:0}],version:1}' > "$XDG_RUNTIME_DIR/omarecorder/state.json"
+  OMARECORDER_CHUNK_S=25 setsid "$CLI" _tx-worker "$ID6" base.en en 0 "" "" >/dev/null 2>&1 < /dev/null &
+  WPID=$!
+  for _ in $(seq 1 120); do [[ -s "$D6/transcript.md" ]] && break; sleep 0.5; done
+  check "partial transcript published after piece 1" test -s "$D6/transcript.md"
+  eq "state shows piece progress" "$("$CLI" status --json | jq -r '.jobs[0].progress.chunks')" "3"
+  kill -TERM "$WPID" 2>/dev/null; wait "$WPID" 2>/dev/null; WRC=$?
+  eq "cancelled worker exits 0" "$WRC" "0"
+  check "partial header" bash -c "head -1 '$D6/transcript.md' | grep -q 'partial=true'"
+  eq "meta says partial" "$(jq -r '.transcript.partial' "$D6/meta.json")" "true"
+  check "no chunk temp files left" bash -c "! ls '$XDG_RUNTIME_DIR/omarecorder/'tx-* 2>/dev/null | grep -q ."
+  "$CLI" cancel "$ID6" >/dev/null
 else
   skip "voxtype/base.en/fixture not available"
 fi
+
+echo "== level meter (parser)"
+printf 'frame:0 pts:0 pts_time:0.2\nlavfi.astats.Overall.Peak_level=-0.1\nlavfi.astats.Overall.Peak_count=69\n' | "$CLI" _meter-loop "$TMP/level" ""
+check "start transient (t<1 s) writes nothing" bash -c "! test -e '$TMP/level'"
+printf 'frame:4 pts:16000 pts_time:1.0\nlavfi.astats.Overall.Peak_level=-12.5\nlavfi.astats.Overall.Peak_count=0\n' | "$CLI" _meter-loop "$TMP/level" "" --keep
+eq "meter parses peak" "$(jq -r .peak_db "$TMP/level")" "-12.5"
+eq "quiet frame not clipping" "$(jq -r .clip "$TMP/level")" "false"
+printf 'frame:8 pts:32000 pts_time:2.0\nlavfi.astats.Overall.Peak_level=-0.1\nlavfi.astats.Overall.Peak_count=40\n' | "$CLI" _meter-loop "$TMP/level" "" --keep
+eq "railed frame sets clip" "$(jq -r .clip "$TMP/level")" "true"
+printf 'frame:8 pts:32000 pts_time:2.0\nlavfi.astats.Overall.Peak_level=-inf\nlavfi.astats.Overall.Peak_count=0\n' | "$CLI" _meter-loop "$TMP/level" "" --keep
+eq "silence (-inf) becomes -99" "$(jq -r .peak_db "$TMP/level")" "-99"
+rm -f "$TMP/level"
 
 echo "== record (real mic, 2 s)"
 if pactl list short sources 2>/dev/null | grep -qv '\.monitor'; then
@@ -211,13 +249,20 @@ if pactl list short sources 2>/dev/null | grep -qv '\.monitor'; then
   eq "status shows recording" "$($CLI status --json | jq -r .recording.id)" "$IDR"
   fails "start refused while recording" "$CLI" record start
   fails "transcribe refused while recording" "$CLI" transcribe "$IDR" --model base.en
-  sleep 2
+  MPID=$("$CLI" status --json | jq -r '.recording.meter_pid')
+  check "state has meter_pid" test "$MPID" -gt 0
+  for _ in $(seq 1 30); do jq -e '.t > 0' "$XDG_RUNTIME_DIR/omarecorder/level" >/dev/null 2>&1 && break; sleep 0.2; done
+  check "level file updates while recording" jq -e '.t > 0 and (.peak_db|type)=="number"' "$XDG_RUNTIME_DIR/omarecorder/level"
+  sleep 1
   check "record stop" "$CLI" record stop
   DR="$OMARECORDER_DIR/$IDR Mic check"
   eq "wav header valid" "$(ffprobe -v error -select_streams a:0 -show_entries stream=codec_name,sample_rate,channels -of csv=p=0 "$DR/audio.wav")" "pcm_s16le,16000,1"
-  DUR=$(jq -r .duration_s "$DR/meta.json"); check "duration ≈ 2 s" test "$DUR" -ge 1 -a "$DUR" -le 4
+  DUR=$(jq -r .duration_s "$DR/meta.json"); check "duration 2–10 s" test "$DUR" -ge 1 -a "$DUR" -le 10
   check "levels measured on stop" bash -c "jq -e '.levels.peak_db' '$DR/meta.json'"
   eq "state cleared" "$($CLI status)" "idle"
+  sleep 0.5
+  check "meter process gone after stop" bash -c "! kill -0 $MPID 2>/dev/null"
+  check "level file removed after stop" bash -c "! test -e '$XDG_RUNTIME_DIR/omarecorder/level'"
   check "toggle starts" "$CLI" record toggle --source mic
   sleep 1
   check "toggle stops" "$CLI" record toggle
