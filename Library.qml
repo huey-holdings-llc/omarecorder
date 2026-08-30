@@ -84,13 +84,16 @@ Item {
   function selectAbsolute(i) { if (rows.length === 0) return; i = Math.max(0, Math.min(i, rows.length - 1)); selectedId = rows[i].id; list.positionViewAtIndex(i, ListView.Contain) }
   function setFilter(t) { filterText = t; Qt.callLater(ensureSelection) }
 
+  // Enter / the main button start a transcription. Cancelling a running job is
+  // only reachable through the explicit Cancel button (cancelSelected) — a
+  // stray Enter must never kill an hour-long job.
   function transcribeSelected() {
-    if (!svc || !selected) return
-    if (selectedJob) { svc.cancel(selected.id); return }
+    if (!svc || !selected || selectedJob) return
     var m = svc.modelByName(modelForRun)
     if (m && !m.installed) { svc.download(m.name); return }
     svc.transcribe(selected.id, modelForRun, svc.config.language || "en")
   }
+  function cancelSelected() { if (svc && selected && selectedJob) svc.cancel(selected.id) }
   function togglePlay() {
     if (!svc || !selected) return
     if (playingId === selected.id) { svc.stopPlay(); playingId = "" } else { svc.play(selected.id); playingId = selected.id }
@@ -327,7 +330,7 @@ Item {
                   foreground: root.foreground
                   fontFamily: root.fontFamily
                   enabled: !picker.download
-                  onClicked: root.transcribeSelected()
+                  onClicked: root.selectedJob ? root.cancelSelected() : root.transcribeSelected()
                 }
                 PanelActionButton {
                   anchors.verticalCenter: parent.verticalCenter
