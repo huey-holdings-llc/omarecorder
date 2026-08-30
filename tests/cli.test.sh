@@ -335,6 +335,19 @@ if command -v voxtype >/dev/null && [[ -f "${VOXTYPE_MODELS_DIR:-$HOME/.local/sh
   eq "meta says partial" "$(jq -r '.transcript.partial' "$D6/meta.json")" "true"
   check "no chunk temp files left" bash -c "! ls '$XDG_RUNTIME_DIR/omarecorder/'tx-* 2>/dev/null | grep -q ."
   "$CLI" cancel "$ID6" >/dev/null
+
+  echo "== transcribe (detached systemd-run unit)"
+  if command -v systemd-run >/dev/null && systemctl --user is-system-running >/dev/null 2>&1; then
+    rm -f "$D3/transcript.md"
+    check "detached transcribe starts" env OMARECORDER_SYNC=0 "$CLI" transcribe "$ID3" --model base.en
+    eq "job registered with its unit" "$("$CLI" status --json | jq -r '.jobs[0].unit')" "omarecorder-tx-$ID3"
+    for _ in $(seq 1 120); do [[ "$("$CLI" status --json | jq -r '.jobs|length')" == "0" ]] && break; sleep 0.5; done
+    eq "job drained when the unit finished" "$("$CLI" status --json | jq -r '.jobs|length')" "0"
+    check "transcript written by the unit" test -s "$D3/transcript.md"
+    check "unit is gone (collected)" bash -c "! systemctl --user show -p ActiveState --value 'omarecorder-tx-$ID3' | grep -qE '^(active|activating)$'"
+  else
+    skip "no user systemd manager"
+  fi
 else
   skip "voxtype/base.en/fixture not available"
 fi
@@ -375,6 +388,22 @@ if pactl list short sources 2>/dev/null | grep -qv '\.monitor'; then
   check "toggle starts" "$CLI" record toggle --source mic
   sleep 1
   check "toggle stops" "$CLI" record toggle
+  if pactl get-default-sink >/dev/null 2>&1; then
+    IDS=$("$CLI" record start --source system --title "System check"); sleep 1.5; "$CLI" record stop >/dev/null
+    DS="$OMARECORDER_DIR/$IDS System check"
+    eq "system source recorded" "$(ffprobe -v error -select_streams a:0 -show_entries stream=codec_name -of csv=p=0 "$DS/audio.wav")" "pcm_s16le"
+    eq "system source stored in meta" "$(jq -r .source "$DS/meta.json")" "system"
+    IDB2=$("$CLI" record start --source both --title "Both check")
+    eq "both: meter runs on the mic" "$("$CLI" status --json | jq -r '.recording.meter_pid > 0')" "true"
+    sleep 1.5; "$CLI" record stop >/dev/null
+    DB2="$OMARECORDER_DIR/$IDB2 Both check"
+    check "both: mic.wav + system.wav kept" test -s "$DB2/mic.wav" -a -s "$DB2/system.wav"
+    eq "both: audio.wav is the mix" "$(ffprobe -v error -select_streams a:0 -show_entries stream=codec_name,sample_rate,channels -of csv=p=0 "$DB2/audio.wav")" "pcm_s16le,16000,1"
+    check "both: waveform made" test -s "$DB2/waveform.png"
+    "$CLI" delete "$IDS" --yes >/dev/null; "$CLI" delete "$IDB2" --yes >/dev/null
+  else
+    skip "no default sink for system/both sources"
+  fi
 else
   skip "no microphone source"
 fi

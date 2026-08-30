@@ -84,3 +84,7 @@ a professional audio recordist — the first-time user's notes weighed more).
 * Library overlay: search, list, editable title, model picker with estimates, transcribe/cancel, play,
   open/copy transcript, open folder, delete with confirmation, transcript view.
 * Design spec: `docs/superpowers/specs/2026-08-29-omarecorder-design.md`.
+
+## [1.0.0] - 2026-08-30
+
+(placeholder — collapsed from Unreleased before the tag)

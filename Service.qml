@@ -135,6 +135,8 @@ QtObject {
   function remove(id) { run(["delete", id, "--yes"]) }
   function download(model) { run(["model", "download", model]) }
   function importFile(path) { run(["import", path], function(code) { if (code === 0) root.refreshList() }) }
+  function trim(id, from, to) { run(["trim", id, "--from", String(from), "--to", String(to)]) }
+  function restoreTrim(id) { run(["trim", id, "--restore"]) }
   function play(id) { run(["play", id]) }
   function stopPlay() { run(["stop-play"]) }
   function openTranscript(id) { Quickshell.execDetached([cli, "open", id]) }
