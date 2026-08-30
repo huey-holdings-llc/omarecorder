@@ -320,6 +320,52 @@ o.bind("SUPER + ALT + R", "Record audio", "omarecorder record toggle")
 
 The plugin never edits these files for you.
 
+## FAQ
+
+**How is this different from voxtype, which Omarchy already ships?**
+Same engine, different job. voxtype is dictation: hold a key, speak, and the
+text is typed into whatever window has focus, right away. Omarecorder is for
+recordings you want to keep: meetings, calls, game sessions, lectures. It adds
+three things on top of voxtype:
+
+1. **A library.** Every take is a folder with the audio, its metadata and its
+   transcript, listed in one place where you can search, play, trim, rename and
+   delete.
+2. **You decide when to transcribe.** Recording is cheap; transcription is not.
+   Record now, pick a model and transcribe later, or never, or again with a
+   better model.
+3. **A path into your notes.** One click sends a transcript to Obsidian as a
+   note in the folder where you keep new notes.
+
+The two share models: a model downloaded for one is available to the other.
+
+**Does anything leave my machine?**
+No. Recording, transcription and export are local. The only network traffic is
+voxtype downloading a model you asked for. See Privacy and security above.
+
+**Which model should I use?**
+Fast (`base.en`) for a quick look, Balanced (`small.en`) for most things,
+Accurate (`large-v3-turbo`) when the words matter. The picker shows an estimate
+for each, learned from your own machine after the first run.
+
+**Why is a long recording transcribed in pieces?**
+whisper drifts into repeating itself on very long inputs. Cutting a take into
+pieces of about 30 minutes, at moments of silence, keeps that in check, shows
+progress, and means a cancel keeps what is already done.
+
+**Can I bring in recordings from elsewhere?**
+Yes. `omarecorder import <file>` (or `i` in the popup) takes anything ffmpeg can
+read: phone recordings, downloaded audio, video files.
+
+**Why no timestamps or speaker names?**
+voxtype's `transcribe` returns plain text. Timestamps and speaker attribution
+would need another engine, and the project does not add packages Omarchy does
+not ship. If Omarchy ever ships one, it is on the roadmap.
+
+**Does it need Obsidian?**
+No. Without a vault the note lands next to the recording. Everything else works
+the same.
+
 ## Troubleshooting
 
 * **"clipped" in the lists, CLIP in the bar**: microphone gain is too high. See
