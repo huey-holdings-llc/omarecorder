@@ -332,7 +332,7 @@ Item {
                     : root.svc.fmtDate(root.selected.created) + " · " + root.svc.fmtDuration(root.selected.duration_s) + " · " + root.svc.fmtBytes(root.selected.size_bytes)
                     + " · " + root.svc.sourceLabel(root.selected.source)
                     + (root.selected.transcript ? " · transcribed with " + root.selected.transcript.model : "")
-                    + (root.svc.isClipped(root.selected) ? " · ⚠ audio clipped (mic gain too high)" : ""))
+                    + (root.svc.isClipped(root.selected) ? " · ⚠ clipped" : ""))
                   : ""
                 color: root.selectedLive ? root.urgent : root.dim
                 font.family: root.fontFamily
@@ -346,7 +346,9 @@ Item {
                 spacing: Style.spacing.sm
                 ModelPicker {
                   id: picker
-                  width: Style.space(360)
+                  // Take whatever the main button and the icon actions leave over,
+                  // so a longer label ("Transcribe again") never pushes actions off-card.
+                  width: Math.max(Style.space(200), parent.width - mainButton.width - iconActions.width - parent.spacing * 2)
                   anchors.verticalCenter: parent.verticalCenter
                   svc: root.svc
                   durationS: root.selected ? root.selected.duration_s : 0
@@ -356,6 +358,7 @@ Item {
                   onChanged: function(m) { root.chosenModel = m }
                 }
                 Button {
+                  id: mainButton
                   anchors.verticalCenter: parent.verticalCenter
                   visible: !root.selectedLive
                   text: root.selectedJob ? "Cancel  (" + root.svc.fmtHms(root.selectedJob.elapsed_s || 0) + ")"
@@ -369,6 +372,10 @@ Item {
                   enabled: !picker.download
                   onClicked: root.selectedJob ? root.cancelSelected() : root.transcribeSelected()
                 }
+                Row {
+                  id: iconActions
+                  anchors.verticalCenter: parent.verticalCenter
+                  spacing: Style.spacing.xs
                 PanelActionButton {
                   anchors.verticalCenter: parent.verticalCenter
                   iconText: root.playingId === (root.selected ? root.selected.id : "") ? "󰓛" : "󰐊"
@@ -410,6 +417,7 @@ Item {
                   hoverColor: root.urgent
                   foreground: root.foreground; fontFamily: root.fontFamily
                   onClicked: root.requestDelete()
+                }
                 }
               }
 
