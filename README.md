@@ -28,6 +28,54 @@ feature-rich local transcription app, its developer has been generous with
 advice, and its "record, keep, transcribe, browse" shape inspired this plugin.
 Omarecorder exists because nothing like it fit an Omarchy desktop.
 
+## Privacy and security
+
+Local first is the rule, not a feature. Everything in 1.0 runs on your machine:
+
+* Audio and transcripts stay on disk. Transcription runs on your CPU or GPU via
+  voxtype. The only network activity is voxtype's model download, and only when
+  you ask for a model you do not have.
+* Everything the plugin writes is private to your user: `umask 077`, so
+  recordings, transcripts, notes, config and state are `0600` files in `0700`
+  folders.
+* Runtime state (pids, jobs, the live level) lives only in
+  `$XDG_RUNTIME_DIR/omarecorder/` (`0700`). It never falls back to `/tmp`; with
+  no runtime directory the CLI stops instead.
+* Titles, paths and ids are data. They travel as arguments and `jq --arg`, never
+  inside a shell string, a `jq` filter or a unit body. whisper's stderr (which
+  can echo decoded text) goes to a per-job file, not the shared log.
+* It does not edit your Hyprland, Omarchy or Obsidian configuration (Obsidian's
+  `obsidian.json` and `app.json` are only read), does not delete anything
+  outside a recording folder, never `rm -rf`s a recording without
+  `--permanent`, runs no daemon, polls nothing, and uploads nothing.
+
+**About AI features.** Future versions may offer to clean up or summarize a
+transcript. That will work only through the agent you have already chosen with
+`omarchy default agent` (Claude Code, Codex, Gemini and so on), driven by
+`omarchy agent prompt`: no extra API key, no login, no new package, nothing to
+configure twice. It will be opt-in and off by default, and the moment you use it
+your transcript leaves the machine through that agent's provider. The UI will
+say so at the point of use, every time. If you never turn it on, nothing changes.
+
+## Prior art and thanks
+
+* [Samurai Scribe](https://samuraiscribe.com/), a local transcription app for
+  macOS and Windows. It shaped the whole "record, keep, transcribe, browse" idea,
+  and its developer's advice shaped this plugin. If you are on either platform,
+  use it; it is far more polished than this.
+* [voxtype](https://github.com/peteonrails/voxtype), the push-to-talk dictation
+  engine Omarchy ships. Omarecorder is a library around its `transcribe` command.
+* [omarchy-voxtype-osd](https://github.com/rmacy/omarchy-voxtype-osd) for the
+  level meter ideas.
+* [omarchy-voxtype-enhance](https://github.com/iamcheyan/omarchy-voxtype-enhance)
+  for the model download cards.
+* [omarchy-todoist](https://github.com/Aryan-Techie/omarchy-todoist) and
+  [omarchy-github](https://github.com/robzolkos/omarchy-github) for the panel
+  and manifest conventions.
+* [syncshell](https://github.com/ilyaZar/syncshell) (omarchy-syncthing) for the
+  service and panel split and its test suite.
+* [anarlog](https://anarlog.so/) for the "session library" shape.
+
 ## What it does
 
 * **Bar widget**: record/stop with a running timer and a live input meter that
@@ -254,25 +302,6 @@ o.bind("SUPER + ALT + R", "Record audio", "omarecorder record toggle")
 
 The plugin never edits these files for you.
 
-## Privacy and security
-
-* Audio and transcripts stay on disk. Transcription runs on your CPU or GPU via
-  voxtype. The only network activity is voxtype's model download, and only when
-  you ask for a model you do not have.
-* Everything the plugin writes is private to your user: `umask 077`, so
-  recordings, transcripts, notes, config and state are `0600` files in `0700`
-  folders.
-* Runtime state (pids, jobs, the live level) lives only in
-  `$XDG_RUNTIME_DIR/omarecorder/` (`0700`). It never falls back to `/tmp`; with
-  no runtime directory the CLI stops instead.
-* Titles, paths and ids are data. They travel as arguments and `jq --arg`, never
-  inside a shell string, a `jq` filter or a unit body. whisper's stderr (which
-  can echo decoded text) goes to a per-job file, not the shared log.
-* It does not edit your Hyprland, Omarchy or Obsidian configuration (Obsidian's
-  `obsidian.json` and `app.json` are only read), does not delete anything
-  outside a recording folder, never `rm -rf`s a recording without
-  `--permanent`, runs no daemon, polls nothing, and uploads nothing.
-
 ## Troubleshooting
 
 * **"clipped" in the lists, CLIP in the bar**: microphone gain is too high. See
@@ -319,22 +348,14 @@ Design specs: `docs/superpowers/specs/2026-08-29-omarecorder-design.md` and
 
 1.x, in no particular order and with no dates:
 
-* AI clean-up and summary of a transcript through the AI provider your Omarchy
-  system already uses.
+* Opt-in clean-up and summary of a transcript through the agent you already
+  chose with `omarchy default agent`. Off by default; see "About AI features"
+  under Privacy and security.
 * Speaker attribution and per-track transcripts for "both", only if Omarchy
   ships an engine for it. No new packages is a rule.
 * A graphical import picker once the Quickshell FileDialog crash is fixed upstream.
 
 Not planned: bundling `whisper-cpp` or `sherpa-onnx`. voxtype is the engine.
-
-## Prior art and thanks
-
-[Samurai Scribe](https://samuraiscribe.com/) for the shape of the whole thing
-and for the conversations that led here. voxtype (engine),
-rmacy/omarchy-voxtype-osd (level meter ideas), iamcheyan/omarchy-voxtype-enhance
-(model-download cards), Aryan-Techie/omarchy-todoist and robzolkos/omarchy-github
-(panel conventions), ilyazar/omarchy-syncthing (service/panel split), and
-anarlog for the "session library" idea.
 
 ## License
 

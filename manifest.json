@@ -5,7 +5,7 @@
   "version": "1.0.0",
   "author": "Corey Tyhurst",
   "license": "MIT",
-  "description": "Record from the bar, keep the audio, transcribe locally with voxtype, send transcripts to Obsidian.",
+  "description": "Omarchy shell plugin: record conversations, keep the audio, transcribe locally later using tools that come with Omarchy.",
   "kinds": [
     "service",
     "bar-widget",
