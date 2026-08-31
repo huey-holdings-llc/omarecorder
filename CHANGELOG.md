@@ -3,6 +3,51 @@
 All notable changes to this project are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow SemVer.
 
+## [1.1.0] - 2026-08-30
+
+The first evening of the public roadmap: everything below came off the issue
+tracker (the pinned overview is issue #25), including two data-loss holes a
+second-model review caught before they ever shipped.
+
+### Added
+- **Long-take stop guard.** Once a recording passes an hour, the keybinding,
+  the bar right-click and `r` ask for a second stop within 10 seconds instead
+  of stopping outright. The popup's Stop button and `record stop --force`
+  still stop in one click. `OMARECORDER_STOP_CONFIRM_S` moves the threshold
+  (0 disables).
+- **Previous transcript in the Library.** Re-transcribing keeps the old text
+  as `transcript.prev.md`; a "Previous" switch next to Raw / Tidy now shows
+  it, with a notice that copy and export still use the current text.
+  `list --json` / `show --json` gain `has_prev`, `prev_path` and `prev_text`.
+- **Playback position readout.** "00:12 / 00:33" sits in the Library action
+  row while a recording plays.
+- Accessible names on every icon-only button and on the bar widget, derived
+  from the tooltips they already had.
+
+### Changed
+- The Library's recording list scales with the card (30 % with a floor)
+  instead of a fixed width. At the default card cap nothing moves; narrow
+  screens keep a usable detail pane and scaled themes get more room.
+- CI fully upgrades the Arch container (`pacman -Syu`) before installing.
+
+### Fixed
+- A crash between mkdir and the meta write left an orphan recording folder
+  that the list skipped but whose id stayed blocked forever. Reconcile now
+  sweeps them, carefully: folders younger than five minutes and folders
+  holding anything the recorder did not write are never touched, anything
+  with audio in it is salvaged through the normal crash recovery, and only
+  an empty husk is removed.
+- Two transcriptions finishing together could lose a `bench.json` speed
+  measurement; the update now runs under the same lock as `state.json`.
+- The transcription worker wrote its range-cut and chunk WAVs into
+  `$XDG_RUNTIME_DIR`, which is RAM; a long take could push hundreds of MB
+  there. They now live next to the recording as `audio.tx.*` and are cleaned
+  on start, finish, cancel and the kill trap.
+- The cancel-mid-chunk test could race on a very fast machine; it now waits
+  until the worker is provably mid-flight on a non-final chunk.
+- The 1.0.0 notes claimed in-process QtMultimedia playback; Library playback
+  runs in mpv over its IPC socket and the notes now say so.
+
 ## [1.0.0] - 2026-08-30
 
 First public release, on the Omarchy plugin marketplace. Everything below was
