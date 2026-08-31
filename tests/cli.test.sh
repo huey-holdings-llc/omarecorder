@@ -424,12 +424,21 @@ if command -v voxtype >/dev/null && [[ -f "${VOXTYPE_MODELS_DIR:-$HOME/.local/sh
   check "progress line gone from state" bash -c "[ \"\$(\"$CLI\" status --json | jq -r '.jobs|length')\" = 0 ]"
   check "range + chunks" env OMARECORDER_CHUNK_S=25 "$CLI" transcribe "$ID6" --model base.en --from 0 --to 50
   eq "50 s range → 2 pieces" "$(jq -r '.transcript.chunks' "$D6/meta.json")" "2"
-  # cancel keeps the pieces that finished: run the worker directly, TERM it after piece 1
+  # cancel keeps the pieces that finished: run the worker directly, TERM it mid-chunk
   rm -f "$D6/transcript.md"
   jq -cn --arg id "$ID6" '{recording:null,jobs:[{type:"transcribe",id:$id,model:"base.en",started_at:0}],version:1}' > "$RUN/state.json"
   OMARECORDER_CHUNK_S=25 setsid "$CLI" _tx-worker "$ID6" base.en en 0 "" "" >/dev/null 2>&1 < /dev/null &
   WPID=$!
-  for _ in $(seq 1 120); do [[ -s "$D6/transcript.md" ]] && break; sleep 0.5; done
+  # "transcript.md exists" is not enough: a fast machine can finish every piece
+  # before the kill lands. Wait until progress names a chunk that is not the
+  # last, so the TERM provably arrives while a later piece is still running.
+  MID=""
+  for _ in $(seq 1 120); do
+    MID=$("$CLI" status --json | jq -r '.jobs[0].progress // empty | select(.chunk > 1 and .chunk < .chunks) | .chunk')
+    [[ -n "$MID" && -s "$D6/transcript.md" ]] && break
+    sleep 0.5
+  done
+  check "worker mid-flight on a non-final chunk" test -n "$MID"
   check "partial transcript published after piece 1" test -s "$D6/transcript.md"
   eq "state shows piece progress" "$("$CLI" status --json | jq -r '.jobs[0].progress.chunks')" "3"
   kill -TERM "$WPID" 2>/dev/null; wait "$WPID" 2>/dev/null; WRC=$?
