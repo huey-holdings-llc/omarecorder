@@ -112,7 +112,7 @@ CursorSurface {
         fontFamily: root.fontFamily
         onClicked: root.transcribed ? root.openRequested() : root.transcribeRequested()
       }
-      PanelActionButton {
+      AccessibleActionButton {
         visible: root.transcribed
         iconText: "󰑐"
         tooltipText: "Transcribe again"

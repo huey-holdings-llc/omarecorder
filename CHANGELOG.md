@@ -25,8 +25,8 @@ against the code.
   it dies with the recorder.
 - **Waveform strip, scrubber and trim.** `waveform.png` (800×64) is drawn on
   stop/import (and once, lazily, for recordings made before 1.0). In the Library
-  the strip is a scrubber (click, `Space`, `←`/`→` ±5 s; in-process QtMultimedia
-  playback, loaded only while the Library is open). `F3` / the scissors enter trim
+  the strip is a scrubber (click, `Space`, `←`/`→` ±5 s; playback runs in mpv
+  outside the shell, driven over its IPC socket). `F3` / the scissors enter trim
   mode with two drag handles, **Preview**, and **Trim** (confirmed). `omarecorder
   trim <id> --from s --to s [--replace] | --restore`: lossless `-c copy`, the first
   original kept as `audio.orig.wav`, transcript flagged stale until re-transcribed.

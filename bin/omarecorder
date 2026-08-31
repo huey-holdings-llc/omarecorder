@@ -195,7 +195,56 @@ _take_recording() {
 reconcile_state() {
   local ddir; ddir=$(with_lock _reconcile_state)
   [[ -n "$ddir" ]] && recover_take "$ddir"
+  sweep_orphans
   return 0
+}
+
+# sweep_orphans: a folder with no meta.json is a crash leftover from the window
+# between mkdir and the meta write in record/import. The list skips it silently,
+# but it blocks that id forever. A folder younger than the guard is left alone
+# (a recording may be starting right now); one that holds any audio at all is
+# given a minimal meta.json and repaired like any other dead take (pw-record
+# starts before the meta write and is detached, so a crash there can leave
+# anything from seconds to minutes of good audio, and none of it is ours to
+# judge); only a husk with nothing beyond a WAV header is removed.
+sweep_orphans() {
+  local d now mt wav size s
+  [[ -d "$ROOT" ]] || return 0
+  now=$(now_epoch)
+  while IFS= read -r d; do
+    [[ -e "$d/meta.json" ]] && continue
+    mt=$(stat -c %Y "$d" 2>/dev/null) || continue
+    (( now - mt < 300 )) && continue
+    # The name pattern proves resemblance, not ownership: recordingsDir is a
+    # shared folder (~/Recordings by default). In the crash window the recorder
+    # has written nothing but its WAVs, so anything else in there means the
+    # folder is not ours; leave it alone.
+    local foreign=0 f
+    while IFS= read -r f; do
+      case "${f##*/}" in audio.wav|mic.wav|system.wav) ;; *) foreign=1; break ;; esac
+    done < <(find "$d" -mindepth 1 2>/dev/null)
+    (( foreign )) && continue
+    size=0
+    for wav in "$d/audio.wav" "$d/mic.wav" "$d/system.wav"; do
+      [[ -f "$wav" ]] || continue
+      s=$(stat -c %s "$wav" 2>/dev/null || echo 0)
+      (( s > size )) && size=$s
+    done
+    if (( size > 44 )); then
+      local base id title
+      base=$(basename "$d"); id="${base:0:17}"; title=$(sanitize_title "${base:18}")
+      write_initial_meta "$d" "$id" "$title" "recovered" "$(date -d "@$mt" +%FT%T%z)"
+      # A "both" take that died with only one track: promote it, recover_take
+      # only mixes when both halves exist.
+      if [[ ! -f "$d/audio.wav" && -f "$d/mic.wav" && ! -f "$d/system.wav" ]]; then mv "$d/mic.wav" "$d/audio.wav"; fi
+      if [[ ! -f "$d/audio.wav" && -f "$d/system.wav" && ! -f "$d/mic.wav" ]]; then mv "$d/system.wav" "$d/audio.wav"; fi
+      log "sweep: salvaged orphan take $d"
+      recover_take "$d"
+    else
+      rm -rf "$d"
+      log "sweep: removed orphan folder $d"
+    fi
+  done < <(find "$ROOT" -mindepth 1 -maxdepth 1 -type d -name '????-??-??_??????*' 2>/dev/null)
 }
 
 pid_alive() { kill -0 "$1" 2>/dev/null; }
@@ -1060,10 +1109,18 @@ plan_chunks() {
   done
 }
 # learn_rtf <model> <audio_s> <wall_s>: remember this machine's speed (≥ 60 s of audio only)
+# Transcribe jobs are separate systemd units, so two can finish together; the
+# read-modify-write of bench.json runs under the state lock so neither
+# measurement is lost.
 learn_rtf() {
   local model="$1" audio="$2" wall="$3"
   awk -v a="$audio" 'BEGIN{exit !(a >= 60)}' || return 0
   local rtf; rtf=$(jq -n --argjson d "$audio" --argjson e "$wall" '(($d / $e) * 100 | round) / 100')
+  # A lock timeout loses one measurement; it must never kill the worker.
+  with_lock _learn_rtf "$model" "$rtf" || true
+}
+_learn_rtf() {
+  local model="$1" rtf="$2"
   mkdir -p "$STATE_DIR"; local bench='{}'; [[ -f "$BENCH_FILE" ]] && bench=$(jq -c . "$BENCH_FILE")
   write_json "$BENCH_FILE" "$(jq -c --arg m "$model" --argjson r "$rtf" --arg t "$(now_iso)" '.[$m] = {rtf:$r, measured:$t}' <<<"$bench")"
 }
@@ -1080,11 +1137,14 @@ _tx_worker() {
   # speed from the pieces that finished, and exit 0 so systemd sees no failure.
   trap '[[ -n "$child" ]] && kill -TERM "$child" 2>/dev/null
         [[ -n "$start" ]] && learn_rtf "$model" "$done_audio" "$(awk -v s="$start" -v e="$(date +%s.%N)" "BEGIN{d=e-s; if(d<0.1)d=0.1; printf \"%.1f\", d}")"
-        rm -f "$acc" "$RUN_DIR/tx-$id".*; exit 0' TERM INT HUP
+        rm -f "$acc" "$RUN_DIR/tx-$id".* "$dir"/audio.tx.*; exit 0' TERM INT HUP
   local input="$dir/audio.wav" tmpwav="" dur
+  # The big WAV temps (range cut, chunks) live next to the recording, not in
+  # $RUN_DIR: that is tmpfs, and a long take would push hundreds of MB into RAM.
+  rm -f "$dir"/audio.tx.*
   dur=$(jq -r '.duration_s // 0' "$dir/meta.json")
   if [[ -n "$from" || -n "$to" ]]; then
-    tmpwav="$RUN_DIR/tx-$id.wav"
+    tmpwav="$dir/audio.tx.cut.wav"
     local -a cut=(); [[ -n "$from" ]] && cut+=(-ss "$from"); [[ -n "$to" ]] && cut+=(-to "$to")
     if ! ffmpeg -v error -y "${cut[@]}" -i "$dir/audio.wav" -c copy "$tmpwav" 2>"$errlog"; then
       state_set --arg id "$id" '.jobs |= map(select(.id != $id))' || true
@@ -1106,7 +1166,7 @@ _tx_worker() {
     state_set --arg id "$id" --argjson n "$i" --argjson N "$n" \
       '.jobs |= map(if .type=="transcribe" and .id==$id then .progress={chunk:$n, chunks:$N} else . end)' || true
     if (( n > 1 )); then
-      cwav="$RUN_DIR/tx-$id.chunk.wav"
+      cwav="$dir/audio.tx.chunk.wav"
       ffmpeg -v error -y -ss "$s" -to "$e" -i "$input" -c copy "$cwav" || { rc=1; break; }
     fi
     # whisper's stderr goes to a per-job file (it can echo decoded text), not the shared log.
@@ -1123,7 +1183,7 @@ _tx_worker() {
         --arg m "$model" --arg l "$lang" --arg c "$(now_iso)" --argjson N "$n" --argjson i "$i"
     fi
   done
-  rm -f "$tmpwav" "$RUN_DIR/tx-$id.chunk.wav" "$ctxt"
+  rm -f "$dir"/audio.tx.* "$ctxt"
   if (( rc != 0 )); then
     state_set --arg id "$id" '.jobs |= map(select(.id != $id))' || true
     [[ -n "$why" ]] || why=$(grep -iE 'error|failed|cannot|not found' "$errlog" 2>/dev/null | tail -1 | cut -c1-120)
@@ -1169,7 +1229,7 @@ cmd_cancel() {
   systemctl --user stop "omarecorder-tx-$id" 2>/dev/null || true
   systemctl --user reset-failed "omarecorder-tx-$id" 2>/dev/null || true
   state_set --arg id "$id" '.jobs |= map(select(.id != $id))'
-  local dir; dir=$(rec_dir "$id" 2>/dev/null || true); [[ -n "$dir" ]] && rm -f "$dir/transcript.md.tmp" "$dir/transcript.md.new"
+  local dir; dir=$(rec_dir "$id" 2>/dev/null || true); [[ -n "$dir" ]] && rm -f "$dir/transcript.md.tmp" "$dir/transcript.md.new" "$dir"/audio.tx.*
   rm -f "$RUN_DIR/tx-$id".*
   if (( was )); then
     local ttl; ttl=$(jq -r '.title // empty' "$dir/meta.json" 2>/dev/null); ttl="${ttl:-$id}"

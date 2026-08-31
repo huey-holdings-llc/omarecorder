@@ -181,6 +181,38 @@ eq "status clears the dead recording" "$("$CLI" status)" "idle"
 check "both crash recovery produced audio.wav" test -s "$DB/audio.wav"
 eq "recovered both take has duration" "$(jq -r .duration_s "$DB/meta.json")" "3"
 "$CLI" delete "$IDB" --yes >/dev/null
+# orphan sweep: a crash between mkdir and the meta write leaves a folder with
+# no meta.json. Reconcile removes an old husk, salvages one with real audio,
+# and leaves a fresh folder alone (a recording could be starting right now).
+IDO="2026-01-06_010101"; DO_="$OMARECORDER_DIR/$IDO Husk"; mkdir -p "$DO_"
+touch -d "2026-01-06 01:01:01" "$DO_"
+IDF="2026-01-07_020202"; DF="$OMARECORDER_DIR/$IDF Fresh"; mkdir -p "$DF"
+IDS="2026-01-08_030303"; DS="$OMARECORDER_DIR/$IDS Salvage"; mkdir -p "$DS"
+ffmpeg -v error -y -f lavfi -i "sine=frequency=330:duration=40" -ar 16000 -ac 1 "$DS/audio.wav"
+touch -d "2026-01-08 03:03:03" "$DS"
+IDM="2026-01-09_040404"; DM="$OMARECORDER_DIR/$IDM MicOnly"; mkdir -p "$DM"
+ffmpeg -v error -y -f lavfi -i "sine=frequency=330:duration=40" -ar 16000 -ac 1 "$DM/mic.wav"
+touch -d "2026-01-09 04:04:04" "$DM"
+IDT_SHORT="2026-01-10_050505"; DTS="$OMARECORDER_DIR/$IDT_SHORT Short"; mkdir -p "$DTS"
+ffmpeg -v error -y -f lavfi -i "sine=frequency=330:duration=2" -ar 16000 -ac 1 "$DTS/audio.wav"
+touch -d "2026-01-10 05:05:05" "$DTS"
+DX="$OMARECORDER_DIR/2026-01-11_060606 Not ours"; mkdir -p "$DX"
+echo "somebody else's data" > "$DX/notes.txt"
+touch -d "2026-01-11 06:06:06" "$DX"
+"$CLI" status >/dev/null
+check "old empty orphan folder swept" bash -c "! test -d \"$DO_\""
+check "fresh meta-less folder left alone" test -d "$DF"
+check "orphan with real audio salvaged, not deleted" test -s "$DS/audio.wav"
+eq "salvaged take got its id back" "$(jq -r .id "$DS/meta.json")" "$IDS"
+eq "salvaged take is marked recovered" "$(jq -r .source "$DS/meta.json")" "recovered"
+eq "salvaged take has its duration" "$(jq -r .duration_s "$DS/meta.json")" "40"
+check "lone mic track promoted to audio.wav" test -s "$DM/audio.wav"
+check "a short take is salvaged too, size is not proof of a husk" test -s "$DTS/meta.json"
+eq "short salvaged take has its duration" "$(jq -r .duration_s "$DTS/meta.json")" "2"
+check "a look-alike folder with foreign content is not touched" test -s "$DX/notes.txt"
+check "and gets no meta.json written into it" bash -c "! test -e \"$DX/meta.json\""
+rm -rf "$DX"
+rm -rf "$DF"; "$CLI" delete "$IDS" --yes >/dev/null; "$CLI" delete "$IDM" --yes >/dev/null; "$CLI" delete "$IDT_SHORT" --yes >/dev/null
 # setup check reports what is missing, with the package to install
 check "setup check lists tools" bash -c "\"$CLI\" setup check --json | jq -e '.tools | length > 5'"
 mkdir -p "$TMP/nowl"; ln -s /usr/bin/* "$TMP/nowl/" 2>/dev/null; rm -f "$TMP/nowl/wl-copy"
@@ -370,6 +402,10 @@ if command -v voxtype >/dev/null && [[ -f "${VOXTYPE_MODELS_DIR:-$HOME/.local/sh
   eq "no jobs left in state" "$($CLI status --json | jq -r '.jobs|length')" "0"
   check "range transcribe" "$CLI" transcribe "$ID3" --model base.en --from 0 --to 3
   check "range header" bash -c "head -1 '$D3/transcript.md' | grep -q 'range=0-3'"
+  # The big WAV temps (range cut, chunks) go next to the recording, never into
+  # tmpfs, and are cleaned up either way.
+  check "no WAV temps under \$RUN_DIR after a range transcribe" bash -c "! ls '$RUN'/tx-*.wav >/dev/null 2>&1"
+  check "no audio.tx temps left in the recording folder" bash -c "! ls '$D3'/audio.tx.* >/dev/null 2>&1"
   check "previous transcript kept on re-run" bash -c "head -1 '$D3/transcript.prev.md' | grep -q 'range=0-end'"
 
   echo "== transcribe (bad OMARECORDER_CHUNK_S falls back)"

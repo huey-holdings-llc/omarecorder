@@ -440,16 +440,11 @@ Design specs: `docs/superpowers/specs/2026-08-29-omarecorder-design.md` and
 
 ## Roadmap
 
-1.x, in no particular order and with no dates:
-
-* Speaker attribution and per-track transcripts for "both", only if Omarchy
-  ships an engine for it. No new packages is a rule.
-* A graphical import picker once the Quickshell FileDialog crash is fixed upstream.
-* Transcribe automatically after a model download that you started from the picker.
-* Click a transcript paragraph to seek the audio there; keep the view pinned to
-  the newest text while a long take is still transcribing.
-* The three model presets as buttons with their estimates, instead of a dropdown.
-* A sharper waveform on wide and high-DPI screens.
+The roadmap lives in the
+[issue tracker](https://github.com/huey-holdings-llc/omarecorder/issues); the
+pinned [1.x roadmap](https://github.com/huey-holdings-llc/omarecorder/issues/25)
+issue is the overview. No dates, no order beyond the labels; if something there
+matters to you, a comment or a PR moves it up.
 
 Not planned: bundling `whisper-cpp` or `sherpa-onnx`. voxtype is the engine.
 
