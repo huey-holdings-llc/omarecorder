@@ -3,6 +3,15 @@
 All notable changes to this project are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow SemVer.
 
+## [1.1.1] - 2026-08-30
+
+### Fixed
+- The orphan sweep no longer uses a recursive delete at all. The only folders
+  it may remove are empty or hold nothing but the recorder's own header-stub
+  WAV files, so it now removes exactly those files and `rmdir`s the folder,
+  which refuses if anything unexpected appeared in the meantime. Found by a
+  second-model review of the full 1.1.0 diff.
+
 ## [1.1.0] - 2026-08-30
 
 The first evening of the public roadmap: everything below came off the issue

@@ -199,6 +199,9 @@ touch -d "2026-01-10 05:05:05" "$DTS"
 DX="$OMARECORDER_DIR/2026-01-11_060606 Not ours"; mkdir -p "$DX"
 echo "somebody else's data" > "$DX/notes.txt"
 touch -d "2026-01-11 06:06:06" "$DX"
+DH="$OMARECORDER_DIR/2026-01-12_070707 Header only"; mkdir -p "$DH"
+head -c 44 /dev/zero > "$DH/audio.wav"
+touch -d "2026-01-12 07:07:07" "$DH"
 "$CLI" status >/dev/null
 check "old empty orphan folder swept" bash -c "! test -d \"$DO_\""
 check "fresh meta-less folder left alone" test -d "$DF"
@@ -211,6 +214,7 @@ check "a short take is salvaged too, size is not proof of a husk" test -s "$DTS/
 eq "short salvaged take has its duration" "$(jq -r .duration_s "$DTS/meta.json")" "2"
 check "a look-alike folder with foreign content is not touched" test -s "$DX/notes.txt"
 check "and gets no meta.json written into it" bash -c "! test -e \"$DX/meta.json\""
+check "a header-only stub folder is removed" bash -c "! test -d \"$DH\""
 rm -rf "$DX"
 rm -rf "$DF"; "$CLI" delete "$IDS" --yes >/dev/null; "$CLI" delete "$IDM" --yes >/dev/null; "$CLI" delete "$IDT_SHORT" --yes >/dev/null
 # setup check reports what is missing, with the package to install

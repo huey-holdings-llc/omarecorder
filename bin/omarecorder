@@ -244,8 +244,12 @@ sweep_orphans() {
       log "sweep: salvaged orphan take $d"
       recover_take "$d"
     else
-      rm -rf "$d"
-      log "sweep: removed orphan folder $d"
+      # Everything in here is proven: only the recorder's own wav names, none
+      # bigger than a bare header. Remove exactly those and rmdir the folder;
+      # rmdir refuses if anything else appeared meanwhile, so a recursive
+      # delete never runs against contents the recorder cannot account for.
+      rm -f "$d/audio.wav" "$d/mic.wav" "$d/system.wav"
+      if rmdir "$d" 2>/dev/null; then log "sweep: removed orphan folder $d"; else log "sweep: left unexpectedly non-empty folder $d"; fi
     fi
   done < <(find "$ROOT" -mindepth 1 -maxdepth 1 -type d -name '????-??-??_??????*' 2>/dev/null)
 }

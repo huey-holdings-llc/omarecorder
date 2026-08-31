@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "id": "io.github.huey-holdings-llc.omarecorder",
   "name": "OmaRecorder",
-  "version": "1.1.0",
+  "version": "1.1.1",
   "author": "Corey Tyhurst",
   "license": "MIT",
   "description": "A local-only recorder and transcriber built entirely from what's already on your Omarchy box.",
