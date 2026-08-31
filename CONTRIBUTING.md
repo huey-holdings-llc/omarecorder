@@ -98,7 +98,8 @@ most needs someone who knows more than its author:
 
 ## Ideas that fit
 
-Anything on the README roadmap, better estimates, a nicer Setup card, more
+Anything on the [issue tracker](https://github.com/huey-holdings-llc/omarecorder/issues)
+(the pinned roadmap issue is the overview), better estimates, a nicer Setup card, more
 languages, accessibility, and anything that makes the code simpler without
 changing what it does. Ideas that do not fit: new engines or models that need
 packages Omarchy does not ship, cloud services, or features that need a
