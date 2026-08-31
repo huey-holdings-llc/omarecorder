@@ -215,6 +215,15 @@ sweep_orphans() {
     [[ -e "$d/meta.json" ]] && continue
     mt=$(stat -c %Y "$d" 2>/dev/null) || continue
     (( now - mt < 300 )) && continue
+    # The name pattern proves resemblance, not ownership: recordingsDir is a
+    # shared folder (~/Recordings by default). In the crash window the recorder
+    # has written nothing but its WAVs, so anything else in there means the
+    # folder is not ours; leave it alone.
+    local foreign=0 f
+    while IFS= read -r f; do
+      case "${f##*/}" in audio.wav|mic.wav|system.wav) ;; *) foreign=1; break ;; esac
+    done < <(find "$d" -mindepth 1 2>/dev/null)
+    (( foreign )) && continue
     size=0
     for wav in "$d/audio.wav" "$d/mic.wav" "$d/system.wav"; do
       [[ -f "$wav" ]] || continue
