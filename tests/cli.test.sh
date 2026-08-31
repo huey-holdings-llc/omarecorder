@@ -400,6 +400,7 @@ if command -v voxtype >/dev/null && [[ -f "${VOXTYPE_MODELS_DIR:-$HOME/.local/sh
   eq "list has_transcript true" "$($CLI show "$ID3" --json | jq -r .has_transcript)" "true"
   check "show --json includes text" bash -c "$CLI show '$ID3' --json | jq -e '.transcript_text | length > 0'"
   eq "no jobs left in state" "$($CLI status --json | jq -r '.jobs|length')" "0"
+  eq "has_prev false before a re-run" "$($CLI show "$ID3" --json | jq -r .has_prev)" "false"
   check "range transcribe" "$CLI" transcribe "$ID3" --model base.en --from 0 --to 3
   check "range header" bash -c "head -1 '$D3/transcript.md' | grep -q 'range=0-3'"
   # The big WAV temps (range cut, chunks) go next to the recording, never into
@@ -407,6 +408,8 @@ if command -v voxtype >/dev/null && [[ -f "${VOXTYPE_MODELS_DIR:-$HOME/.local/sh
   check "no WAV temps under \$RUN_DIR after a range transcribe" bash -c "! ls '$RUN'/tx-*.wav >/dev/null 2>&1"
   check "no audio.tx temps left in the recording folder" bash -c "! ls '$D3'/audio.tx.* >/dev/null 2>&1"
   check "previous transcript kept on re-run" bash -c "head -1 '$D3/transcript.prev.md' | grep -q 'range=0-end'"
+  eq "has_prev true after a re-run" "$($CLI show "$ID3" --json | jq -r .has_prev)" "true"
+  check "show --json has prev_path and prev_text" bash -c "\"$CLI\" show '$ID3' --json | jq -e '.prev_path and (.prev_text | length > 0)'"
 
   echo "== transcribe (bad OMARECORDER_CHUNK_S falls back)"
   check "non-numeric OMARECORDER_CHUNK_S still transcribes" env OMARECORDER_CHUNK_S=abc "$CLI" transcribe "$ID3" --model base.en
