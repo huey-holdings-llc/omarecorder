@@ -57,7 +57,9 @@ Item {
   property int contentMargin: Style.spacing.panelPadding
   property int cardWidth: Math.min(Style.space(1000), panel.width - Style.gapsOut * 2)
   property int cardHeight: Math.min(Style.space(660), panel.height - Style.gapsOut * 2)
-  property int listWidth: Style.space(300)
+  // A share of the card with a floor: long titles get room when the card is
+  // wide, narrow screens still keep readable rows and a usable detail pane.
+  property int listWidth: Math.max(Style.space(220), Math.round(cardWidth * 0.3))
 
   readonly property var rows: filteredRows()
   readonly property int selectedIndex: indexOfId(selectedId)
@@ -507,7 +509,7 @@ Item {
                 ModelPicker {
                   id: picker
                   // Sized to its longest label; the main button and icon actions follow.
-                  width: Math.min(picker.implicitWidth, parent.width - mainButton.width - iconActions.width - parent.spacing * 2)
+                  width: Math.min(picker.implicitWidth, parent.width - mainButton.width - iconActions.width - posReadout.width - parent.spacing * 3)
                   anchors.verticalCenter: parent.verticalCenter
                   svc: root.svc
                   durationS: root.selected ? root.selected.duration_s : 0
@@ -581,6 +583,18 @@ Item {
                   foreground: root.foreground; fontFamily: root.fontFamily
                   onClicked: root.requestDelete()
                 }
+                }
+                Text {
+                  id: posReadout
+                  // Last in the row so no button shifts under the pointer when
+                  // playback starts. fmtClock matches the waveform labels.
+                  anchors.verticalCenter: parent.verticalCenter
+                  visible: !!(root.selected && root.playingId === root.selected.id)
+                  text: root.selected ? Fmt.fmtClock(root.positionS) + " / " + Fmt.fmtClock(root.selected.duration_s) : ""
+                  textFormat: Text.PlainText
+                  color: root.dim
+                  font.family: root.fontFamily
+                  font.pixelSize: Style.font.caption
                 }
               }
 
