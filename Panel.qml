@@ -233,7 +233,9 @@ Panel {
             foreground: root.recording ? root.urgent : root.foreground
             fontFamily: root.fontFamily
             enabled: root.ready
-            onClicked: root.toggleRecording()
+            // The button stops without the long-take confirmation the
+            // keyboard and right-click paths get; clicking it is deliberate.
+            onClicked: root.recording ? root.svc.stopRecording(true) : root.toggleRecording()
           }
 
           PanelSeparator { width: parent.width; foreground: root.foreground }

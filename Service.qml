@@ -124,7 +124,9 @@ QtObject {
     proc.running = true
   }
   function startRecording(source) { run(["record", "start", "--source", source || defaultSource]) }
-  function stopRecording() { run(["record", "stop"]) }
+  // force skips the long-take confirmation; the popup's Stop button uses it,
+  // a button press being deliberate in a way a keybinding is not.
+  function stopRecording(force) { run(force ? ["record", "stop", "--force"] : ["record", "stop"]) }
   function toggleRecording() { recording ? stopRecording() : startRecording() }
   function transcribe(id, model, language) {
     var args = ["transcribe", id]
