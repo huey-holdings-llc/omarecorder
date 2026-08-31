@@ -14,7 +14,7 @@ jobs:
     container: archlinux:latest
     steps:
       - name: Install tools (what an Omarchy install already has)
-        run: pacman -Sy --noconfirm --needed git jq ffmpeg shellcheck glib2 diffutils perl
+        run: pacman -Syu --noconfirm --needed git jq ffmpeg shellcheck glib2 diffutils perl
       - uses: actions/checkout@v4
       - name: Static checks
         run: bash tests/lint.sh
