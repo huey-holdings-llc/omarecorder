@@ -492,6 +492,20 @@ if pactl list short sources 2>/dev/null | grep -qv '\.monitor'; then
   check "toggle starts" "$CLI" record toggle --source mic
   sleep 1
   check "toggle stops" "$CLI" record toggle
+  # long-take stop confirmation: past the threshold the first stop only arms,
+  # a second inside 10 s goes through, and --force (the popup button) skips it
+  IDL=$(OMARECORDER_STOP_CONFIRM_S=1 "$CLI" record start --title "Long take")
+  sleep 2
+  eq "stop past the threshold asks to confirm" "$(OMARECORDER_STOP_CONFIRM_S=1 "$CLI" record stop)" "confirm"
+  eq "still recording after the first stop" "$("$CLI" status --json | jq -r .recording.id)" "$IDL"
+  check "second stop inside the window goes through" env OMARECORDER_STOP_CONFIRM_S=1 "$CLI" record stop
+  eq "state cleared after the confirmed stop" "$($CLI status)" "idle"
+  IDL2=$(OMARECORDER_STOP_CONFIRM_S=1 "$CLI" record start --title "Long take 2")
+  sleep 2
+  check "stop --force skips the confirmation" env OMARECORDER_STOP_CONFIRM_S=1 "$CLI" record stop --force
+  eq "state cleared after the forced stop" "$($CLI status)" "idle"
+  fails "stop rejects an unknown flag" "$CLI" record stop --bogus
+  "$CLI" delete "$IDL" --yes >/dev/null; "$CLI" delete "$IDL2" --yes >/dev/null
   if pactl get-default-sink >/dev/null 2>&1; then
     IDS=$("$CLI" record start --source system --title "System check"); sleep 1.5
     # The recorder must hang off the sink's monitor ports, not the microphone.

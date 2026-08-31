@@ -343,6 +343,12 @@ o.bind("SUPER + ALT + R", "Record audio", "omarecorder record toggle")
 
 The plugin never edits these files for you.
 
+One guard on long takes: once a recording passes an hour, the toggle (the
+keybinding, the bar right-click, `r`) asks before stopping; stop again within
+10 seconds to confirm. The popup's Stop button still stops in one click, and
+`record stop --force` does the same from a script.
+`OMARECORDER_STOP_CONFIRM_S` moves the threshold (0 turns the guard off).
+
 ## FAQ
 
 **How is this different from voxtype, which Omarchy already ships?**

@@ -43,6 +43,9 @@ RATE=16000
 # in piece by piece). Equal pieces, seams snapped to silence — see plan_chunks.
 CHUNK_S="${OMARECORDER_CHUNK_S:-1800}"
 [[ "$CHUNK_S" =~ ^[1-9][0-9]*$ ]] || CHUNK_S=1800   # a bad value must not reach bash arithmetic
+# A recording at least this old asks for a second stop within 10 s (0 disables).
+STOP_CONFIRM_S="${OMARECORDER_STOP_CONFIRM_S:-3600}"
+[[ "$STOP_CONFIRM_S" =~ ^[0-9]+$ ]] || STOP_CONFIRM_S=3600
 
 # The three presets OmaRecorder offers (voxtype can download more, but three
 # clear choices beat a list of eight). size_mb from ggml file sizes; rtf =
@@ -377,10 +380,10 @@ cmd_record() {
   local sub="${1:-status}"; shift || true
   case "$sub" in
     start) record_start "$@" ;;
-    stop) record_stop ;;
+    stop) record_stop "$@" ;;
     toggle) reconcile_state; if [[ $(jq -r '.recording != null' <<<"$(read_state)") == "true" ]]; then record_stop; else record_start "$@"; fi ;;
     status) cmd_status "$@" ;;
-    *) die "usage: record start [--source mic|system|both] [--title T] | stop | toggle | status" ;;
+    *) die "usage: record start [--source mic|system|both] [--title T] | stop [--force] | toggle | status" ;;
   esac
 }
 
@@ -463,8 +466,28 @@ record_start() {
   echo "$id"
 }
 
-record_stop() {
+record_stop() { # [--force]
+  local force=0
+  if [[ $# -gt 0 ]]; then [[ "$1" == "--force" ]] || die "unknown option: $1"; force=1; fi
   reconcile_state
+  # One stray keypress must not end a long take: past the threshold the first
+  # stop only arms a 10 second window, and a second stop inside it goes
+  # through. The popup's Stop button sends --force; pressing a button is
+  # deliberate.
+  if (( force == 0 && STOP_CONFIRM_S > 0 )); then
+    local rec0 now armed elapsed; rec0=$(jq -c '.recording' <<<"$(read_state)")
+    if [[ "$rec0" != "null" ]]; then
+      now=$(now_epoch)
+      elapsed=$(( now - $(jq -r '.started_at // 0' <<<"$rec0") ))
+      armed=$(jq -r '.stop_armed_at // 0' <<<"$rec0")
+      if (( elapsed >= STOP_CONFIRM_S && now - armed > 10 )); then
+        state_set --argjson t "$now" '.recording |= (if . == null then . else . + {stop_armed_at:$t} end)'
+        notify "Stop this recording?" "It is $(fmt_hms "$elapsed") long. Stop again within 10 seconds to confirm."
+        echo "confirm"
+        return 0
+      fi
+    fi
+  fi
   # Take the entry and null it in one locked step: from here on no concurrent
   # status/toggle can see a "dead" recording and run recovery while we finalize.
   local rec; rec=$(with_lock _take_recording) || die "not recording"
