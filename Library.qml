@@ -536,7 +536,7 @@ Item {
                   id: iconActions
                   anchors.verticalCenter: parent.verticalCenter
                   spacing: Style.spacing.xs
-                PanelActionButton {
+                AccessibleActionButton {
                   anchors.verticalCenter: parent.verticalCenter
                   iconText: root.playing ? "󰏤" : "󰐊"
                   tooltipText: "Play / pause (Space)"
@@ -545,7 +545,7 @@ Item {
                   foreground: root.foreground; fontFamily: root.fontFamily
                   onClicked: root.togglePlay()
                 }
-                PanelActionButton {
+                AccessibleActionButton {
                   anchors.verticalCenter: parent.verticalCenter
                   iconText: "󰆐"
                   tooltipText: "Trim (F3)"
@@ -554,7 +554,7 @@ Item {
                   foreground: root.trimMode ? Color.accent : root.foreground; fontFamily: root.fontFamily
                   onClicked: root.trimMode ? (root.trimMode = false) : root.startTrim()
                 }
-                PanelActionButton {
+                AccessibleActionButton {
                   anchors.verticalCenter: parent.verticalCenter
                   // Slot always reserved so the trash button never shifts under the pointer.
                   enabled: !!(root.selected && root.selected.has_orig)
@@ -564,14 +564,14 @@ Item {
                   foreground: root.foreground; fontFamily: root.fontFamily
                   onClicked: if (root.svc && root.selected) { root.stopPlayback(); root.svc.restoreTrim(root.selected.id) }
                 }
-                PanelActionButton {
+                AccessibleActionButton {
                   anchors.verticalCenter: parent.verticalCenter
                   iconText: "󰉋"
                   tooltipText: "Open folder"
                   foreground: root.foreground; fontFamily: root.fontFamily
                   onClicked: if (root.svc && root.selected) root.svc.openFolder(root.selected.id)
                 }
-                PanelActionButton {
+                AccessibleActionButton {
                   anchors.verticalCenter: parent.verticalCenter
                   iconText: "󰆴"
                   tooltipText: "Move to trash (Del)"
@@ -682,7 +682,7 @@ Item {
                 id: transcriptTools
                 visible: root.transcriptText.length > 0
                 spacing: Style.spacing.xs
-                PanelActionButton {
+                AccessibleActionButton {
                   iconText: "󰈙"
                   tooltipText: "Open in editor (Enter)"
                   foreground: root.foreground; fontFamily: root.fontFamily
@@ -706,7 +706,7 @@ Item {
                   foreground: root.foreground; fontFamily: root.fontFamily
                   onClicked: root.showRaw = true
                 }
-                PanelActionButton {
+                AccessibleActionButton {
                   iconText: "󰆏"
                   tooltipText: "Copy transcript (Ctrl+C)"
                   foreground: root.foreground; fontFamily: root.fontFamily
@@ -721,7 +721,7 @@ Item {
                   font.pixelSize: Style.font.caption
                 }
                 Timer { id: copiedFlash; interval: 1500 }
-                PanelActionButton {
+                AccessibleActionButton {
                   iconText: "󰈝"
                   tooltipText: "Send to Obsidian (Ctrl+O)"
                   foreground: root.foreground; fontFamily: root.fontFamily

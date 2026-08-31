@@ -102,6 +102,9 @@ Panel {
     id: button
     anchors.fill: parent
     bar: root.bar
+    // Glyph-only while idle; give assistive tech the state instead.
+    Accessible.role: Accessible.Button
+    Accessible.name: root.stateText
     text: root.barGlyph + root.barLabel
     active: root.recording
     fontSize: root.recording ? Style.font.bodySmall : Style.bar.iconFont
@@ -283,7 +286,7 @@ Panel {
               enabled: root.ready
               onClicked: root.openLibrary()
             }
-            PanelActionButton {
+            AccessibleActionButton {
               id: importButton
               anchors.verticalCenter: parent.verticalCenter
               iconText: "󰋺"
@@ -293,7 +296,7 @@ Panel {
               enabled: root.ready
               onClicked: root.importAudio()
             }
-            PanelActionButton {
+            AccessibleActionButton {
               id: gear
               anchors.verticalCenter: parent.verticalCenter
               iconText: "󰒓"
