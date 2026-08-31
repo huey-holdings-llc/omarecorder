@@ -344,9 +344,10 @@ file_size() { stat -c %s "$1" 2>/dev/null || echo 0; }
 
 # rec_json <dir> → meta + dir + derived fields
 rec_json() {
-  local d="$1" has_t=false has_w=false has_o=false has_y=false tfile=/dev/null yfile=/dev/null
+  local d="$1" has_t=false has_w=false has_o=false has_y=false has_p=false tfile=/dev/null yfile=/dev/null pfile=/dev/null
   [[ -f "$d/transcript.md" ]] && has_t=true
   [[ -s "$d/transcript.tidy.md" ]] && has_y=true
+  [[ -s "$d/transcript.prev.md" ]] && has_p=true
   [[ -f "$d/waveform.png" ]] && has_w=true
   [[ -f "$d/audio.orig.wav" ]] && has_o=true
   # Text goes in via --rawfile (a long transcript blows past the argv size limit as
@@ -354,15 +355,20 @@ rec_json() {
   if [[ "${2:-}" == "--with-text" && -f "$d/transcript.md" ]]; then
     tfile="$RUN_DIR/rec_json.$$.txt"; strip_header "$d/transcript.md" > "$tfile"
     if [[ $has_y == true ]]; then yfile="$RUN_DIR/rec_json.$$.tidy"; strip_header "$d/transcript.tidy.md" > "$yfile"; fi
+    if [[ $has_p == true ]]; then pfile="$RUN_DIR/rec_json.$$.prev"; strip_header "$d/transcript.prev.md" > "$pfile"; fi
   fi
-  jq -c --arg dir "$d" --argjson has_t "$has_t" --argjson has_w "$has_w" --argjson has_o "$has_o" --argjson has_y "$has_y" --rawfile ttxt "$tfile" --rawfile ytxt "$yfile" \
+  jq -c --arg dir "$d" --argjson has_t "$has_t" --argjson has_w "$has_w" --argjson has_o "$has_o" --argjson has_y "$has_y" --argjson has_p "$has_p" \
+    --rawfile ttxt "$tfile" --rawfile ytxt "$yfile" --rawfile ptxt "$pfile" \
     '. + {dir:$dir, audio:($dir+"/audio.wav"), has_transcript:$has_t, transcript_path:(if $has_t then $dir+"/transcript.md" else null end),
           tidy_path:(if $has_y then $dir+"/transcript.tidy.md" else null end),
+          has_prev:$has_p, prev_path:(if $has_p then $dir+"/transcript.prev.md" else null end),
           waveform:(if $has_w then $dir+"/waveform.png" else null end), has_orig:$has_o}
        + (if $ttxt != "" then {transcript_text:$ttxt} else {} end)
-       + (if $ytxt != "" then {tidy_text:$ytxt} else {} end)' "$d/meta.json"
+       + (if $ytxt != "" then {tidy_text:$ytxt} else {} end)
+       + (if $ptxt != "" then {prev_text:$ptxt} else {} end)' "$d/meta.json"
   [[ "$tfile" == /dev/null ]] || rm -f "$tfile"
   [[ "$yfile" == /dev/null ]] || rm -f "$yfile"
+  [[ "$pfile" == /dev/null ]] || rm -f "$pfile"
 }
 
 resolve_mic() {

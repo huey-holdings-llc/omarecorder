@@ -29,7 +29,9 @@ Item {
   property string chosenModel: ""
   property string transcriptText: ""
   property bool showRaw: false            // the tidy transcript is the default view
+  property bool showPrev: false           // transcript.prev.md, kept from before the last re-transcribe
   readonly property bool hasTidy: !!(selected && selected.tidy_path)
+  readonly property bool hasPrev: !!(selected && selected.prev_path)
   // Playback runs in mpv, outside the shell (an in-process QtMultimedia player
   // crashed quickshell on multi-hour takes). The CLI starts mpv with an IPC
   // socket; this file observes time-pos/pause over it and sends seeks.
@@ -170,7 +172,7 @@ Item {
   onRowsChanged: ensureSelection()
   onSelectedChanged: {
     stopPlayback()
-    trimMode = false; previewing = false; showRaw = false
+    trimMode = false; previewing = false; showRaw = false; showPrev = false
     // Re-transcribe defaults to the model that produced the visible transcript.
     var last = selected && selected.transcript && selected.transcript.model ? selected.transcript.model : ""
     var m = svc && last ? svc.modelByName(last) : null
@@ -224,7 +226,8 @@ Item {
 
   FileView {
     id: transcriptFile
-    path: !root.selected ? "" : (root.hasTidy && !root.showRaw ? root.selected.tidy_path : (root.selected.transcript_path || ""))
+    path: !root.selected ? "" : (root.hasPrev && root.showPrev ? root.selected.prev_path
+      : (root.hasTidy && !root.showRaw ? root.selected.tidy_path : (root.selected.transcript_path || "")))
     watchChanges: true
     printErrors: false
     // Clearing here (not on selection) prevents the previous recording's text
@@ -291,7 +294,7 @@ Item {
           else if (root.trimMode && event.key === Qt.Key_BracketRight) { root.markEnd(); event.accepted = true }
           else if (event.key === Qt.Key_Space) { if (root.filterText) root.setFilter(root.filterText + " "); else root.togglePlay(); event.accepted = true }
           else if (root.trimMode && (event.key === Qt.Key_Return || event.key === Qt.Key_Enter)) { root.requestTrim(); event.accepted = true }
-          else if (event.key === Qt.Key_F4) { if (root.hasTidy) root.showRaw = !root.showRaw; event.accepted = true }
+          else if (event.key === Qt.Key_F4) { if (root.hasTidy) { root.showRaw = !root.showRaw; root.showPrev = false } event.accepted = true }
           else if ((event.modifiers & Qt.ControlModifier) && event.key === Qt.Key_C && root.transcriptText.length > 0) {
             root.svc.copyTranscript(root.selected.id, root.showRaw, function(code) { if (code === 0) copiedFlash.restart() }); event.accepted = true
           }
@@ -691,20 +694,31 @@ Item {
                 Button {
                   visible: root.hasTidy
                   text: "Tidy"
-                  active: !root.showRaw
+                  active: !root.showRaw && !root.showPrev
                   fontSize: Style.font.caption; horizontalPadding: Style.spacing.sm; verticalPadding: Style.spacing.xxs
                   tooltipText: "Paragraphs, repeated passages removed (F4)"
                   foreground: root.foreground; fontFamily: root.fontFamily
-                  onClicked: root.showRaw = false
+                  onClicked: { root.showRaw = false; root.showPrev = false }
                 }
                 Button {
                   visible: root.hasTidy
                   text: "Raw"
-                  active: root.showRaw
+                  active: root.showRaw && !root.showPrev
                   fontSize: Style.font.caption; horizontalPadding: Style.spacing.sm; verticalPadding: Style.spacing.xxs
                   tooltipText: "Exactly as whisper wrote it (F4)"
                   foreground: root.foreground; fontFamily: root.fontFamily
-                  onClicked: root.showRaw = true
+                  onClicked: { root.showRaw = true; root.showPrev = false }
+                }
+                Button {
+                  // Toggles, so the old text stays reachable even when there is
+                  // no Tidy / Raw pair to click back to.
+                  visible: root.hasPrev
+                  text: "Previous"
+                  active: root.showPrev
+                  fontSize: Style.font.caption; horizontalPadding: Style.spacing.sm; verticalPadding: Style.spacing.xxs
+                  tooltipText: "The transcript the last re-transcribe replaced"
+                  foreground: root.foreground; fontFamily: root.fontFamily
+                  onClicked: root.showPrev = !root.showPrev
                 }
                 AccessibleActionButton {
                   iconText: "󰆏"
@@ -736,6 +750,16 @@ Item {
                   font.pixelSize: Style.font.caption
                 }
                 Timer { id: sentFlash; interval: 1500 }
+              }
+
+              Text {
+                visible: root.showPrev && root.transcriptText.length > 0
+                width: parent.width
+                text: "Previous transcript, from before the last re-transcribe. Copy and export still use the current one."
+                color: Color.accent
+                wrapMode: Text.Wrap
+                font.family: root.fontFamily
+                font.pixelSize: Style.font.caption
               }
 
               TranscriptView {
