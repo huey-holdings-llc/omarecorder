@@ -202,10 +202,11 @@ reconcile_state() {
 # sweep_orphans: a folder with no meta.json is a crash leftover from the window
 # between mkdir and the meta write in record/import. The list skips it silently,
 # but it blocks that id forever. A folder younger than the guard is left alone
-# (a recording may be starting right now); one that holds real audio is given a
-# minimal meta.json and repaired like any other dead take (pw-record starts
-# before the meta write, so a crash there can leave minutes of good audio);
-# only a husk with no meaningful audio is removed.
+# (a recording may be starting right now); one that holds any audio at all is
+# given a minimal meta.json and repaired like any other dead take (pw-record
+# starts before the meta write and is detached, so a crash there can leave
+# anything from seconds to minutes of good audio, and none of it is ours to
+# judge); only a husk with nothing beyond a WAV header is removed.
 sweep_orphans() {
   local d now mt wav size s
   [[ -d "$ROOT" ]] || return 0
@@ -220,7 +221,7 @@ sweep_orphans() {
       s=$(stat -c %s "$wav" 2>/dev/null || echo 0)
       (( s > size )) && size=$s
     done
-    if (( size >= 1048576 )); then
+    if (( size > 44 )); then
       local base id title
       base=$(basename "$d"); id="${base:0:17}"; title=$(sanitize_title "${base:18}")
       write_initial_meta "$d" "$id" "$title" "recovered" "$(date -d "@$mt" +%FT%T%z)"

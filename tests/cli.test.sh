@@ -193,6 +193,9 @@ touch -d "2026-01-08 03:03:03" "$DS"
 IDM="2026-01-09_040404"; DM="$OMARECORDER_DIR/$IDM MicOnly"; mkdir -p "$DM"
 ffmpeg -v error -y -f lavfi -i "sine=frequency=330:duration=40" -ar 16000 -ac 1 "$DM/mic.wav"
 touch -d "2026-01-09 04:04:04" "$DM"
+IDT_SHORT="2026-01-10_050505"; DTS="$OMARECORDER_DIR/$IDT_SHORT Short"; mkdir -p "$DTS"
+ffmpeg -v error -y -f lavfi -i "sine=frequency=330:duration=2" -ar 16000 -ac 1 "$DTS/audio.wav"
+touch -d "2026-01-10 05:05:05" "$DTS"
 "$CLI" status >/dev/null
 check "old empty orphan folder swept" bash -c "! test -d \"$DO_\""
 check "fresh meta-less folder left alone" test -d "$DF"
@@ -201,7 +204,9 @@ eq "salvaged take got its id back" "$(jq -r .id "$DS/meta.json")" "$IDS"
 eq "salvaged take is marked recovered" "$(jq -r .source "$DS/meta.json")" "recovered"
 eq "salvaged take has its duration" "$(jq -r .duration_s "$DS/meta.json")" "40"
 check "lone mic track promoted to audio.wav" test -s "$DM/audio.wav"
-rm -rf "$DF"; "$CLI" delete "$IDS" --yes >/dev/null; "$CLI" delete "$IDM" --yes >/dev/null
+check "a short take is salvaged too, size is not proof of a husk" test -s "$DTS/meta.json"
+eq "short salvaged take has its duration" "$(jq -r .duration_s "$DTS/meta.json")" "2"
+rm -rf "$DF"; "$CLI" delete "$IDS" --yes >/dev/null; "$CLI" delete "$IDM" --yes >/dev/null; "$CLI" delete "$IDT_SHORT" --yes >/dev/null
 # setup check reports what is missing, with the package to install
 check "setup check lists tools" bash -c "\"$CLI\" setup check --json | jq -e '.tools | length > 5'"
 mkdir -p "$TMP/nowl"; ln -s /usr/bin/* "$TMP/nowl/" 2>/dev/null; rm -f "$TMP/nowl/wl-copy"
