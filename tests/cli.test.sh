@@ -547,6 +547,36 @@ eq "cancelled download job removed" "$(jq -r '.jobs|length' "$RUN/state.json")" 
 check "partial file left for voxtype to resume" test -f "$DLM/ggml-small.en.bin.part"
 check "cancel is logged" bash -c "grep -q 'download cancelled small.en' \"$XDG_STATE_HOME/omarecorder/omarecorder.log\""
 
+# Auto-transcribe on stop (#40): default off, typed storage, fires only when
+# the default model is already on disk.
+eq "autoTranscribe defaults to false" "$($CLI config get autoTranscribe)" "false"
+check "autoTranscribe accepts true" "$CLI" config set autoTranscribe true
+check "stored as a real boolean" bash -c "\"$CLI\" config get --json | jq -e '.autoTranscribe == true' >/dev/null"
+fails "autoTranscribe rejects other values" "$CLI" config set autoTranscribe maybe
+head -c 100 /dev/zero > "$DLM/ggml-base.en.bin"   # default model "installed" for the stub
+mkstoprec() { # <id> <title>: hand-built live recording with a harmless pid
+  local dir="$OMARECORDER_DIR/$1 $2"
+  mkdir -p "$dir"; cp "$TMP/quiet.wav" "$dir/audio.wav"
+  jq -cn --arg id "$1" --arg ttl "$2" '{id:$id,title:$ttl,source:"mic",created:"2026-01-06T01:01:01+0000",duration_s:null,size_bytes:0,sample_rate:16000,transcript:null,notes:""}' > "$dir/meta.json"
+  # stdout redirected so the $(...) capture is not held open by the child
+  sleep 60 >/dev/null 2>&1 & local spid=$!
+  jq -cn --arg id "$1" --arg dir "$dir" --argjson p "$spid" --argjson t "$(date +%s)" \
+    '{recording:{id:$id,dir:$dir,source:"mic",pids:[$p],started_at:$t},jobs:[],version:1}' > "$RUN/state.json"
+  echo "$dir"
+}
+AD=$(mkstoprec 2026-01-06_010101 AutoOn)
+( PATH="$STUB:$PATH" VOXTYPE_MODELS_DIR="$DLM" "$CLI" record stop >/dev/null 2>&1; echo $? > "$TMP/rc" )
+eq "stop with autoTranscribe on exits 0" "$(cat "$TMP/rc")" "0"
+check "transcription followed the stop" bash -c "grep -q 'chained stub text' \"$AD/transcript.md\""
+AD=$(mkstoprec 2026-01-06_020202 AutoMissing)
+( PATH="$STUB:$PATH" VOXTYPE_MODELS_DIR="$TMP/nomodels" "$CLI" record stop >/dev/null 2>&1; echo $? > "$TMP/rc" )
+eq "stop with the model missing exits 0" "$(cat "$TMP/rc")" "0"
+check "and does not transcribe (notification fallback)" bash -c "! test -f \"$AD/transcript.md\""
+"$CLI" config set autoTranscribe false >/dev/null
+AD=$(mkstoprec 2026-01-06_030303 AutoOff)
+( PATH="$STUB:$PATH" VOXTYPE_MODELS_DIR="$DLM" "$CLI" record stop >/dev/null 2>&1 )
+check "stop with autoTranscribe off does not transcribe" bash -c "! test -f \"$AD/transcript.md\""
+
 # Guard rails unchanged.
 ( PATH="$STUB:$PATH" VOXTYPE_MODELS_DIR="$TMP/nomodels" "$CLI" transcribe "$IDD" --model small.en >/dev/null 2>&1; echo $? > "$TMP/rc" )
 eq "without --download still exit 3" "$(cat "$TMP/rc")" "3"

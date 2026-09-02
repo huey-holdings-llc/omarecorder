@@ -101,7 +101,7 @@ strip_header() { sed '1{/^<!--/d}' "$1"; }
 # ---------------------------------------------------------------- config ----
 CONFIG_DEFAULTS=$(jq -cn --arg dir "${OMARECORDER_DIR:-$HOME/Recordings}" '{
   recordingsDir: $dir, defaultSource: "mic", defaultModel: "base.en",
-  language: "en", keepAwake: true, threads: 0,
+  language: "en", keepAwake: true, threads: 0, autoTranscribe: false,
   obsidianVault: "", exportDir: "" }')   # "" = automatic (see resolve_export_target)
 
 load_config() {
@@ -123,7 +123,7 @@ _write_config() {
   [[ -f "$CONFIG_FILE" ]] && cur=$(jq -c . "$CONFIG_FILE")
   case "$key" in
     threads) j=$(jq -c --arg k "$key" --argjson v "$val" '.[$k]=$v' <<<"$cur") ;;
-    keepAwake) j=$(jq -c --arg k "$key" --argjson v "$val" '.[$k]=$v' <<<"$cur") ;;
+    keepAwake|autoTranscribe) j=$(jq -c --arg k "$key" --argjson v "$val" '.[$k]=$v' <<<"$cur") ;;
     *) j=$(jq -c --arg k "$key" --arg v "$val" '.[$k]=$v' <<<"$cur") ;;
   esac
   write_json "$CONFIG_FILE" "$j"
@@ -145,6 +145,7 @@ cmd_config() {
         defaultModel|language|exportDir) ;;
         defaultSource) [[ "$val" =~ ^(mic|system|both)$ ]] || die "defaultSource must be mic|system|both" ;;
         keepAwake) [[ "$val" =~ ^(true|false)$ ]] || die "keepAwake must be true|false" ;;
+        autoTranscribe) [[ "$val" =~ ^(true|false)$ ]] || die "autoTranscribe must be true|false" ;;
         threads) [[ "$val" =~ ^[0-9]+$ ]] || die "threads must be an integer" ;;
         *) die "unknown config key: $key" ;;
       esac
@@ -568,11 +569,26 @@ record_stop() { # [--force]
   local dur; dur=$(jq -r '.duration_s // 0' "$dir/meta.json")
   log "record stop $id duration=${dur}s"
   local ttl; ttl=$(jq -r '.title // empty' "$dir/meta.json"); ttl="${ttl:-$id}"
+  # autoTranscribe starts the transcription without a click, but only when the
+  # default model is already on disk: a settings toggle must never trigger a
+  # multi-GB download on its own. With the model missing, the clickable
+  # notification below is the fallback (its click may download; a click is
+  # consent). The auto-fire is refused harmlessly by _claim_tx if the
+  # notification is clicked too.
+  local auto=0
+  [[ $(cfg autoTranscribe) == "true" ]] && model_installed "$(cfg defaultModel)" && auto=1
   if [[ $(jq -r '.levels.clipped // false' "$dir/meta.json") == "true" ]]; then
-    notify "Recording saved · $(fmt_hms "$dur") (audio is clipping)" "$ttl: the microphone gain is too high; lower the input level before the next session. Click to transcribe anyway." -- "$SELF" transcribe "$id" --download
+    if (( auto )); then
+      notify "Recording saved · $(fmt_hms "$dur") (audio is clipping)" "$ttl: the microphone gain is too high; lower the input level before the next session. Transcribing with $(model_label "$(cfg defaultModel)") now" -- "$SELF" transcribe "$id" --download
+    else
+      notify "Recording saved · $(fmt_hms "$dur") (audio is clipping)" "$ttl: the microphone gain is too high; lower the input level before the next session. Click to transcribe anyway." -- "$SELF" transcribe "$id" --download
+    fi
+  elif (( auto )); then
+    notify "Recording saved · $(fmt_hms "$dur")" "$ttl. Transcribing with $(model_label "$(cfg defaultModel)") now" -- "$SELF" transcribe "$id" --download
   else
     notify "Recording saved · $(fmt_hms "$dur")" "$ttl. Click to transcribe with $(model_label "$(cfg defaultModel)")" -- "$SELF" transcribe "$id" --download
   fi
+  (( auto )) && { "$SELF" transcribe "$id" >/dev/null 2>&1 || true; }
   echo "$id ($(fmt_hms "$dur"))"
 }
 
