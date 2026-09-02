@@ -766,6 +766,24 @@ cmd_import() {
 }
 
 # ----------------------------------------------------------- list/show -----
+# search <text>: ids of recordings whose transcript contains the text.
+# Case-insensitive fixed-string match over what the user reads (tidy when it
+# exists, raw otherwise), header line excluded; emits a JSON array of ids.
+# Read-only: the query travels as an argument into grep -F, never a pattern.
+cmd_search() {
+  local q="${1:-}"; [[ -n "$q" ]] || die "usage: search <text>"
+  mkdir -p "$ROOT"
+  local d f b
+  local -a ids=()
+  while IFS= read -r d; do
+    [[ -f "$d/meta.json" ]] || continue
+    f=$(transcript_file "$d")
+    [[ -s "$f" ]] || continue
+    if strip_header "$f" | grep -iqF -- "$q"; then b="${d##*/}"; ids+=("${b%% *}"); fi
+  done < <(find "$ROOT" -mindepth 1 -maxdepth 1 -type d -name '????-??-??_??????*' | sort -r)
+  jq -cn '$ARGS.positional' --args -- ${ids[@]+"${ids[@]}"}
+}
+
 cmd_list() {
   mkdir -p "$ROOT"
   # One jq per recording plus a single collect: rebuilding a growing array per
@@ -1575,6 +1593,7 @@ omarecorder $VERSION: record, keep, transcribe locally (voxtype)
   record stop | toggle | status [--json]                 control / inspect
   import <file> [--move] [--title T]                     bring an existing audio file in
   list [--json] | show <id> [--json] | analyze <id>      browse / measure levels
+  search <text>                                          ids whose transcript contains the text
   rename <id> <title> | delete <id> [--yes] [--permanent] manage (delete → trash)
   note <id> <text>                                       set a note on a recording (empty text clears it)
   trim <id> --from s --to s [--replace] | trim <id> --restore  cut the audio (first original kept as audio.orig.wav)
@@ -1603,6 +1622,7 @@ main() {
     status) cmd_status "$@" ;;
     import) cmd_import "$@" ;;
     list) cmd_list "$@" ;;
+    search) cmd_search "$@" ;;
     show) cmd_show "$@" ;;
     analyze) cmd_analyze "$@" ;;
     trim) cmd_trim "$@" ;;

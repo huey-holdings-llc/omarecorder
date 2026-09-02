@@ -583,6 +583,24 @@ eq "without --download still exit 3" "$(cat "$TMP/rc")" "3"
 fails "unknown model refused even with --download" bash -c "PATH=\"$STUB:\$PATH\" VOXTYPE_MODELS_DIR=\"$TMP/nomodels\" \"$CLI\" transcribe \"$IDD\" --model bogus --download"
 "$CLI" delete "$IDD" --yes >/dev/null
 
+echo "== search"
+SA=$("$CLI" import "$TMP/quiet.wav" --title "Search A")
+SB=$("$CLI" import "$TMP/quiet.wav" --title "Search B")
+SAD="$OMARECORDER_DIR/$SA Search A"
+printf '<!-- omarecorder model=base.en -->\nthe blue heron landed\n' > "$SAD/transcript.md"
+fails "search requires a query" "$CLI" search
+eq "search finds the transcript word" "$("$CLI" search heron)" "[\"$SA\"]"
+eq "search is case-insensitive" "$("$CLI" search HERON)" "[\"$SA\"]"
+eq "no match returns an empty array" "$("$CLI" search walrus)" "[]"
+eq "regex text is inert (fixed strings)" "$("$CLI" search '.*')" "[]"
+eq "a leading dash is a query, not an option" "$("$CLI" search '-heron')" "[]"
+check "the header line is not searched" bash -c "[ \"\$(\"$CLI\" search omarecorder)\" = '[]' ]"
+# Tidy is preferred once it exists: search follows what the user reads.
+printf '<!-- 1 paragraphs, 0 repeats, 0 loops, -->\na walrus instead\n' > "$SAD/transcript.tidy.md"
+eq "tidy text wins once present" "$("$CLI" search walrus)" "[\"$SA\"]"
+eq "raw-only text no longer matches" "$("$CLI" search heron)" "[]"
+"$CLI" delete "$SA" --yes >/dev/null; "$CLI" delete "$SB" --yes >/dev/null
+
 echo "== transcribe"
 if command -v voxtype >/dev/null && [[ -f "${VOXTYPE_MODELS_DIR:-$HOME/.local/share/voxtype/models}/ggml-base.en.bin" && -f "$TMP/speech12.wav" ]]; then
   ID3=$($CLI import "$TMP/speech12.wav" --title "Speech 12s")

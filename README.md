@@ -175,7 +175,8 @@ are left untouched.
 * **Popup keys**: `r` record/stop, `l` library, `i` import, `s` settings
   (the Recent list folds away while they are open), `Up`/`Down` and `Enter`
   on recent rows, `Esc`.
-* **Library keys**: type to search. `Up`/`Down`, `PgUp`/`PgDn`, `Home`/`End`
+* **Library keys**: type to search titles and transcript text (transcript
+  matches join the list a beat later). `Up`/`Down`, `PgUp`/`PgDn`, `Home`/`End`
   select. `Enter` opens the transcript, or transcribes if there is none
   (`Shift+Enter` transcribes again). `Space` plays or pauses. `Left`/`Right`
   seek 5 seconds when the search box is empty. `Ctrl+M` cycles the model
