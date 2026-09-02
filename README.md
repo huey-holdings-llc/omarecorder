@@ -178,9 +178,10 @@ are left untouched.
 * **Library keys**: type to search titles and transcript text (transcript
   matches join the list a beat later). `Up`/`Down`, `PgUp`/`PgDn`, `Home`/`End`
   select. `Enter` opens the transcript, or transcribes if there is none
-  (`Shift+Enter` transcribes again). `Space` plays or pauses. `Ctrl+S` cycles
-the playback speed (1x, 1.25x, 1.5x, 2x; `Ctrl+Shift+S` backwards) for the
-rest of the session. `Left`/`Right`
+  (`Shift+Enter` transcribes again). `Space` plays or pauses. The speed chip
+next to the time readout (or `Ctrl+S`; `Ctrl+Shift+S` backwards) cycles the
+playback speed (1x, 1.25x, 1.5x, 2x) for the rest of the session.
+`Left`/`Right`
   seek 5 seconds when the search box is empty. `Ctrl+M` cycles the model
   preset (`Ctrl+Shift+M` backwards). `F2` renames, `F3` trims (then
   `[` and `]` mark start and end at the playhead), `Del` moves to the trash

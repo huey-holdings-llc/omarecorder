@@ -3,6 +3,22 @@
 All notable changes to this project are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow SemVer.
 
+## [Unreleased]
+
+### Fixed
+- The model chips no longer get clipped. The playback readout reserved width
+  even while invisible, and the width changed with the speed label, so
+  "Accurate" was cut off by varying amounts. The readout now sits in a
+  fixed-width slot sized to the recording's own duration, and on panes too
+  narrow for the full labels the chips drop their estimates (names only,
+  estimate in the tooltip) instead of getting cut off. (#42)
+
+### Changed
+- The playback speed is a small chip to the right of the time readout, where
+  it clearly belongs to playback rather than transcription. It is visible
+  before you press play, clicking it cycles the speed, and Ctrl+S still
+  works. (#42)
+
 ## [1.3.0] - 2026-09-02
 
 ### Added
