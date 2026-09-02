@@ -280,9 +280,17 @@ echo "== trim / waveform"
 cp "$TMP/tone48.wav" "$TMP/trim.wav"; touch -d "2026-01-06 03:04:05" "$TMP/trim.wav"
 cp "$TMP/quiet.wav" "$TMP/trim2.wav"; touch -d "2026-01-07 03:04:05" "$TMP/trim2.wav"
 IDT=$($CLI import "$TMP/trim.wav" --title "Trim Test"); DT="$OMARECORDER_DIR/$IDT Trim Test"
-eq "import makes waveform.png" "$(ffprobe -v error -show_entries stream=codec_name,width,height -of csv=p=0 "$DT/waveform.png")" "png,800,64"
+eq "import makes waveform.png" "$(ffprobe -v error -show_entries stream=codec_name,width,height -of csv=p=0 "$DT/waveform.png")" "png,2400,128"
 eq "show --json has waveform path" "$($CLI show "$IDT" --json | jq -r .waveform)" "$DT/waveform.png"
 eq "has_orig false before trim" "$($CLI show "$IDT" --json | jq -r .has_orig)" "false"
+# A strip drawn at the old, softer 800x64 (pre-1.2) is redrawn once by list,
+# then left alone on later lists.
+ffmpeg -v error -y -f lavfi -i "color=c=gray:s=800x64:d=1" -frames:v 1 -update 1 "$DT/waveform.png"
+$CLI list >/dev/null
+eq "old 800px strip redrawn by list" "$(ffprobe -v error -show_entries stream=width,height -of csv=p=0 "$DT/waveform.png")" "2400,128"
+touch "$TMP/wave.marker"
+$CLI list >/dev/null
+check "right-size strip left alone by list" bash -c "! find '$DT' -maxdepth 1 -name waveform.png -newer '$TMP/wave.marker' | grep -q ."
 cp "$TMP/quiet.wav" "$DT/mic.wav"   # a raw take must never be touched by trim
 touch "$TMP/trim.marker"
 eq "trim 1–2 s → duration 1" "$($CLI trim "$IDT" --from 1 --to 2)" "$IDT (00:00:01)"

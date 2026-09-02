@@ -261,7 +261,7 @@ stay in the folder, so a bad mix can be redone by hand with ffmpeg.
 └── 2026-08-29_193012 Sons of Suds/     id + title; rename = folder rename
     ├── audio.wav                       16 kHz mono s16 (whisper-native, about 115 MB per hour)
     ├── audio.orig.wav                  only after a trim (unless --replace)
-    ├── waveform.png                    800x64 strip, redrawn on stop, import, trim and analyze
+    ├── waveform.png                    2400x128 strip, redrawn on stop, import, trim and analyze
     ├── meta.json                       title, source, duration, levels, transcript, trim, exported_to
     ├── transcript.md                   header line + plain text, exactly as whisper wrote it
     ├── transcript.tidy.md              paragraphs, repeated passages removed (what the Library shows)

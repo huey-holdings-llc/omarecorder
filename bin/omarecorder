@@ -38,6 +38,10 @@ LEVEL_FILE="$RUN_DIR/level"      # live input level while recording (see _meter)
 VOXTYPE_MODELS_DIR="${VOXTYPE_MODELS_DIR:-$HOME/.local/share/voxtype/models}"
 
 RATE=16000
+# Waveform strip pixel size. Wide enough that the Library never upscales it,
+# even on a wide window at 2x display scale; the PNG stays a few tens of KB.
+WAVE_W=2400
+WAVE_H=128
 # Long takes are transcribed in pieces of at most this many seconds (whisper
 # drifts into repetition loops on very long inputs; the transcript also fills
 # in piece by piece). Equal pieces, seams snapped to silence — see plan_chunks.
@@ -552,15 +556,27 @@ finalize_audio() {
   make_waveform "$dir"
 }
 
-# make_waveform <dir>: audio.wav → waveform.png, an 800x64 strip the Library
-# draws behind the trim handles. Mid-grey reads on light and dark themes; sqrt
+# make_waveform <dir>: audio.wav → waveform.png, the strip the Library draws
+# behind the trim handles. Mid-grey reads on light and dark themes; sqrt
 # scaling keeps quiet speech visible next to loud passages. Best effort only —
 # a missing strip never fails a stop or an import.
 make_waveform() {
   local dir="$1"; [[ -f "$dir/audio.wav" ]] && have ffmpeg || return 0
-  ffmpeg -v error -y -i "$dir/audio.wav" -filter_complex "showwavespic=s=800x64:colors=#888888:scale=sqrt" \
-    -frames:v 1 -update 1 "$dir/waveform.png.tmp.1383976.png" 2>>"$LOG_FILE" && mv -f "$dir/waveform.png.tmp.1383976.png" "$dir/waveform.png" \
-    || { rm -f "$dir/waveform.png.tmp.1383976.png"; log "waveform failed in $dir"; }
+  ffmpeg -v error -y -i "$dir/audio.wav" -filter_complex "showwavespic=s=${WAVE_W}x${WAVE_H}:colors=#888888:scale=sqrt" \
+    -frames:v 1 -update 1 "$dir/waveform.png.tmp.$$.png" 2>>"$LOG_FILE" && mv -f "$dir/waveform.png.tmp.$$.png" "$dir/waveform.png" \
+    || { rm -f "$dir/waveform.png.tmp.$$.png"; log "waveform failed in $dir"; }
+  return 0
+}
+
+# png_width <file>: width from the PNG IHDR (bytes 16-19, big-endian); empty
+# on anything that is not a readable PNG. A 4-byte read, so list can afford it
+# per recording.
+png_width() {
+  local b
+  b=$(od -An -tu1 -j16 -N4 -- "$1" 2>/dev/null) || return 0
+  # shellcheck disable=SC2086
+  set -- $b
+  [[ $# -eq 4 ]] && echo $(( ($1 << 24) | ($2 << 16) | ($3 << 8) | $4 ))
   return 0
 }
 
@@ -696,8 +712,10 @@ cmd_list() {
     while IFS= read -r d; do
       [[ -f "$d/meta.json" ]] || continue
       # Recordings made before 1.0 get their waveform and tidy transcript here,
-      # once (cheap, never repeated).
-      [[ -f "$d/waveform.png" || ! -s "$d/audio.wav" ]] || make_waveform "$d"
+      # once (cheap, never repeated). Strips drawn at an older, softer size are
+      # redrawn the same way; once redrawn the width matches and the check
+      # (a 4-byte header read) never fires again.
+      if [[ -s "$d/audio.wav" ]] && { [[ ! -f "$d/waveform.png" ]] || [[ "$(png_width "$d/waveform.png")" != "$WAVE_W" ]]; }; then make_waveform "$d"; fi
       [[ -s "$d/transcript.tidy.md" || ! -s "$d/transcript.md" ]] || tidy_transcript "$d"
       rec_json "$d"
     done < <(find "$ROOT" -mindepth 1 -maxdepth 1 -type d -name '????-??-??_??????*' | sort -r) | jq -sc '.'
