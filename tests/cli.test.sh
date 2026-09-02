@@ -283,7 +283,7 @@ IDT=$($CLI import "$TMP/trim.wav" --title "Trim Test"); DT="$OMARECORDER_DIR/$ID
 eq "import makes waveform.png" "$(ffprobe -v error -show_entries stream=codec_name,width,height -of csv=p=0 "$DT/waveform.png")" "png,2400,128"
 eq "show --json has waveform path" "$($CLI show "$IDT" --json | jq -r .waveform)" "$DT/waveform.png"
 eq "has_orig false before trim" "$($CLI show "$IDT" --json | jq -r .has_orig)" "false"
-# A strip drawn at the old, softer 800x64 (pre-1.2) is redrawn once by list,
+# A strip drawn at the old, softer 800x64 (pre-1.1.2) is redrawn once by list,
 # then left alone on later lists.
 ffmpeg -v error -y -f lavfi -i "color=c=gray:s=800x64:d=1" -frames:v 1 -update 1 "$DT/waveform.png"
 $CLI list >/dev/null
