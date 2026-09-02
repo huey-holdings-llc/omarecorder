@@ -3,6 +3,13 @@
 All notable changes to this project are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow SemVer.
 
+## [Unreleased]
+
+### Changed
+- The Recent list folds away while the popup settings are open, so on smaller
+  displays the settings are in reach without scrolling past it. The section
+  header stays put and says where the list went. (#15)
+
 ## [1.2.0] - 2026-09-02
 
 ### Added
