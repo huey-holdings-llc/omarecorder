@@ -3,9 +3,32 @@
 All notable changes to this project are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow SemVer.
 
-## [Unreleased]
+## [1.3.0] - 2026-09-02
 
 ### Added
+- Typing in the Library now searches transcript text as well as titles. A new
+  read-only `search <text>` command greps what you actually read (the tidy
+  transcript when it exists, raw otherwise) with case-insensitive fixed
+  strings; the Library asks it a beat behind the keystrokes and folds the
+  matches into the list, so title matching stays instant. (#41)
+- A config toggle, off by default: `autoTranscribe` starts the transcription
+  the moment a recording stops, with the default model, when that model is
+  already downloaded. When it is missing nothing downloads on its own; the
+  clickable notification stays as the consent step. The switch lives in the
+  popup settings. (#40)
+- The loop warning's advice is now a button. `transcribe <id> --chunk-s N`
+  overrides the piece length per run, the length used is recorded in the
+  transcript metadata, and the banner offers "Re-transcribe in shorter
+  pieces", halving the recorded length each press down to a 300 second
+  floor. (#38)
+- A running model download can be cancelled: `model cancel <name>` on the
+  CLI, and a cancel button in the Library action row while the picked model
+  downloads. A queued chained transcription is dropped with the download and
+  the notification says so; partial download files stay for voxtype to
+  resume. (#39)
+- `Ctrl+S` cycles the playback speed (1x, 1.25x, 1.5x, 2x; `Ctrl+Shift+S`
+  backwards). The position readout shows the multiplier, and the choice
+  holds for the whole session. (#42)
 - Picking a model that is not downloaded yet now downloads it and transcribes
   the recording as soon as the download lands, in one press. The intent rides
   on the download job in state.json, so it survives switching recordings,
