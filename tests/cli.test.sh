@@ -99,6 +99,30 @@ eq "meta title updated" "$(jq -r .title "$D1B/meta.json")" "Renamed - Title here
 V2=$(jq -r .version "$RUN/state.json")
 check "state version bumped by mutations" test "$V2" -gt "$V1"
 
+echo "== note"
+cd "$TMP" || exit 1   # a stray relative touch from a hostile note would land here
+$CLI note "$ID1" "remember to trim the intro" >/dev/null
+eq "note round-trips via show --json" "$($CLI show "$ID1" --json | jq -r .notes)" "remember to trim the intro"
+eq "note appears in list --json" "$($CLI list --json | jq -r --arg id "$ID1" '.[] | select(.id==$id) | .notes')" "remember to trim the intro"
+VN=$(jq -r .version "$RUN/state.json")
+check "note bumps state version" test "$VN" -gt "$V2"
+EVILNOTE='note $(touch note-pwned) `touch note-pwned2`; rm -rf x <b>bold'
+$CLI note "$ID1" "$EVILNOTE" >/dev/null
+eq "hostile note stored verbatim" "$($CLI show "$ID1" --json | jq -r .notes)" "$EVILNOTE"
+check "no command executed from note" bash -c "! test -e '$TMP/note-pwned' && ! test -e '$TMP/note-pwned2'"
+eq "newline in note collapsed" "$($CLI note "$ID1" $'line1\nline2' >/dev/null; $CLI show "$ID1" --json | jq -r .notes)" "line1 line2"
+eq "slash kept in note (unlike titles)" "$($CLI note "$ID1" "a/b" >/dev/null; $CLI show "$ID1" --json | jq -r .notes)" "a/b"
+LONGNOTE=$(printf 'n%.0s' $(seq 1 600))
+$CLI note "$ID1" "$LONGNOTE" >/dev/null
+eq "note capped at 500 chars" "$($CLI show "$ID1" --json | jq -r '.notes | length')" "500"
+$CLI note "$ID1" "" >/dev/null
+eq "empty text clears the note" "$($CLI show "$ID1" --json | jq -r .notes)" ""
+IDN=$($CLI import "$TMP/quiet.wav" --title "Note Keeper")
+$CLI note "$IDN" "sticks around" >/dev/null
+$CLI rename "$IDN" "Note Keeper Renamed" >/dev/null
+eq "note survives a rename" "$($CLI show "$IDN" --json | jq -r .notes)" "sticks around"
+$CLI delete "$IDN" --yes >/dev/null
+
 echo "== security / robustness"
 # Titles are data: shell metacharacters must round-trip untouched and never execute.
 EVIL='notes $(touch pwned-marker) `touch pwned-marker2`; rm -rf x <b>bold'
@@ -401,6 +425,7 @@ echo "== busy guards"
 IDG=$("$CLI" import "$TMP/quiet.wav" --title "Guard Test")
 jq -cn --arg id "$IDG" '{recording:null,jobs:[{type:"transcribe",id:$id,model:"base.en",started_at:0}],version:1}' > "$RUN/state.json"
 fails "rename refused while transcribing" "$CLI" rename "$IDG" "New Name"
+fails "note refused while transcribing" "$CLI" note "$IDG" "not now"
 fails "delete refused while transcribing" "$CLI" delete "$IDG" --yes
 fails "second transcribe refused" "$CLI" transcribe "$IDG" --model base.en
 eq "and the existing job survives the refusal" "$(jq -r '.jobs|length' "$RUN/state.json")" "1"

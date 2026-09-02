@@ -6,6 +6,11 @@ All notable changes to this project are documented here. Format follows
 ## [Unreleased]
 
 ### Added
+- Every recording can carry a short note. `omarecorder note <id> <text>` sets
+  it (empty text clears it), it shows up in `show --json` and `list --json`,
+  and the Library detail pane has a quiet "Add a note" box under the metadata
+  line. Notes are capped at 500 characters and stored in meta.json, so they
+  stay with the recording through renames. (#9)
 - Tidy now marks every spot where it collapsed a back-to-back repeated phrase
   with "(repeated Nx)" on the last kept word, so the reader knows the raw text
   holds more there. The markers flow into `copy` and `export` output like the
