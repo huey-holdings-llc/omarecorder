@@ -5,6 +5,13 @@ All notable changes to this project are documented here. Format follows
 
 ## [Unreleased]
 
+### Removed
+- `AGENTS.md` is no longer tracked in git. The marketplace review flagged it:
+  a plugin install is a plain git clone, so a tracked agent-instruction file
+  would land in every user's plugin directory and quietly steer any coding
+  agent run there. The file stays in the maintainer's working copy for the
+  review workflow; nothing about the plugin itself changes.
+
 ### Changed
 - The idle bar icon is now a pair of tape reels instead of a microphone, so it
   no longer looks like a mic on/off toggle. Suggested by a Reddit reader who

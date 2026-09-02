@@ -57,9 +57,12 @@ to them is easy to merge; one that breaks them will get a conversation first.
   `fails`); fixtures are generated with ffmpeg; the sandbox is a throwaway XDG
   tree.
 * **Small pull requests** with one change each merge faster than one big one.
-* **Second-model review**: pull requests get an automated review from OpenAI
-  Codex (see `AGENTS.md`). Treat its findings as a starting point for the
-  discussion, not as a verdict either way.
+* **Second-model review**: larger pull requests get a review from OpenAI
+  Codex, requested by the maintainer with a `@codex review` comment. Treat its
+  findings as a starting point for the discussion, not as a verdict either way.
+  (The review instructions used to live in a tracked `AGENTS.md`; the Omarchy
+  marketplace does not allow agent-instruction files in a distributed plugin,
+  since an install is a plain git clone, so the file is kept out of git now.)
 * **Style**: bash with `set -euo pipefail` and shellcheck clean; QML in the
   style of the existing files; plain, direct English in docs and messages.
 * **Reporting a bug**: include `omarecorder setup check --json`, the relevant

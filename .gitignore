@@ -5,3 +5,4 @@ tests/tmp/
 .spike/
 .claude/
 !docs/screenshots/*.png
+AGENTS.md
