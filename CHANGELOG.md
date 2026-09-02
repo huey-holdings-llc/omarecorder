@@ -10,6 +10,11 @@ All notable changes to this project are documented here. Format follows
   without a mouse trip to the dropdown; `Ctrl+Shift+M` cycles backwards. Plain
   letters keep feeding the search filter as before. (#16)
 
+### Changed
+- The Recent list folds away while the popup settings are open, so on smaller
+  displays the settings are in reach without scrolling past it. The section
+  header stays put and says where the list went. (#15)
+
 ## [1.2.0] - 2026-09-02
 
 ### Added

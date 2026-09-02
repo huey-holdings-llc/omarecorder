@@ -52,13 +52,18 @@ Panel {
     if (ready) svc.refresh()
     Qt.callLater(function() { keyCatcher.forceActiveFocus() })
   }
-  // Settings live at the bottom of a capped popup: bring them into view.
-  onSettingsOpenChanged: if (settingsOpen) Qt.callLater(function() {
-    if (panelFlick) panelFlick.contentY = Math.max(0, panelFlick.contentHeight - panelFlick.height)
-  })
+  // Settings live at the bottom of a capped popup: Recent folds away while they
+  // are open, and the scroll follows after the relayout from the visible flips.
+  onSettingsOpenChanged: {
+    cursorActive = false; cursorIndex = -1
+    Qt.callLater(function() {
+      if (!panelFlick) return
+      panelFlick.contentY = settingsOpen ? Math.max(0, panelFlick.contentHeight - panelFlick.height) : 0
+    })
+  }
 
   function moveCursor(dy) {
-    if (recent.length === 0) return
+    if (recent.length === 0 || settingsOpen) return
     cursorActive = true
     cursorIndex = Math.max(0, Math.min(recent.length - 1, cursorIndex + dy))
   }
@@ -240,10 +245,14 @@ Panel {
 
           PanelSeparator { width: parent.width; foreground: root.foreground }
 
-          PanelSectionHeader { text: "RECENT"; foreground: root.foreground; fontFamily: root.fontFamily }
+          PanelSectionHeader {
+            text: root.settingsOpen ? "RECENT · hidden while settings are open" : "RECENT"
+            foreground: root.foreground
+            fontFamily: root.fontFamily
+          }
 
           Text {
-            visible: root.recent.length === 0
+            visible: root.recent.length === 0 && !root.settingsOpen
             width: parent.width
             text: !root.ready ? "Service not loaded."
               : (root.svc.recordings.length === 0 ? "No recordings yet. Press r to start one." : "Recent list is off (recentCount is 0).")
@@ -256,6 +265,7 @@ Panel {
             id: recentColumn
             width: parent.width
             spacing: Style.spacing.xxs
+            visible: !root.settingsOpen
             Repeater {
               model: root.recent
               delegate: RecordingRow {

@@ -172,8 +172,9 @@ are left untouched.
   starts or stops recording. While recording it becomes a red record glyph with
   a running `HH:MM:SS`, replaced by CLIP while the input is on the rails. An
   hourglass means a transcription is running.
-* **Popup keys**: `r` record/stop, `l` library, `i` import, `s` settings,
-  `Up`/`Down` and `Enter` on recent rows, `Esc`.
+* **Popup keys**: `r` record/stop, `l` library, `i` import, `s` settings
+  (the Recent list folds away while they are open), `Up`/`Down` and `Enter`
+  on recent rows, `Esc`.
 * **Library keys**: type to search. `Up`/`Down`, `PgUp`/`PgDn`, `Home`/`End`
   select. `Enter` opens the transcript, or transcribes if there is none
   (`Shift+Enter` transcribes again). `Space` plays or pauses. `Left`/`Right`
