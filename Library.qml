@@ -115,6 +115,12 @@ Item {
   }
   function selectAbsolute(i) { if (rows.length === 0) return; i = Math.max(0, Math.min(i, rows.length - 1)); selectedId = rows[i].id; list.positionViewAtIndex(i, ListView.Contain) }
   function setFilter(t) { filterText = t; searchDebounce.restart(); Qt.callLater(ensureSelection) }
+  // Transcripts change under a live query (a re-transcription finishing, a
+  // trim): re-ask when the list refreshes so the match set cannot go stale.
+  Connections {
+    target: root.svc
+    function onRecordingsChanged() { if (root.filterText.trim()) searchDebounce.restart() }
+  }
   Timer {
     id: searchDebounce
     interval: 300
