@@ -55,6 +55,14 @@ Column {
     foreground: root.foreground; fontFamily: root.fontFamily
     onClicked: if (root.svc) root.svc.setConfig("keepAwake", root.cfg.keepAwake === false ? "true" : "false")
   }
+  Toggle {
+    width: parent.width
+    label: "Transcribe when a recording stops"
+    description: "Starts the default model automatically when it is installed"
+    checked: root.cfg.autoTranscribe === true
+    foreground: root.foreground; fontFamily: root.fontFamily
+    onClicked: if (root.svc) root.svc.setConfig("autoTranscribe", root.cfg.autoTranscribe === true ? "false" : "true")
+  }
   Column {
     width: parent.width; spacing: Style.spacing.xxs
     Text { text: "Recordings folder"; color: Qt.darker(root.foreground, 1.4); font.family: root.fontFamily; font.pixelSize: Style.font.caption }

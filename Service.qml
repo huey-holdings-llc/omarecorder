@@ -138,10 +138,11 @@ QtObject {
   // a button press being deliberate in a way a keybinding is not.
   function stopRecording(force) { run(force ? ["record", "stop", "--force"] : ["record", "stop"]) }
   function toggleRecording() { recording ? stopRecording() : startRecording() }
-  function transcribe(id, model, language, download) {
+  function transcribe(id, model, language, download, chunkS) {
     var args = ["transcribe", id]
     if (model) args = args.concat(["--model", model])
     if (language) args = args.concat(["--language", language])
+    if (chunkS) args = args.concat(["--chunk-s", String(chunkS)])
     if (download) args.push("--download")
     run(args)
   }
@@ -153,6 +154,7 @@ QtObject {
   function setNote(id, text) { run(["note", id, text], function(code) { if (code === 0) root.refreshList() }) }
   function remove(id) { run(["delete", id, "--yes"]) }
   function download(model) { run(["model", "download", model]) }
+  function cancelDownload(model) { run(["model", "cancel", model]) }
   function importFile(path) { run(["import", path], function(code) { if (code === 0) root.refreshList() }) }
   function play(id) { run(["play", id]) }
   function playFrom(id, seconds) { run(["play", id, "--from", String(seconds)]) }

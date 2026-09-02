@@ -286,10 +286,12 @@ Obsidian strip it.
 
 Config keys (`omarecorder config get --json`): `recordingsDir` (`~/Recordings`),
 `defaultSource` (`mic`), `defaultModel` (`base.en`), `language` (`en`),
-`keepAwake` (`true`, a systemd idle/sleep inhibitor while recording), `threads`
-(`0` lets voxtype decide), `obsidianVault` (empty = the open vault), `exportDir`
-(empty = automatic). Environment: `OMARECORDER_DIR` overrides `recordingsDir`,
-`OMARECORDER_CHUNK_S` sets the piece length.
+`keepAwake` (`true`, a systemd idle/sleep inhibitor while recording),
+`autoTranscribe` (`false`; when `true`, stopping a recording starts a
+transcription with the default model, but only if that model is already
+downloaded), `threads` (`0` lets voxtype decide), `obsidianVault` (empty = the
+open vault), `exportDir` (empty = automatic). Environment: `OMARECORDER_DIR`
+overrides `recordingsDir`, `OMARECORDER_CHUNK_S` sets the piece length.
 
 ### Models
 

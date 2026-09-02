@@ -617,6 +617,19 @@ Item {
                 }
                 AccessibleActionButton {
                   anchors.verticalCenter: parent.verticalCenter
+                  // Reserved-slot pattern too; appears only while the picked
+                  // model is downloading. The main button cannot host this:
+                  // its press during a download re-aims the chain by design.
+                  enabled: !!picker.download
+                  opacity: enabled ? 1 : 0
+                  iconText: "󰜺"
+                  tooltipText: "Cancel this model download"
+                  hoverColor: root.urgent
+                  foreground: root.foreground; fontFamily: root.fontFamily
+                  onClicked: if (root.svc) root.svc.cancelDownload(picker.value)
+                }
+                AccessibleActionButton {
+                  anchors.verticalCenter: parent.verticalCenter
                   iconText: "󰉋"
                   tooltipText: "Open folder"
                   foreground: root.foreground; fontFamily: root.fontFamily
@@ -739,17 +752,36 @@ Item {
                 font.pixelSize: Style.font.caption
               }
 
-              Text {
-                visible: !root.selectedJob && root.svc && root.selected && root.svc.isLoopy(root.selected)
+              Column {
                 width: parent.width
-                text: "Whisper looped on this take (longest repeat "
-                  + (root.selected && root.selected.transcript && root.selected.transcript.tidy && root.selected.transcript.tidy.longest_run_words != null
-                     ? root.selected.transcript.tidy.longest_run_words : "?")
-                  + " words removed). Re-transcribe with a larger model or a shorter chunk length."
-                color: Color.accent
-                wrapMode: Text.Wrap
-                font.family: root.fontFamily
-                font.pixelSize: Style.font.caption
+                spacing: Style.spacing.xxs
+                visible: !root.selectedJob && root.svc && root.selected && root.svc.isLoopy(root.selected)
+                Text {
+                  width: parent.width
+                  text: "Whisper looped on this take (longest repeat "
+                    + (root.selected && root.selected.transcript && root.selected.transcript.tidy && root.selected.transcript.tidy.longest_run_words != null
+                       ? root.selected.transcript.tidy.longest_run_words : "?")
+                    + " words removed). Try a larger model, or:"
+                  color: Color.accent
+                  wrapMode: Text.Wrap
+                  font.family: root.fontFamily
+                  font.pixelSize: Style.font.caption
+                }
+                Button {
+                  // Halve the chunk length that produced this transcript,
+                  // floored at 300 s; at or below the floor halving cannot
+                  // shorten anything, so the button steps aside and the
+                  // larger-model advice stands alone.
+                  readonly property int lastChunk: (root.selected && root.selected.transcript && root.selected.transcript.chunk_s) || 1800
+                  visible: lastChunk > 300
+                  text: "Re-transcribe in shorter pieces"
+                  iconText: "󰗊"
+                  fontSize: Style.font.caption; horizontalPadding: Style.spacing.sm; verticalPadding: Style.spacing.xxs
+                  foreground: Color.accent; fontFamily: root.fontFamily
+                  onClicked: root.svc.transcribe(root.selected.id, root.modelForRun,
+                    (root.svc.config && root.svc.config.language) || "en", true,
+                    Math.max(300, Math.floor(lastChunk / 2)))
+                }
               }
 
               // Transcript tools sit above the text, outside the scroll area, so

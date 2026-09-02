@@ -101,7 +101,7 @@ strip_header() { sed '1{/^<!--/d}' "$1"; }
 # ---------------------------------------------------------------- config ----
 CONFIG_DEFAULTS=$(jq -cn --arg dir "${OMARECORDER_DIR:-$HOME/Recordings}" '{
   recordingsDir: $dir, defaultSource: "mic", defaultModel: "base.en",
-  language: "en", keepAwake: true, threads: 0,
+  language: "en", keepAwake: true, threads: 0, autoTranscribe: false,
   obsidianVault: "", exportDir: "" }')   # "" = automatic (see resolve_export_target)
 
 load_config() {
@@ -123,7 +123,7 @@ _write_config() {
   [[ -f "$CONFIG_FILE" ]] && cur=$(jq -c . "$CONFIG_FILE")
   case "$key" in
     threads) j=$(jq -c --arg k "$key" --argjson v "$val" '.[$k]=$v' <<<"$cur") ;;
-    keepAwake) j=$(jq -c --arg k "$key" --argjson v "$val" '.[$k]=$v' <<<"$cur") ;;
+    keepAwake|autoTranscribe) j=$(jq -c --arg k "$key" --argjson v "$val" '.[$k]=$v' <<<"$cur") ;;
     *) j=$(jq -c --arg k "$key" --arg v "$val" '.[$k]=$v' <<<"$cur") ;;
   esac
   write_json "$CONFIG_FILE" "$j"
@@ -145,6 +145,7 @@ cmd_config() {
         defaultModel|language|exportDir) ;;
         defaultSource) [[ "$val" =~ ^(mic|system|both)$ ]] || die "defaultSource must be mic|system|both" ;;
         keepAwake) [[ "$val" =~ ^(true|false)$ ]] || die "keepAwake must be true|false" ;;
+        autoTranscribe) [[ "$val" =~ ^(true|false)$ ]] || die "autoTranscribe must be true|false" ;;
         threads) [[ "$val" =~ ^[0-9]+$ ]] || die "threads must be an integer" ;;
         *) die "unknown config key: $key" ;;
       esac
@@ -568,10 +569,34 @@ record_stop() { # [--force]
   local dur; dur=$(jq -r '.duration_s // 0' "$dir/meta.json")
   log "record stop $id duration=${dur}s"
   local ttl; ttl=$(jq -r '.title // empty' "$dir/meta.json"); ttl="${ttl:-$id}"
+  # autoTranscribe starts the transcription without a click, but only when the
+  # default model is already on disk: a settings toggle must never trigger a
+  # multi-GB download on its own. With the model missing, the clickable
+  # notification below is the fallback (its click may download; a click is
+  # consent). The auto-fire is refused harmlessly by _claim_tx if the
+  # notification is clicked too.
+  local auto=0
+  [[ $(cfg autoTranscribe) == "true" ]] && model_installed "$(cfg defaultModel)" && auto=1
   if [[ $(jq -r '.levels.clipped // false' "$dir/meta.json") == "true" ]]; then
-    notify "Recording saved · $(fmt_hms "$dur") (audio is clipping)" "$ttl: the microphone gain is too high; lower the input level before the next session. Click to transcribe anyway." -- "$SELF" transcribe "$id" --download
+    if (( auto )); then
+      notify "Recording saved · $(fmt_hms "$dur") (audio is clipping)" "$ttl: the microphone gain is too high; lower the input level before the next session. Transcribing with $(model_label "$(cfg defaultModel)") now" -- "$SELF" transcribe "$id" --download
+    else
+      notify "Recording saved · $(fmt_hms "$dur") (audio is clipping)" "$ttl: the microphone gain is too high; lower the input level before the next session. Click to transcribe anyway." -- "$SELF" transcribe "$id" --download
+    fi
+  elif (( auto )); then
+    notify "Recording saved · $(fmt_hms "$dur")" "$ttl. Transcribing with $(model_label "$(cfg defaultModel)") now" -- "$SELF" transcribe "$id" --download
   else
     notify "Recording saved · $(fmt_hms "$dur")" "$ttl. Click to transcribe with $(model_label "$(cfg defaultModel)")" -- "$SELF" transcribe "$id" --download
+  fi
+  if (( auto )); then
+    if [[ "${OMARECORDER_SYNC:-0}" == "1" ]]; then
+      "$SELF" transcribe "$id" >/dev/null 2>&1 || true
+    else
+      # setsid, not a plain call: where systemd-run is absent, run_detached
+      # falls back to running the worker inline, and that must not hold
+      # record stop (and the UI process behind it) for the whole pass.
+      setsid "$SELF" transcribe "$id" >/dev/null 2>&1 < /dev/null &
+    fi
   fi
   echo "$id ($(fmt_hms "$dur"))"
 }
@@ -1118,7 +1143,33 @@ cmd_model() {
     download)
       local name="${1:-}"; [[ -n "$name" ]] || die "usage: model download <name>"
       start_download "$name" "" ;;
-    *) die "usage: model download <name>" ;;
+    cancel)
+      local name="${1:-}"; [[ -n "$name" ]] || die "usage: model cancel <name>"
+      jq -e --arg m "$name" '.[] | select(.name==$m)' <<<"$MODEL_CATALOG" >/dev/null || die "unknown model: $name"
+      local unit="omarecorder-dl-${name//./-}" was=0
+      unit_active "$unit" && was=1
+      systemctl --user stop "$unit" 2>/dev/null || true
+      systemctl --user reset-failed "$unit" 2>/dev/null || true
+      # The killed worker can never remove its own job; take the job (and any
+      # parked chained transcription) out of the state ourselves, atomically.
+      # Partial .bin.part files stay: voxtype owns its model dir and may resume.
+      local then_json; then_json=$(with_lock _take_dl_then "$name") || then_json=""
+      bump_state
+      if (( was )) || [[ -n "$then_json" ]]; then
+        if [[ -n "$then_json" ]]; then
+          local tid d ttl=""; tid=$(jq -r '.id // empty' <<<"$then_json")
+          # The || guard sits outside the substitution: rec_dir dies (exits the
+          # subshell) on a malformed id, so an inner || true would never run.
+          d=$(rec_dir "$tid" 2>/dev/null) || d=""
+          [[ -n "$d" ]] && ttl=$(jq -r '.title // empty' "$d/meta.json" 2>/dev/null); ttl="${ttl:-$tid}"
+          notify "Download cancelled · $(model_label "$name")" "The queued transcription of $ttl was dropped"
+        else
+          notify "Download cancelled · $(model_label "$name")" "You can start it again any time"
+        fi
+        log "download cancelled $name"
+      fi
+      echo "cancelled $name" ;;
+    *) die "usage: model download <name> | model cancel <name>" ;;
   esac
 }
 
@@ -1158,6 +1209,9 @@ run_detached() {
 
 _dl_worker() {
   local name="$1" b; local f="$VOXTYPE_MODELS_DIR/ggml-$name.bin"
+  # model cancel stops the unit and owns the job removal; a TERM here is a
+  # clean exit, not a failure (mirrors _tx_worker's trap contract).
+  trap 'exit 0' TERM INT HUP
   voxtype setup --download --model "$name" --quiet --no-post-install >>"$LOG_FILE" 2>&1 &
   local child=$!
   # Progress = bytes on disk, published into the job entry every 2 s (the UI
@@ -1178,11 +1232,13 @@ _dl_worker() {
       local tid tlang tthreads tfrom tto err
       tid=$(jq -r '.id // empty' <<<"$then_json"); tlang=$(jq -r '.language // empty' <<<"$then_json"); tthreads=$(jq -r '.threads // empty' <<<"$then_json")
       tfrom=$(jq -r '.from // empty' <<<"$then_json"); tto=$(jq -r '.to // empty' <<<"$then_json")
+      local tchunk; tchunk=$(jq -r '.chunk_s // empty' <<<"$then_json")
       local -a targs=(transcribe "$tid" --model "$name")
       [[ -n "$tlang" ]] && targs+=(--language "$tlang")
       [[ -n "$tthreads" ]] && targs+=(--threads "$tthreads")
       [[ -n "$tfrom" ]] && targs+=(--from "$tfrom")
       [[ -n "$tto" ]] && targs+=(--to "$tto")
+      [[ -n "$tchunk" ]] && targs+=(--chunk-s "$tchunk")
       if err=$("$SELF" "${targs[@]}" 2>&1 >/dev/null); then
         local d ttl=""; d=$(rec_dir "$tid" 2>/dev/null) && ttl=$(jq -r '.title // empty' "$d/meta.json" 2>/dev/null); ttl="${ttl:-$tid}"
         notify "Model ready · $(model_label "$name")" "Transcribing $ttl now"; log "download chained transcribe $tid"
@@ -1212,17 +1268,19 @@ cmd_estimate() {
 
 # ----------------------------------------------------------- transcribe ----
 cmd_transcribe() {
-  local id="${1:-}"; [[ -n "$id" ]] || die "usage: transcribe <id> [--model M] [--language L] [--from s --to s]"; shift
-  local model; model=$(cfg defaultModel); local lang; lang=$(cfg language); local threads; threads=$(cfg threads); local from="" to="" dl=0
+  local id="${1:-}"; [[ -n "$id" ]] || die "usage: transcribe <id> [--model M] [--language L] [--from s --to s] [--chunk-s N]"; shift
+  local model; model=$(cfg defaultModel); local lang; lang=$(cfg language); local threads; threads=$(cfg threads); local from="" to="" dl=0 chunk_s=""
   while [[ $# -gt 0 ]]; do
     case "$1" in
       --model) model="$2"; shift 2 ;; --language) lang="$2"; shift 2 ;; --threads) threads="$2"; shift 2 ;;
-      --from) from="$2"; shift 2 ;; --to) to="$2"; shift 2 ;; --download) dl=1; shift ;; *) die "unknown option: $1" ;;
+      --from) from="$2"; shift 2 ;; --to) to="$2"; shift 2 ;; --chunk-s) chunk_s="$2"; shift 2 ;;
+      --download) dl=1; shift ;; *) die "unknown option: $1" ;;
     esac
   done
   [[ -z "$from" ]] || valid_seconds "$from" || die "--from must be a non-negative number of seconds"
   [[ -z "$to" ]] || valid_seconds "$to" || die "--to must be a non-negative number of seconds"
   [[ -z "$from" || -z "$to" ]] || awk -v a="$from" -v b="$to" 'BEGIN{exit !(b > a)}' || die "--to must be greater than --from"
+  [[ -z "$chunk_s" || "$chunk_s" =~ ^[1-9][0-9]*$ ]] || die "--chunk-s must be a positive integer of seconds"
   local dir; dir=$(require_dir "$id")
   [[ -f "$dir/audio.wav" ]] || die "no audio.wav in $dir"
   have voxtype || die "voxtype not installed"
@@ -1232,8 +1290,8 @@ cmd_transcribe() {
     if (( dl )); then
       # All the recording validations above already passed, so the intent is
       # sound; park it on the download job and let _dl_worker fire it.
-      local then_json; then_json=$(jq -cn --arg id "$id" --arg l "$lang" --arg th "$threads" --arg f "$from" --arg t "$to" \
-        '{id:$id, language:$l, threads:$th, from:$f, to:$t}')
+      local then_json; then_json=$(jq -cn --arg id "$id" --arg l "$lang" --arg th "$threads" --arg f "$from" --arg t "$to" --arg c "$chunk_s" \
+        '{id:$id, language:$l, threads:$th, from:$f, to:$t, chunk_s:$c}')
       start_download "$model" "$then_json"
       log "transcribe $id deferred until $model finishes downloading"
       echo "will transcribe $id when $model is ready"
@@ -1245,7 +1303,11 @@ cmd_transcribe() {
   with_lock _claim_tx "$id" --arg id "$id" --arg m "$model" --arg u "$unit" --argjson t "$(now_epoch)" \
     '.jobs += [{type:"transcribe", id:$id, model:$m, unit:$u, started_at:$t}]' \
     || die "transcription already running for $id"
-  log "transcribe $id model=$model lang=$lang range=${from:-0}-${to:-end}"
+  log "transcribe $id model=$model lang=$lang range=${from:-0}-${to:-end}${chunk_s:+ chunk_s=$chunk_s}"
+  # A per-run chunk override rides the env var run_detached already forwards;
+  # the direct CHUNK_S assignment covers the inline (OMARECORDER_SYNC=1) path,
+  # where the global was evaluated at script load.
+  if [[ -n "$chunk_s" ]]; then export OMARECORDER_CHUNK_S="$chunk_s"; CHUNK_S="$chunk_s"; fi
   if ! run_detached "$unit" "OmaRecorder transcribe $id" "$SELF" _tx-worker "$id" "$model" "$lang" "$threads" "$from" "$to"; then
     state_set --arg id "$id" '.jobs |= map(select(.id != $id))'
     die "could not start transcription job"
@@ -1352,8 +1414,8 @@ _tx_worker() {
     if (( i < n )); then   # publish what we have so far; the Library shows it growing
       publish_transcript "$dir" "$acc" "$model" "$lang" "$from" "$to" "$n" true
       tidy_transcript "$dir"
-      update_meta "$dir" '.transcript = ((.transcript // {}) + {model:$m, language:$l, created:$c, partial:true, chunks:$N, chunks_done:$i})' \
-        --arg m "$model" --arg l "$lang" --arg c "$(now_iso)" --argjson N "$n" --argjson i "$i"
+      update_meta "$dir" '.transcript = ((.transcript // {}) + {model:$m, language:$l, created:$c, partial:true, chunks:$N, chunks_done:$i, chunk_s:$k})' \
+        --arg m "$model" --arg l "$lang" --arg c "$(now_iso)" --argjson N "$n" --argjson i "$i" --argjson k "$CHUNK_S"
     fi
   done
   rm -f "$dir"/audio.tx.* "$ctxt"
@@ -1377,8 +1439,8 @@ _tx_worker() {
   rm -f "$acc"
   learn_rtf "$model" "$done_audio" "$elapsed"
   local rtf; rtf=$(jq -n --argjson d "$done_audio" --argjson e "$elapsed" '(($d / $e) * 100 | round) / 100')
-  update_meta "$dir" '.transcript = {model:$m, language:$l, created:$c, elapsed_s:$e, rtf:$r, chunks:$N, chunks_done:$N, partial:false}' \
-    --arg m "$model" --arg l "$lang" --arg c "$(now_iso)" --argjson e "$elapsed" --argjson r "$rtf" --argjson N "$n"
+  update_meta "$dir" '.transcript = {model:$m, language:$l, created:$c, elapsed_s:$e, rtf:$r, chunks:$N, chunks_done:$N, partial:false, chunk_s:$k}' \
+    --arg m "$model" --arg l "$lang" --arg c "$(now_iso)" --argjson e "$elapsed" --argjson r "$rtf" --argjson N "$n" --argjson k "$CHUNK_S"
   # After the final meta write: update_meta above replaces .transcript whole, and
   # tidy merges its stats into it, so tidy must come last.
   tidy_transcript "$dir"
@@ -1520,9 +1582,9 @@ omarecorder $VERSION: record, keep, transcribe locally (voxtype)
   tidy <id>                                              rebuild transcript.tidy.md (paragraphs, loops removed)
   export <id> [--vault P | --dir P] [--no-open] [--raw]           transcript → Obsidian note (frontmatter + text)
   vaults [--json]                                        Obsidian vaults on this machine (* = open)
-  transcribe <id> [--model M] [--language L] [--from s --to s] [--download]
+  transcribe <id> [--model M] [--language L] [--from s --to s] [--chunk-s N] [--download]
   cancel <id> | estimate <id> --model M
-  models [--json] | model download <name>
+  models [--json] | model download <name> | model cancel <name>
   play <id> [--from s] | stop-play | open <id> | folder <id>
   config get [key|--json] | config set <key> <value>
   setup check [--json] | library | status [--json] | version
