@@ -136,6 +136,7 @@ QtObject {
   }
   function cancel(id) { run(["cancel", id]) }
   function rename(id, title) { run(["rename", id, title]) }
+  function setNote(id, text) { run(["note", id, text]) }
   function remove(id) { run(["delete", id, "--yes"]) }
   function download(model) { run(["model", "download", model]) }
   function importFile(path) { run(["import", path], function(code) { if (code === 0) root.refreshList() }) }

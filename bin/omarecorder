@@ -331,6 +331,9 @@ require_idle() {
 sanitize_title() { # strip slashes/control chars, collapse spaces, ≤80 chars
   local t="$1"; t="${t//\//-}"; t=$(printf '%s' "$t" | tr '\000-\037' ' ' | sed -E 's/[[:space:]]+/ /g; s/^ //; s/ $//'); printf '%s' "${t:0:80}"
 }
+sanitize_note() { # control chars/newlines to spaces, collapse runs, ≤500 chars; slashes kept (a note is never a filename)
+  local t="$1"; t=$(printf '%s' "$t" | tr '\000-\037' ' ' | sed -E 's/[[:space:]]+/ /g; s/^ //; s/ $//'); printf '%s' "${t:0:500}"
+}
 
 read_meta() { jq -c . "$1/meta.json"; }
 # write_initial_meta <dir> <id> <title> <source> <created>: the meta.json every recording starts with
@@ -800,6 +803,17 @@ cmd_rename() {
   if [[ "$new" != "$dir" ]]; then mv "$dir" "$new"; fi
   update_meta "$new" '.title = $t' --arg t "$title"
   bump_state; log "rename $id -> '$title'"; echo "$new"
+}
+
+cmd_note() {
+  local id="${1:-}" text="${2:-}"; [[ -n "$id" ]] || die "usage: note <id> <text>"
+  local dir; dir=$(require_dir "$id")
+  # update_meta is an unlocked read-modify-write and the transcribe worker rewrites
+  # meta.json per chunk, so a concurrent note write would be a lost-update race.
+  require_idle "$id"
+  text=$(sanitize_note "$text")
+  update_meta "$dir" '.notes = $n' --arg n "$text"
+  bump_state; log "note $id (${#text} chars)"; echo "$id"
 }
 
 cmd_delete() {
@@ -1392,6 +1406,7 @@ omarecorder $VERSION: record, keep, transcribe locally (voxtype)
   import <file> [--move] [--title T]                     bring an existing audio file in
   list [--json] | show <id> [--json] | analyze <id>      browse / measure levels
   rename <id> <title> | delete <id> [--yes] [--permanent] manage (delete → trash)
+  note <id> <text>                                       set a note on a recording (empty text clears it)
   trim <id> --from s --to s [--replace] | trim <id> --restore  cut the audio (first original kept as audio.orig.wav)
   copy <id> [--raw] [--print]                            transcript text to the clipboard
   tidy <id>                                              rebuild transcript.tidy.md (paragraphs, loops removed)
@@ -1422,6 +1437,7 @@ main() {
     analyze) cmd_analyze "$@" ;;
     trim) cmd_trim "$@" ;;
     rename) cmd_rename "$@" ;;
+    note) cmd_note "$@" ;;
     delete) cmd_delete "$@" ;;
     copy) cmd_copy "$@" ;;
     tidy) cmd_tidy "$@" ;;

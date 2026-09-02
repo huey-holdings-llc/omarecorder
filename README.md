@@ -305,6 +305,7 @@ omarecorder record stop | toggle | status [--json]                 control / ins
 omarecorder import <file> [--move] [--title T]                     bring an existing audio file in
 omarecorder list [--json] | show <id> [--json] | analyze <id>      browse / measure levels
 omarecorder rename <id> <title> | delete <id> [--yes] [--permanent] manage (delete moves to the trash)
+omarecorder note <id> <text>                                       set a note on a recording (empty text clears it)
 omarecorder trim <id> --from s --to s [--replace] | trim <id> --restore  cut the audio (first original kept)
 omarecorder copy <id> [--raw] [--print]                            transcript text to the clipboard
 omarecorder tidy <id>                                              rebuild transcript.tidy.md (paragraphs, loops removed)
