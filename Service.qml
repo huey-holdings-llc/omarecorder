@@ -135,7 +135,11 @@ QtObject {
     run(args)
   }
   function cancel(id) { run(["cancel", id]) }
-  function rename(id, title) { run(["rename", id, title]) }
+  // A meta edit only bumps the state version; while an unrelated job runs the
+  // signature is unchanged and applyState skips the list refresh, so the UI
+  // would show the old value until the job ends. Refresh on success instead.
+  function rename(id, title) { run(["rename", id, title], function(code) { if (code === 0) root.refreshList() }) }
+  function setNote(id, text) { run(["note", id, text], function(code) { if (code === 0) root.refreshList() }) }
   function remove(id) { run(["delete", id, "--yes"]) }
   function download(model) { run(["model", "download", model]) }
   function importFile(path) { run(["import", path], function(code) { if (code === 0) root.refreshList() }) }

@@ -286,7 +286,7 @@ Item {
         Keys.onPressed: function(event) {
           if (root.deleteConfirmOpen) { if (deleteConfirm.handleKey(event)) event.accepted = true; return }
           if (root.trimConfirmOpen) { if (trimConfirm.handleKey(event)) event.accepted = true; return }
-          if (titleField.activeFocus) return
+          if (titleField.activeFocus || noteField.activeFocus) return
           if (event.key === Qt.Key_Escape) { if (root.trimMode) { root.trimMode = false; root.previewing = false } else if (root.filterText) root.setFilter(""); else root.close(); event.accepted = true }
           else if (Util.editsFilter(event, root.filterText)) { root.setFilter(Util.editedFilter(event, root.filterText)); event.accepted = true }
           else if (event.key === Qt.Key_Up) { root.select(-1); event.accepted = true }
@@ -461,6 +461,7 @@ Item {
 
               TextField {
                 id: titleField
+                enabled: !root.selectedJob   // rename is refused mid-transcribe, same as notes
                 width: parent.width
                 text: root.selected ? (root.selected.title || "") : ""
                 placeholderText: root.selected && root.svc ? root.svc.displayTitle(root.selected) : ""
@@ -501,6 +502,22 @@ Item {
                 wrapMode: Text.Wrap
                 maximumLineCount: 2
                 elide: Text.ElideRight
+              }
+
+              TextField {
+                id: noteField
+                visible: !root.selectedLive
+                // The CLI refuses meta writes while this recording transcribes
+                // (lost-update guard), so don't offer an edit that cannot save.
+                enabled: !root.selectedJob
+                width: parent.width
+                text: root.selected ? (root.selected.notes || "") : ""
+                placeholderText: "Add a note"
+                foreground: root.dim
+                font.family: root.fontFamily
+                font.pixelSize: Style.font.caption
+                onAccepted: { if (root.svc && root.selected && text !== (root.selected.notes || "")) root.svc.setNote(root.selected.id, text); keyCatcher.forceActiveFocus() }
+                Keys.onEscapePressed: { text = root.selected ? (root.selected.notes || "") : ""; keyCatcher.forceActiveFocus() }
               }
 
               LevelMeter {
