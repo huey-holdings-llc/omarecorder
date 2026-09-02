@@ -5,6 +5,13 @@ All notable changes to this project are documented here. Format follows
 
 ## [Unreleased]
 
+### Fixed
+- Library playback no longer stops when the recording list refreshes in the
+  background (a transcription or download finishing, a rename). The selection
+  handler now compares recording ids instead of row object identity, so only
+  genuinely moving to a different recording resets playback and view state.
+  (#30)
+
 ### Removed
 - `AGENTS.md` is no longer tracked in git. The marketplace review flagged it:
   a plugin install is a plain git clone, so a tracked agent-instruction file

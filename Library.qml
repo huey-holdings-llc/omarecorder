@@ -172,7 +172,15 @@ Item {
   function stripHeader(t) { return String(t || "").replace(/^<!--[^\n]*-->\n?/, "").trim() }
 
   onRowsChanged: ensureSelection()
+  // Every list refresh rebuilds the row objects, so `selected` changes
+  // identity even when the selection stayed on the same recording; a
+  // transcription or download finishing mid-playback must not stop the sound.
+  // Only a genuine move to a different id resets playback and view state.
+  property string lastSelectedId: ""
   onSelectedChanged: {
+    var newId = selected ? selected.id : ""
+    if (newId === lastSelectedId) return
+    lastSelectedId = newId
     stopPlayback()
     trimMode = false; previewing = false; showRaw = false; showPrev = false
     // Re-transcribe defaults to the model that produced the visible transcript.
