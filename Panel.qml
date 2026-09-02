@@ -29,7 +29,7 @@ Panel {
 
   // Idle shows a microphone (what the button does), recording the red record
   // glyph plus the timer, transcribing an hourglass.
-  readonly property string barGlyph: recording ? "󰑊" : (transcribing ? "󰔟" : "󰍬")
+  readonly property string barGlyph: recording ? "󰑊" : (transcribing ? "󰔟" : "󰕽")
   // While the input clips the bar says so instead of the timer (the glyph is already urgent-coloured).
   readonly property string barLabel: recording && !vertical ? "  " + (svc.clipping ? "CLIP" : svc.elapsedText) : ""
   readonly property string stateText: !ready ? "Service unavailable"
@@ -172,7 +172,7 @@ Panel {
             fontFamily: root.fontFamily
             iconComponent: Component {
               Text {
-                text: hero.rec ? "󰑊" : (hero.busy ? "󰔟" : "󰍬")
+                text: hero.rec ? "󰑊" : (hero.busy ? "󰔟" : "󰕽")
                 color: hero.rec ? hero.recColor : (hero.busy ? Color.accent : hero.foreground)
                 font.family: hero.fontFamily
                 font.pixelSize: Style.font.display

@@ -3,6 +3,15 @@
 All notable changes to this project are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow SemVer.
 
+## [Unreleased]
+
+### Changed
+- The idle bar icon is now a pair of tape reels instead of a microphone, so it
+  no longer looks like a mic on/off toggle. Suggested by a Reddit reader who
+  had already swapped theirs for a record dot. The panel hero and the Library
+  header use the same reels; recording keeps the red dot and timer, and
+  transcribing keeps the hourglass.
+
 ## [1.1.1] - 2026-08-30
 
 ### Fixed

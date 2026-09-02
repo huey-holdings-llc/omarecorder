@@ -360,7 +360,7 @@ Item {
             spacing: Style.spacing.lg
             Text {
               anchors.verticalCenter: parent.verticalCenter
-              text: "󰍬  OmaRecorder"   // mic, not the red record dot: this header is visible while idle
+              text: "󰕽  OmaRecorder"   // tape reels, not the red record dot: this header is visible while idle
               color: root.foreground
               font.family: root.fontFamily
               font.pixelSize: Style.font.title
