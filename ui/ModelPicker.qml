@@ -2,8 +2,10 @@ import QtQuick
 import qs.Commons
 import qs.Ui
 
-// Accuracy-vs-speed chooser: Fast / Balanced / Accurate, each with its
-// size (when not downloaded) or the time estimate for the selected take.
+// Accuracy-vs-speed chooser: Fast / Balanced / Accurate as a row of chips,
+// each showing the time estimate for the selected take (or the download size
+// when the model is not installed), so the trade-off is visible at a glance.
+// The engine model name lives in the chip tooltip.
 Item {
   id: root
   property var svc: null
@@ -19,49 +21,42 @@ Item {
   readonly property bool currentInstalled: !!(current && current.installed)
   readonly property var download: svc && current ? svc.downloadFor(current.name) : null
 
-  // Wide enough for the longest option, no wider.
-  implicitWidth: Math.ceil(metrics.width) + Style.space(52)
-  implicitHeight: dropdown.implicitHeight
-
-  TextMetrics {
-    id: metrics
-    font.family: root.fontFamily
-    font.pixelSize: Style.font.body
-    text: {
-      var longest = ""
-      var opts = root.buildOptions()
-      for (var i = 0; i < opts.length; i++) if (opts[i].label.length > longest.length) longest = opts[i].label
-      return longest
-    }
-  }
+  implicitWidth: group.implicitWidth
+  implicitHeight: group.implicitHeight
+  clip: true
 
   function findModel(name) { for (var i = 0; i < models.length; i++) if (models[i].name === name) return models[i]; return null }
   function estimateText(m) {
     if (!m || !durationS || !svc) return ""
-    return "≈ " + svc.fmtDuration(svc.estimateSeconds(durationS, m.name))
+    return "~" + svc.fmtDuration(svc.estimateSeconds(durationS, m.name))
   }
-  // "Accurate · large-v3-turbo · ≈ 52m"  /  "Balanced · small.en · 466 MB download"
-  function optionLabel(m) {
-    var parts = [m.label || m.name]
-    if (m.label) parts.push(m.name)
-    parts.push(m.installed ? estimateText(m) : m.size_mb + " MB download")
-    return parts.filter(function(x) { return x }).join(" · ")
+  function sizeText(m) {
+    if (m.size_mb >= 1000) return (Math.round(m.size_mb / 100) / 10) + " GB ↓"
+    return m.size_mb + " MB ↓"
   }
+  // "Fast ~4m"  /  "Accurate 1.6 GB ↓" (not downloaded yet)
+  function chipLabel(m) {
+    var extra = m.installed ? estimateText(m) : sizeText(m)
+    return extra ? (m.label + " " + extra) : m.label
+  }
+  // Chips carry the three presets; voxtype can hold more models, but the
+  // catalog the picker offers is exactly the labelled ones.
   function buildOptions() {
-    var presets = [], more = []
+    var opts = []
     for (var i = 0; i < models.length; i++) {
       var m = models[i]
-      var o = { value: m.name, label: optionLabel(m) }
-      if (m.label) presets.push(o); else more.push(o)
+      if (m.label) opts.push({ value: m.name, label: chipLabel(m), tooltip: m.name })
     }
-    return presets.concat(more)
+    return opts
   }
 
-  Dropdown {
-    id: dropdown
-    width: parent.width
-    value: root.value
+  ButtonGroup {
+    id: group
     options: root.buildOptions()
+    value: root.value
+    // The Library keyCatcher owns every key (Ctrl+M cycles the chips); the
+    // group must never take Tab focus away from it.
+    focusable: false
     foreground: root.foreground
     fontFamily: root.fontFamily
     onChanged: function(v) { root.value = v; root.changed(v) }

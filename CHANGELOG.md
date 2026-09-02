@@ -19,6 +19,12 @@ All notable changes to this project are documented here. Format follows
   letters keep feeding the search filter as before. (#16)
 
 ### Changed
+- The model picker in the Library is now three chips instead of a dropdown:
+  Fast, Balanced and Accurate sit side by side, each showing its time
+  estimate for the selected take (~4m) or its download size when the model
+  is not installed, so the trade-off is visible before committing to a long
+  transcription. One click (or Ctrl+M) switches; the engine model name moved
+  into the chip tooltip. The settings section keeps its dropdown. (#26)
 - The Recent list folds away while the popup settings are open, so on smaller
   displays the settings are in reach without scrolling past it. The section
   header stays put and says where the list went. (#15)
