@@ -461,6 +461,7 @@ Item {
 
               TextField {
                 id: titleField
+                enabled: !root.selectedJob   // rename is refused mid-transcribe, same as notes
                 width: parent.width
                 text: root.selected ? (root.selected.title || "") : ""
                 placeholderText: root.selected && root.svc ? root.svc.displayTitle(root.selected) : ""
@@ -506,6 +507,9 @@ Item {
               TextField {
                 id: noteField
                 visible: !root.selectedLive
+                // The CLI refuses meta writes while this recording transcribes
+                // (lost-update guard), so don't offer an edit that cannot save.
+                enabled: !root.selectedJob
                 width: parent.width
                 text: root.selected ? (root.selected.notes || "") : ""
                 placeholderText: "Add a note"

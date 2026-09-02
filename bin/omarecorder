@@ -343,11 +343,15 @@ write_initial_meta() {
 }
 # update_meta <dir> <filter> [jq args...]: values go in through --arg/--argjson,
 # never interpolated into the program; a failing filter leaves meta.json as is.
-update_meta() {
+# It is a read-modify-write like state.json, so it runs under the same lock:
+# two commands touching one recording's meta (a note during an export, say)
+# serialize instead of the later reader erasing the earlier write's fields.
+_update_meta() {
   local dir="$1" filter="$2"; shift 2
   local j; j=$(jq -c "$@" "$filter" "$dir/meta.json") || { log "update_meta failed in $dir: $filter"; return 1; }
   write_json "$dir/meta.json" "$j"
 }
+update_meta() { with_lock _update_meta "$@"; }
 
 # Whole seconds, or nothing when ffprobe cannot tell (truncated file → "N/A").
 audio_duration() { local d; d=$(ffprobe -v error -show_entries format=duration -of csv=p=0 "$1" 2>/dev/null | cut -d. -f1); [[ "$d" =~ ^[0-9]+$ ]] && echo "$d"; return 0; }
