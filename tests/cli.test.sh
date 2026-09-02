@@ -599,6 +599,10 @@ check "the header line is not searched" bash -c "[ \"\$(\"$CLI\" search omarecor
 printf '<!-- 1 paragraphs, 0 repeats, 0 loops, -->\na walrus instead\n' > "$SAD/transcript.tidy.md"
 eq "tidy text wins once present" "$("$CLI" search walrus)" "[\"$SA\"]"
 eq "raw-only text no longer matches" "$("$CLI" search heron)" "[]"
+# An early match in a transcript larger than the pipe buffer must not be lost
+# to pipefail when grep short-circuits (the SIGPIPE-vs-pipefail trap).
+{ printf '<!-- 1 paragraphs, 0 repeats, 0 loops, -->\nneedle early\n'; yes 'filler words to inflate the file' | head -20000; } > "$SAD/transcript.tidy.md"
+eq "early match in a large transcript still found" "$("$CLI" search needle)" "[\"$SA\"]"
 "$CLI" delete "$SA" --yes >/dev/null; "$CLI" delete "$SB" --yes >/dev/null
 
 echo "== transcribe"

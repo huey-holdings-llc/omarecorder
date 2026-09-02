@@ -779,7 +779,10 @@ cmd_search() {
     [[ -f "$d/meta.json" ]] || continue
     f=$(transcript_file "$d")
     [[ -s "$f" ]] || continue
-    if strip_header "$f" | grep -iqF -- "$q"; then b="${d##*/}"; ids+=("${b%% *}"); fi
+    # No -q: it would exit at the first match, hand sed a SIGPIPE on any
+    # transcript larger than the pipe buffer, and pipefail would turn the
+    # found match into a non-match (141). Reading to the end is cheap here.
+    if strip_header "$f" | grep -iF -- "$q" >/dev/null; then b="${d##*/}"; ids+=("${b%% *}"); fi
   done < <(find "$ROOT" -mindepth 1 -maxdepth 1 -type d -name '????-??-??_??????*' | sort -r)
   jq -cn '$ARGS.positional' --args -- ${ids[@]+"${ids[@]}"}
 }
