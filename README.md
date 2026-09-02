@@ -178,7 +178,8 @@ are left untouched.
 * **Library keys**: type to search. `Up`/`Down`, `PgUp`/`PgDn`, `Home`/`End`
   select. `Enter` opens the transcript, or transcribes if there is none
   (`Shift+Enter` transcribes again). `Space` plays or pauses. `Left`/`Right`
-  seek 5 seconds when the search box is empty. `F2` renames, `F3` trims (then
+  seek 5 seconds when the search box is empty. `Ctrl+M` cycles the model
+  preset (`Ctrl+Shift+M` backwards). `F2` renames, `F3` trims (then
   `[` and `]` mark start and end at the playhead), `Del` moves to the trash
   (confirmed, defaults to Cancel). `Esc` leaves trim mode, then clears the
   search, then closes.

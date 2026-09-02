@@ -5,6 +5,11 @@ All notable changes to this project are documented here. Format follows
 
 ## [Unreleased]
 
+### Added
+- `Ctrl+M` in the Library cycles the model preset (Fast, Balanced, Accurate)
+  without a mouse trip to the dropdown; `Ctrl+Shift+M` cycles backwards. Plain
+  letters keep feeding the search filter as before. (#16)
+
 ### Changed
 - The Recent list folds away while the popup settings are open, so on smaller
   displays the settings are in reach without scrolling past it. The section
