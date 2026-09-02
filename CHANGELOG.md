@@ -3,6 +3,20 @@
 All notable changes to this project are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow SemVer.
 
+## [Unreleased]
+
+### Added
+- Tidy now marks every spot where it collapsed a back-to-back repeated phrase
+  with "(repeated Nx)" on the last kept word, so the reader knows the raw text
+  holds more there. The markers flow into `copy` and `export` output like the
+  rest of the tidy text; the `--raw` variants avoid them. (#14)
+- Transcripts that contained a long repetition loop are flagged: when one
+  collapse removed at least 40 words (tunable via `OMARECORDER_LOOP_WARN_WORDS`),
+  `tidy` records `loop_warning` in the metadata and the Library shows a banner
+  suggesting a re-transcribe with a larger model or a shorter chunk length.
+  Tidy also records the number of collapse points and the longest run of
+  removed words. (#20)
+
 ## [1.1.2] - 2026-09-02
 
 ### Fixed
