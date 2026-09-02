@@ -154,6 +154,7 @@ QtObject {
   function setNote(id, text) { run(["note", id, text], function(code) { if (code === 0) root.refreshList() }) }
   function remove(id) { run(["delete", id, "--yes"]) }
   function download(model) { run(["model", "download", model]) }
+  function cancelDownload(model) { run(["model", "cancel", model]) }
   function importFile(path) { run(["import", path], function(code) { if (code === 0) root.refreshList() }) }
   function play(id) { run(["play", id]) }
   function playFrom(id, seconds) { run(["play", id, "--from", String(seconds)]) }

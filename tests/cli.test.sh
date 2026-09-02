@@ -535,6 +535,18 @@ mkdir -p "$TMP/dlm4"; jq -cn '{recording:null,jobs:[],version:1}' > "$RUN/state.
 ( PATH="$STUB:$PATH" VOXTYPE_MODELS_DIR="$TMP/dlm4" "$CLI" transcribe "$IDD" --model small.en --chunk-s 1 --download >/dev/null 2>&1 )
 check "replayed chunk override splits in three" bash -c "head -1 \"$DD/transcript.md\" | grep -q 'chunks=3'"
 
+# model cancel (#39): validated, idempotent, atomic job + chain removal.
+fails "cancel unknown model" "$CLI" model cancel bogus
+jq -cn '{recording:null,jobs:[],version:1}' > "$RUN/state.json"
+check "cancel with nothing running exits 0" "$CLI" model cancel small.en
+jq -cn --argjson t "$(date +%s)" \
+  '{recording:null,jobs:[{type:"download",model:"small.en",unit:"omarecorder-dl-small-en",started_at:$t,expected_bytes:1,"then":{id:"x",language:"en",threads:""}}],version:1}' > "$RUN/state.json"
+touch "$DLM/ggml-small.en.bin.part"
+check "cancel a chained download exits 0" bash -c "VOXTYPE_MODELS_DIR=\"$DLM\" \"$CLI\" model cancel small.en"
+eq "cancelled download job removed" "$(jq -r '.jobs|length' "$RUN/state.json")" "0"
+check "partial file left for voxtype to resume" test -f "$DLM/ggml-small.en.bin.part"
+check "cancel is logged" bash -c "grep -q 'download cancelled small.en' \"$XDG_STATE_HOME/omarecorder/omarecorder.log\""
+
 # Guard rails unchanged.
 ( PATH="$STUB:$PATH" VOXTYPE_MODELS_DIR="$TMP/nomodels" "$CLI" transcribe "$IDD" --model small.en >/dev/null 2>&1; echo $? > "$TMP/rc" )
 eq "without --download still exit 3" "$(cat "$TMP/rc")" "3"

@@ -617,6 +617,19 @@ Item {
                 }
                 AccessibleActionButton {
                   anchors.verticalCenter: parent.verticalCenter
+                  // Reserved-slot pattern too; appears only while the picked
+                  // model is downloading. The main button cannot host this:
+                  // its press during a download re-aims the chain by design.
+                  enabled: !!picker.download
+                  opacity: enabled ? 1 : 0
+                  iconText: "󰜺"
+                  tooltipText: "Cancel this model download"
+                  hoverColor: root.urgent
+                  foreground: root.foreground; fontFamily: root.fontFamily
+                  onClicked: if (root.svc) root.svc.cancelDownload(picker.value)
+                }
+                AccessibleActionButton {
+                  anchors.verticalCenter: parent.verticalCenter
                   iconText: "󰉋"
                   tooltipText: "Open folder"
                   foreground: root.foreground; fontFamily: root.fontFamily

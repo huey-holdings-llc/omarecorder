@@ -1118,7 +1118,33 @@ cmd_model() {
     download)
       local name="${1:-}"; [[ -n "$name" ]] || die "usage: model download <name>"
       start_download "$name" "" ;;
-    *) die "usage: model download <name>" ;;
+    cancel)
+      local name="${1:-}"; [[ -n "$name" ]] || die "usage: model cancel <name>"
+      jq -e --arg m "$name" '.[] | select(.name==$m)' <<<"$MODEL_CATALOG" >/dev/null || die "unknown model: $name"
+      local unit="omarecorder-dl-${name//./-}" was=0
+      unit_active "$unit" && was=1
+      systemctl --user stop "$unit" 2>/dev/null || true
+      systemctl --user reset-failed "$unit" 2>/dev/null || true
+      # The killed worker can never remove its own job; take the job (and any
+      # parked chained transcription) out of the state ourselves, atomically.
+      # Partial .bin.part files stay: voxtype owns its model dir and may resume.
+      local then_json; then_json=$(with_lock _take_dl_then "$name") || then_json=""
+      bump_state
+      if (( was )) || [[ -n "$then_json" ]]; then
+        if [[ -n "$then_json" ]]; then
+          local tid d ttl=""; tid=$(jq -r '.id // empty' <<<"$then_json")
+          # The || guard sits outside the substitution: rec_dir dies (exits the
+          # subshell) on a malformed id, so an inner || true would never run.
+          d=$(rec_dir "$tid" 2>/dev/null) || d=""
+          [[ -n "$d" ]] && ttl=$(jq -r '.title // empty' "$d/meta.json" 2>/dev/null); ttl="${ttl:-$tid}"
+          notify "Download cancelled · $(model_label "$name")" "The queued transcription of $ttl was dropped"
+        else
+          notify "Download cancelled · $(model_label "$name")" "You can start it again any time"
+        fi
+        log "download cancelled $name"
+      fi
+      echo "cancelled $name" ;;
+    *) die "usage: model download <name> | model cancel <name>" ;;
   esac
 }
 
@@ -1158,6 +1184,9 @@ run_detached() {
 
 _dl_worker() {
   local name="$1" b; local f="$VOXTYPE_MODELS_DIR/ggml-$name.bin"
+  # model cancel stops the unit and owns the job removal; a TERM here is a
+  # clean exit, not a failure (mirrors _tx_worker's trap contract).
+  trap 'exit 0' TERM INT HUP
   voxtype setup --download --model "$name" --quiet --no-post-install >>"$LOG_FILE" 2>&1 &
   local child=$!
   # Progress = bytes on disk, published into the job entry every 2 s (the UI
@@ -1530,7 +1559,7 @@ omarecorder $VERSION: record, keep, transcribe locally (voxtype)
   vaults [--json]                                        Obsidian vaults on this machine (* = open)
   transcribe <id> [--model M] [--language L] [--from s --to s] [--chunk-s N] [--download]
   cancel <id> | estimate <id> --model M
-  models [--json] | model download <name>
+  models [--json] | model download <name> | model cancel <name>
   play <id> [--from s] | stop-play | open <id> | folder <id>
   config get [key|--json] | config set <key> <value>
   setup check [--json] | library | status [--json] | version
