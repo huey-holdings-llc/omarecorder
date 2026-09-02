@@ -313,7 +313,7 @@ omarecorder copy <id> [--raw] [--print]                            transcript te
 omarecorder tidy <id>                                              rebuild transcript.tidy.md (paragraphs, loops removed)
 omarecorder export <id> [--vault P | --dir P] [--no-open] [--raw]   transcript to an Obsidian note
 omarecorder vaults [--json]                                        Obsidian vaults on this machine (* = open)
-omarecorder transcribe <id> [--model M] [--language L] [--from s --to s]
+omarecorder transcribe <id> [--model M] [--language L] [--from s --to s] [--download]
 omarecorder cancel <id> | estimate <id> --model M
 omarecorder models [--json] | model download <name>
 omarecorder play <id> [--from s] | stop-play | open <id> | folder <id>
