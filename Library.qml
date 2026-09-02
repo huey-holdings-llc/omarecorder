@@ -84,15 +84,21 @@ Item {
   function close() { root.deleteConfirmOpen = false; root.trimConfirmOpen = false; root.trimMode = false; root.opened = false; stopPlayback() }
   function toggle() { root.opened ? root.close() : root.open("{}") }
 
+  // Transcript matches arrive ~300 ms behind the keystrokes (the CLI greps
+  // the files); title/id/date matching stays instant. The query tag guards
+  // against a stale answer landing after further typing.
+  property var transcriptMatchIds: []
+  property string transcriptMatchQuery: ""
   function filteredRows() {
     var all = svc ? svc.recordings : []
     var q = filterText.trim().toLowerCase()
     if (!q) return all
+    var inText = (transcriptMatchQuery === filterText.trim()) ? transcriptMatchIds : []
     var out = []
     for (var i = 0; i < all.length; i++) {
       var r = all[i]
       var hay = ((r.title || "") + " " + (r.id || "") + " " + (r.created || "")).toLowerCase()
-      if (hay.indexOf(q) !== -1) out.push(r)
+      if (hay.indexOf(q) !== -1 || inText.indexOf(r.id) !== -1) out.push(r)
     }
     return out
   }
@@ -108,7 +114,28 @@ Item {
     list.positionViewAtIndex(i, ListView.Contain)
   }
   function selectAbsolute(i) { if (rows.length === 0) return; i = Math.max(0, Math.min(i, rows.length - 1)); selectedId = rows[i].id; list.positionViewAtIndex(i, ListView.Contain) }
-  function setFilter(t) { filterText = t; Qt.callLater(ensureSelection) }
+  function setFilter(t) { filterText = t; searchDebounce.restart(); Qt.callLater(ensureSelection) }
+  // Transcripts change under a live query (a re-transcription finishing, a
+  // trim): re-ask when the list refreshes so the match set cannot go stale.
+  Connections {
+    target: root.svc
+    function onRecordingsChanged() { if (root.filterText.trim()) searchDebounce.restart() }
+  }
+  Timer {
+    id: searchDebounce
+    interval: 300
+    onTriggered: {
+      var q = root.filterText.trim()
+      if (!q) { root.transcriptMatchIds = []; root.transcriptMatchQuery = ""; return }
+      if (!root.svc) return
+      root.svc.searchTranscripts(q, function(code, out) {
+        if (code !== 0 || q !== root.filterText.trim()) return
+        try { root.transcriptMatchIds = JSON.parse(out) } catch (e) { return }
+        root.transcriptMatchQuery = q
+        Qt.callLater(root.ensureSelection)
+      })
+    }
+  }
 
   // Enter / the main button start a transcription. Cancelling a running job is
   // only reachable through the explicit Cancel button (cancelSelected) — a
@@ -405,7 +432,7 @@ Item {
                 Text { anchors.verticalCenter: parent.verticalCenter; text: "󰍉"; color: root.dim; font.family: root.fontFamily; font.pixelSize: Style.font.icon }
                 Text {
                   anchors.verticalCenter: parent.verticalCenter
-                  text: root.filterText ? root.filterText : "Type to search"
+                  text: root.filterText ? root.filterText : "Type to search titles and transcripts"
                   color: root.filterText ? root.foreground : root.dim
                   font.family: root.fontFamily
                   font.pixelSize: Style.font.body

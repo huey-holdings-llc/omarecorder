@@ -583,6 +583,28 @@ eq "without --download still exit 3" "$(cat "$TMP/rc")" "3"
 fails "unknown model refused even with --download" bash -c "PATH=\"$STUB:\$PATH\" VOXTYPE_MODELS_DIR=\"$TMP/nomodels\" \"$CLI\" transcribe \"$IDD\" --model bogus --download"
 "$CLI" delete "$IDD" --yes >/dev/null
 
+echo "== search"
+SA=$("$CLI" import "$TMP/quiet.wav" --title "Search A")
+SB=$("$CLI" import "$TMP/quiet.wav" --title "Search B")
+SAD="$OMARECORDER_DIR/$SA Search A"
+printf '<!-- omarecorder model=base.en -->\nthe blue heron landed\n' > "$SAD/transcript.md"
+fails "search requires a query" "$CLI" search
+eq "search finds the transcript word" "$("$CLI" search heron)" "[\"$SA\"]"
+eq "search is case-insensitive" "$("$CLI" search HERON)" "[\"$SA\"]"
+eq "no match returns an empty array" "$("$CLI" search walrus)" "[]"
+eq "regex text is inert (fixed strings)" "$("$CLI" search '.*')" "[]"
+eq "a leading dash is a query, not an option" "$("$CLI" search '-heron')" "[]"
+check "the header line is not searched" bash -c "[ \"\$(\"$CLI\" search omarecorder)\" = '[]' ]"
+# Tidy is preferred once it exists: search follows what the user reads.
+printf '<!-- 1 paragraphs, 0 repeats, 0 loops, -->\na walrus instead\n' > "$SAD/transcript.tidy.md"
+eq "tidy text wins once present" "$("$CLI" search walrus)" "[\"$SA\"]"
+eq "raw-only text no longer matches" "$("$CLI" search heron)" "[]"
+# An early match in a transcript larger than the pipe buffer must not be lost
+# to pipefail when grep short-circuits (the SIGPIPE-vs-pipefail trap).
+{ printf '<!-- 1 paragraphs, 0 repeats, 0 loops, -->\nneedle early\n'; yes 'filler words to inflate the file' | head -20000; } > "$SAD/transcript.tidy.md"
+eq "early match in a large transcript still found" "$("$CLI" search needle)" "[\"$SA\"]"
+"$CLI" delete "$SA" --yes >/dev/null; "$CLI" delete "$SB" --yes >/dev/null
+
 echo "== transcribe"
 if command -v voxtype >/dev/null && [[ -f "${VOXTYPE_MODELS_DIR:-$HOME/.local/share/voxtype/models}/ggml-base.en.bin" && -f "$TMP/speech12.wav" ]]; then
   ID3=$($CLI import "$TMP/speech12.wav" --title "Speech 12s")
