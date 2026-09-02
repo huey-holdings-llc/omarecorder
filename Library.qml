@@ -768,15 +768,19 @@ Item {
                   font.pixelSize: Style.font.caption
                 }
                 Button {
+                  // Halve the chunk length that produced this transcript,
+                  // floored at 300 s; at or below the floor halving cannot
+                  // shorten anything, so the button steps aside and the
+                  // larger-model advice stands alone.
+                  readonly property int lastChunk: (root.selected && root.selected.transcript && root.selected.transcript.chunk_s) || 1800
+                  visible: lastChunk > 300
                   text: "Re-transcribe in shorter pieces"
                   iconText: "󰗊"
                   fontSize: Style.font.caption; horizontalPadding: Style.spacing.sm; verticalPadding: Style.spacing.xxs
                   foreground: Color.accent; fontFamily: root.fontFamily
-                  // Halve the chunk length that produced this transcript (floor
-                  // 300 s), so pressing again keeps halving.
                   onClicked: root.svc.transcribe(root.selected.id, root.modelForRun,
                     (root.svc.config && root.svc.config.language) || "en", true,
-                    Math.max(300, Math.floor(((root.selected.transcript && root.selected.transcript.chunk_s) || 1800) / 2)))
+                    Math.max(300, Math.floor(lastChunk / 2)))
                 }
               }
 

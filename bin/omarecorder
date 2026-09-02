@@ -588,7 +588,16 @@ record_stop() { # [--force]
   else
     notify "Recording saved · $(fmt_hms "$dur")" "$ttl. Click to transcribe with $(model_label "$(cfg defaultModel)")" -- "$SELF" transcribe "$id" --download
   fi
-  (( auto )) && { "$SELF" transcribe "$id" >/dev/null 2>&1 || true; }
+  if (( auto )); then
+    if [[ "${OMARECORDER_SYNC:-0}" == "1" ]]; then
+      "$SELF" transcribe "$id" >/dev/null 2>&1 || true
+    else
+      # setsid, not a plain call: where systemd-run is absent, run_detached
+      # falls back to running the worker inline, and that must not hold
+      # record stop (and the UI process behind it) for the whole pass.
+      setsid "$SELF" transcribe "$id" >/dev/null 2>&1 < /dev/null &
+    fi
+  fi
   echo "$id ($(fmt_hms "$dur"))"
 }
 
