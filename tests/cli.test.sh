@@ -442,6 +442,90 @@ check "models --json lists base.en" bash -c "$CLI models --json | jq -e '.[] | s
 eq "estimate uses default rtf" "$($CLI estimate "$ID1" --model base.en | jq -r '.rtf, .source' | paste -sd,)" "10,default"
 fails "estimate rejects unknown model" "$CLI" estimate "$ID1" --model nope
 
+echo "== transcribe --download (stubbed voxtype)"
+# A stub voxtype plus an empty scratch model dir gives full control of the
+# download worker's success predicate (child exit 0 AND the ggml file exists),
+# so the whole download-then-transcribe chain runs without the real engine.
+IDD=$("$CLI" import "$TMP/quiet.wav" --title "Chain Test")
+DD="$OMARECORDER_DIR/$IDD Chain Test"
+DLM="$TMP/dlmodels"; mkdir -p "$DLM"
+STUB="$TMP/voxstub"; mkdir -p "$STUB"          # success: writes the model file; transcribes to stub text
+cat > "$STUB/voxtype" <<STUBEOF
+#!/bin/bash
+# setup --download writes the model file; anything else is the transcribe
+# call (voxtype -q --model ... transcribe FILE), which emits text after a
+# blank line the way the real engine does.
+if [ "\$1" = setup ]; then
+  head -c 100 /dev/zero > "\$VOXTYPE_MODELS_DIR/ggml-small.en.bin"
+else
+  printf '\nchained stub text\n'
+fi
+exit 0
+STUBEOF
+STUBSNAP="$TMP/voxsnap"; mkdir -p "$STUBSNAP"  # snapshot: capture state mid-download, then fail
+cat > "$STUBSNAP/voxtype" <<STUBEOF
+#!/bin/bash
+[ "\$1" = setup ] && cp "$RUN/state.json" "$TMP/state.mid"
+exit 1
+STUBEOF
+STUBFAIL="$TMP/voxfail"; mkdir -p "$STUBFAIL"  # failure: download never produces the file
+printf '#!/bin/bash\nexit 1\n' > "$STUBFAIL/voxtype"
+chmod +x "$STUB/voxtype" "$STUBSNAP/voxtype" "$STUBFAIL/voxtype"
+
+# The intent lands on the download job, nested (never a top-level id).
+( PATH="$STUBSNAP:$PATH" VOXTYPE_MODELS_DIR="$DLM" "$CLI" transcribe "$IDD" --model small.en --from 0 --to 2 --download >/dev/null 2>&1 )
+eq "download job carries then.id" "$(jq -r '.jobs[0]."then".id' "$TMP/state.mid")" "$IDD"
+eq "then.language recorded" "$(jq -r '.jobs[0]."then".language' "$TMP/state.mid")" "en"
+eq "then keeps the requested range" "$(jq -r '.jobs[0]."then" | "\(.from)-\(.to)"' "$TMP/state.mid")" "0-2"
+eq "download job keeps no top-level id" "$(jq -r '.jobs[0].id // "absent"' "$TMP/state.mid")" "absent"
+eq "failed download leaves no job behind" "$(jq -r '.jobs|length' "$RUN/state.json")" "0"
+
+# Pressing again during a download re-aims the chain on the running job.
+jq -cn --arg id "$IDD" --argjson t "$(date +%s)" \
+  '{recording:null,jobs:[{type:"download",model:"small.en",unit:"omarecorder-dl-small-en",started_at:$t,expected_bytes:1,"then":{id:"other",language:"en",threads:""}}],version:1}' > "$RUN/state.json"
+( PATH="$STUBSNAP:$PATH" VOXTYPE_MODELS_DIR="$DLM" "$CLI" transcribe "$IDD" --model small.en --download >/dev/null 2>&1; echo $? > "$TMP/rc" )
+eq "attach to a running download exits 0" "$(cat "$TMP/rc")" "0"
+eq "still exactly one download job" "$(jq -r '[.jobs[]|select(.type=="download")]|length' "$RUN/state.json")" "1"
+eq "chain re-aimed to the last press" "$(jq -r '[.jobs[]|select(.type=="download")][0]."then".id' "$RUN/state.json")" "$IDD"
+
+# Download failure: no transcribe job is ever created, the then dies with the job.
+jq -cn '{recording:null,jobs:[],version:1}' > "$RUN/state.json"
+( PATH="$STUBFAIL:$PATH" VOXTYPE_MODELS_DIR="$DLM" "$CLI" transcribe "$IDD" --model small.en --download >/dev/null 2>&1 )
+eq "failed chain leaves no jobs" "$(jq -r '.jobs|length' "$RUN/state.json")" "0"
+check "and no transcript" bash -c "! test -f \"$DD/transcript.md\""
+
+# The full chain: download lands, transcription follows on its own, with the
+# requested range replayed.
+( PATH="$STUB:$PATH" VOXTYPE_MODELS_DIR="$DLM" "$CLI" transcribe "$IDD" --model small.en --from 0 --to 2 --download >/dev/null 2>&1; echo $? > "$TMP/rc" )
+eq "chained download and transcribe exits 0" "$(cat "$TMP/rc")" "0"
+check "chained transcript written" bash -c "grep -q 'chained stub text' \"$DD/transcript.md\""
+eq "chained transcript records the model" "$(jq -r .transcript.model "$DD/meta.json")" "small.en"
+check "chained transcript keeps the range" bash -c "head -1 \"$DD/transcript.md\" | grep -q 'range=0-2'"
+eq "raw state holds no jobs afterwards" "$(jq -r '.jobs|length' "$RUN/state.json")" "0"
+
+# A chain whose recording is gone: model still lands, no transcribe job, logged.
+jq -cn --argjson t "$(date +%s)" \
+  '{recording:null,jobs:[{type:"download",model:"small.en",unit:"u1",started_at:$t,expected_bytes:1,"then":{id:"1999-01-01_000000",language:"en",threads:""}}],version:1}' > "$RUN/state.json"
+rm -f "$DLM/ggml-small.en.bin"
+( PATH="$STUB:$PATH" VOXTYPE_MODELS_DIR="$DLM" "$CLI" _dl-worker small.en >/dev/null 2>&1; echo $? > "$TMP/rc" )
+eq "worker survives a refused chain" "$(cat "$TMP/rc")" "0"
+eq "refused chain leaves no jobs" "$(jq -r '.jobs|length' "$RUN/state.json")" "0"
+check "refused chain is logged" bash -c "grep -q 'download chain FAILED' \"$XDG_STATE_HOME/omarecorder/omarecorder.log\""
+
+# Plain model download now removes its own job with no reconcile call
+# (before, the job lingered and the UI said Downloading forever).
+jq -cn '{recording:null,jobs:[],version:1}' > "$RUN/state.json"
+DLM2="$TMP/dlmodels2"; mkdir -p "$DLM2"
+( PATH="$STUB:$PATH" VOXTYPE_MODELS_DIR="$DLM2" "$CLI" model download small.en >/dev/null 2>&1; echo $? > "$TMP/rc" )
+eq "plain download exits 0" "$(cat "$TMP/rc")" "0"
+eq "and its job is gone from the raw state" "$(jq -r '.jobs|length' "$RUN/state.json")" "0"
+
+# Guard rails unchanged.
+( PATH="$STUB:$PATH" VOXTYPE_MODELS_DIR="$TMP/nomodels" "$CLI" transcribe "$IDD" --model small.en >/dev/null 2>&1; echo $? > "$TMP/rc" )
+eq "without --download still exit 3" "$(cat "$TMP/rc")" "3"
+fails "unknown model refused even with --download" bash -c "PATH=\"$STUB:\$PATH\" VOXTYPE_MODELS_DIR=\"$TMP/nomodels\" \"$CLI\" transcribe \"$IDD\" --model bogus --download"
+"$CLI" delete "$IDD" --yes >/dev/null
+
 echo "== transcribe"
 if command -v voxtype >/dev/null && [[ -f "${VOXTYPE_MODELS_DIR:-$HOME/.local/share/voxtype/models}/ggml-base.en.bin" && -f "$TMP/speech12.wav" ]]; then
   ID3=$($CLI import "$TMP/speech12.wav" --title "Speech 12s")

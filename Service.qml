@@ -91,6 +91,11 @@ QtObject {
   // bytes_done ticks a download writes every 2 s. jobs shape + per-piece
   // progress + the recording id cover everything the list renders.
   property string _listSig: ""
+  // Download-job models seen in the last state, so a download that finishes
+  // (its job vanishes) triggers refreshModels(): nothing else re-reads
+  // `installed`, and the picker and settings would show it stale until the
+  // Library was reopened.
+  property var _dlModels: []
   function _stateSig(s) {
     var jobs = (s.jobs || []).map(function(j) { return [j.type, j.id || j.model, j.unit, j.progress ? j.progress.chunk : 0].join(":") })
     return jobs.join("|") + "//" + (s.recording ? s.recording.id : "")
@@ -102,6 +107,9 @@ QtObject {
       state = s
       updateElapsed()
       if (s.version !== prevVersion) {
+        var dl = (s.jobs || []).filter(function(j) { return j.type === "download" }).map(function(j) { return j.model })
+        for (var i = 0; i < _dlModels.length; i++) if (dl.indexOf(_dlModels[i]) < 0) { refreshModels(); break }
+        _dlModels = dl
         var sig = _stateSig(s)
         if (sig !== _listSig) {
           _listSig = sig
@@ -130,10 +138,11 @@ QtObject {
   // a button press being deliberate in a way a keybinding is not.
   function stopRecording(force) { run(force ? ["record", "stop", "--force"] : ["record", "stop"]) }
   function toggleRecording() { recording ? stopRecording() : startRecording() }
-  function transcribe(id, model, language) {
+  function transcribe(id, model, language, download) {
     var args = ["transcribe", id]
     if (model) args = args.concat(["--model", model])
     if (language) args = args.concat(["--language", language])
+    if (download) args.push("--download")
     run(args)
   }
   function cancel(id) { run(["cancel", id]) }

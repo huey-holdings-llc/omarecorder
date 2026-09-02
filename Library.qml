@@ -115,9 +115,9 @@ Item {
   // stray Enter must never kill an hour-long job.
   function transcribeSelected() {
     if (!svc || !selected || selectedJob || selectedLive) return
-    var m = svc.modelByName(modelForRun)
-    if (m && !m.installed) { svc.download(m.name); return }
-    svc.transcribe(selected.id, modelForRun, svc.config.language || "en")
+    // --download makes the CLI chain the transcription onto the model download
+    // when the model is missing; the intent lives on the job in state.json.
+    svc.transcribe(selected.id, modelForRun, (svc.config && svc.config.language) || "en", true)
   }
   function cancelSelected() { if (svc && selected && selectedJob) svc.cancel(selected.id) }
   // Ctrl+M walks the preset models (the ones with a label) in catalog order.
@@ -569,13 +569,16 @@ Item {
                   tooltipText: root.selectedJob ? "" : (root.selected && root.selected.has_transcript ? "Shift+Enter" : "Enter")
                   text: root.selectedJob ? "Cancel"
                     : (picker.currentInstalled ? (root.selected && root.selected.has_transcript ? "Re-transcribe" : "Transcribe")
-                                               : (picker.download ? "Downloading…" : "Download model"))
+                                               : (picker.download ? (picker.download.then ? "Downloading… will transcribe" : "Downloading…")
+                                                                  : "Download + transcribe"))
                   iconText: root.selectedJob ? "󰅖" : (picker.currentInstalled ? "󰗊" : "󰇚")
                   active: !!root.selectedJob
                   iconSpinning: !!root.selectedJob || !!picker.download
                   foreground: root.foreground
                   fontFamily: root.fontFamily
-                  enabled: !picker.download
+                  // Stays clickable during a download: a press re-aims the
+                  // chained transcription onto the selected recording (the
+                  // CLI attach path; last press wins).
                   onClicked: root.selectedJob ? root.cancelSelected() : root.transcribeSelected()
                 }
                 Row {

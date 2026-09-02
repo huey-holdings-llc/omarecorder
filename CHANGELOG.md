@@ -6,6 +6,14 @@ All notable changes to this project are documented here. Format follows
 ## [Unreleased]
 
 ### Added
+- Picking a model that is not downloaded yet now downloads it and transcribes
+  the recording as soon as the download lands, in one press. The intent rides
+  on the download job in state.json, so it survives switching recordings,
+  closing the Library, even a shell restart; pressing the button for another
+  recording mid-download re-aims the chain (last press wins). The CLI grew
+  `transcribe <id> --download` for the same behaviour, and the clickable
+  "Recording saved" notification uses it too instead of failing silently when
+  the default model is missing. (#13)
 - `Ctrl+M` in the Library cycles the model preset (Fast, Balanced, Accurate)
   without a mouse trip to the dropdown; `Ctrl+Shift+M` cycles backwards. Plain
   letters keep feeding the search filter as before. (#16)
@@ -14,6 +22,12 @@ All notable changes to this project are documented here. Format follows
 - The Recent list folds away while the popup settings are open, so on smaller
   displays the settings are in reach without scrolling past it. The section
   header stays put and says where the list went. (#15)
+
+### Fixed
+- A finished model download now removes its own job entry instead of leaving
+  it for the next reconcile, so the bar no longer says "Downloading model"
+  after the download is done, and the Library learns a model is installed the
+  moment its download finishes instead of on the next reopen. (#13)
 
 ## [1.2.0] - 2026-09-02
 

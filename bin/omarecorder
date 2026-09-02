@@ -189,6 +189,37 @@ _claim_tx() {
   [[ $(jq -r --arg id "$id" '.jobs[] | select(.type=="transcribe" and .id==$id)' <<<"$st") ]] && return 1
   save_state "$(jq -c "$@" <<<"$st")"
 }
+# Claim a download job, atomically. Fresh job appended: return 0. One already
+# running: a non-empty then_json re-aims its chained transcription (last press
+# wins, return 2, no new worker); an empty one returns 1 so plain
+# `model download` keeps refusing a duplicate. then stays a nested object:
+# download jobs must never grow a top-level id (cancel and the transcribe
+# rollback both filter jobs by .id).
+_claim_dl() {
+  local model="$1" then_json="$2" unit="$3" bytes="$4"
+  local st; st=$(read_state)
+  if [[ $(jq -r --arg m "$model" '.jobs[] | select(.type=="download" and .model==$m)' <<<"$st") ]]; then
+    [[ -n "$then_json" ]] || return 1
+    save_state "$(jq -c --arg m "$model" --argjson th "$then_json" \
+      '.jobs |= map(if .type=="download" and .model==$m then ."then"=$th else . end)' <<<"$st")"
+    return 2
+  fi
+  if [[ -n "$then_json" ]]; then
+    save_state "$(jq -c --arg m "$model" --arg u "$unit" --argjson t "$(now_epoch)" --argjson b "$bytes" --argjson th "$then_json" \
+      '.jobs += [{type:"download", model:$m, unit:$u, started_at:$t, expected_bytes:$b, "then":$th}]' <<<"$st")"
+  else
+    save_state "$(jq -c --arg m "$model" --arg u "$unit" --argjson t "$(now_epoch)" --argjson b "$bytes" \
+      '.jobs += [{type:"download", model:$m, unit:$u, started_at:$t, expected_bytes:$b}]' <<<"$st")"
+  fi
+}
+# Print the download job's chained intent and remove the job, in one locked
+# step (the _take_recording shape): a transcribe --download re-aim can never
+# land between the read and the removal and get silently dropped.
+_take_dl_then() {
+  local m="$1" st; st=$(read_state)
+  jq -c --arg m "$m" '[.jobs[] | select(.type=="download" and .model==$m)][0]."then" // empty' <<<"$st"
+  save_state "$(jq -c --arg m "$m" '.jobs |= map(select(.type != "download" or .model != $m))' <<<"$st")"
+}
 # Print the recording entry and null it, atomically; fail if there is none.
 _take_recording() {
   local st rec; st=$(read_state); rec=$(jq -c '.recording' <<<"$st")
@@ -538,9 +569,9 @@ record_stop() { # [--force]
   log "record stop $id duration=${dur}s"
   local ttl; ttl=$(jq -r '.title // empty' "$dir/meta.json"); ttl="${ttl:-$id}"
   if [[ $(jq -r '.levels.clipped // false' "$dir/meta.json") == "true" ]]; then
-    notify "Recording saved · $(fmt_hms "$dur") (audio is clipping)" "$ttl: the microphone gain is too high; lower the input level before the next session. Click to transcribe anyway." -- "$SELF" transcribe "$id"
+    notify "Recording saved · $(fmt_hms "$dur") (audio is clipping)" "$ttl: the microphone gain is too high; lower the input level before the next session. Click to transcribe anyway." -- "$SELF" transcribe "$id" --download
   else
-    notify "Recording saved · $(fmt_hms "$dur")" "$ttl. Click to transcribe with $(model_label "$(cfg defaultModel)")" -- "$SELF" transcribe "$id"
+    notify "Recording saved · $(fmt_hms "$dur")" "$ttl. Click to transcribe with $(model_label "$(cfg defaultModel)")" -- "$SELF" transcribe "$id" --download
   fi
   echo "$id ($(fmt_hms "$dur"))"
 }
@@ -1086,22 +1117,32 @@ cmd_model() {
   case "$sub" in
     download)
       local name="${1:-}"; [[ -n "$name" ]] || die "usage: model download <name>"
-      jq -e --arg m "$name" '.[] | select(.name==$m)' <<<"$MODEL_CATALOG" >/dev/null || die "unknown model: $name"
-      model_installed "$name" && { echo "already installed: $name"; return 0; }
-      have voxtype || die "voxtype not installed"
-      reconcile_state
-      [[ $(jq -r --arg m "$name" '.jobs[] | select(.type=="download" and .model==$m)' <<<"$(read_state)") ]] && die "download already running"
-      local unit="omarecorder-dl-${name//./-}" size
-      size=$(jq -r --arg m "$name" '.[] | select(.name==$m) | .size_mb' <<<"$MODEL_CATALOG")
-      state_set --arg m "$name" --arg u "$unit" --argjson t "$(now_epoch)" --argjson b $((size * 1000000)) \
-        '.jobs += [{type:"download", model:$m, unit:$u, started_at:$t, expected_bytes:$b}]'
-      if ! run_detached "$unit" "OmaRecorder download $name" "$SELF" _dl-worker "$name"; then
-        state_set --arg m "$name" '.jobs |= map(select(.type != "download" or .model != $m))'
-        die "could not start the download"
-      fi
-      log "model download $name ($unit)"; echo "downloading $name" ;;
+      start_download "$name" "" ;;
     *) die "usage: model download <name>" ;;
   esac
+}
+
+# start_download <name> <then_json>: shared starter for `model download` and
+# `transcribe --download`. A non-empty then_json ({id, language, threads})
+# chains a transcription onto the finished download; empty means plain.
+start_download() {
+  local name="$1" then_json="${2:-}"
+  jq -e --arg m "$name" '.[] | select(.name==$m)' <<<"$MODEL_CATALOG" >/dev/null || die "unknown model: $name"
+  model_installed "$name" && { echo "already installed: $name"; return 0; }
+  have voxtype || die "voxtype not installed"
+  reconcile_state
+  local unit="omarecorder-dl-${name//./-}" size rc=0
+  size=$(jq -r --arg m "$name" '.[] | select(.name==$m) | .size_mb' <<<"$MODEL_CATALOG")
+  with_lock _claim_dl "$name" "$then_json" "$unit" $((size * 1000000)) || rc=$?
+  case "$rc" in
+    1) die "download already running" ;;
+    2) log "model download $name: chained transcribe re-aimed"; echo "downloading $name"; return 0 ;;
+  esac
+  if ! run_detached "$unit" "OmaRecorder download $name" "$SELF" _dl-worker "$name"; then
+    state_set --arg m "$name" '.jobs |= map(select(.type != "download" or .model != $m))'
+    die "could not start the download"
+  fi
+  log "model download $name ($unit)"; echo "downloading $name"
 }
 
 # run_detached <unit> <description> <cmd...>: systemd-run (or inline when OMARECORDER_SYNC=1)
@@ -1125,8 +1166,34 @@ _dl_worker() {
     sleep 2; b=0; [[ -f "$f" ]] && b=$(file_size "$f"); [[ -f "$f.part" ]] && b=$(file_size "$f.part")
     state_set --arg m "$name" --argjson b "$b" '.jobs |= map(if .type=="download" and .model==$m then .bytes_done=$b else . end)' || true
   done
-  if wait "$child" && model_installed "$name"; then
-    notify "Model ready · $(model_label "$name")" "You can pick it in the Library now"; log "download ok $name"
+  local ok=0; wait "$child" && model_installed "$name" && ok=1
+  # Take the chain intent and drop our own job atomically (transcribe
+  # --download may have re-aimed the intent right up to this moment).
+  # cmd_list never reconciles, so a job left behind kept the UI saying
+  # "Downloading model..." until some other command happened to run.
+  local then_json; then_json=$(with_lock _take_dl_then "$name") || then_json=""
+  if (( ok )); then
+    log "download ok $name"
+    if [[ -n "$then_json" ]]; then
+      local tid tlang tthreads tfrom tto err
+      tid=$(jq -r '.id // empty' <<<"$then_json"); tlang=$(jq -r '.language // empty' <<<"$then_json"); tthreads=$(jq -r '.threads // empty' <<<"$then_json")
+      tfrom=$(jq -r '.from // empty' <<<"$then_json"); tto=$(jq -r '.to // empty' <<<"$then_json")
+      local -a targs=(transcribe "$tid" --model "$name")
+      [[ -n "$tlang" ]] && targs+=(--language "$tlang")
+      [[ -n "$tthreads" ]] && targs+=(--threads "$tthreads")
+      [[ -n "$tfrom" ]] && targs+=(--from "$tfrom")
+      [[ -n "$tto" ]] && targs+=(--to "$tto")
+      if err=$("$SELF" "${targs[@]}" 2>&1 >/dev/null); then
+        local d ttl=""; d=$(rec_dir "$tid" 2>/dev/null) && ttl=$(jq -r '.title // empty' "$d/meta.json" 2>/dev/null); ttl="${ttl:-$tid}"
+        notify "Model ready · $(model_label "$name")" "Transcribing $ttl now"; log "download chained transcribe $tid"
+      else
+        err="${err%%$'\n'*}"
+        notify "Model ready · $(model_label "$name")" "The transcription could not start: ${err:-unknown error}"
+        log "download chain FAILED $name -> $tid: ${err:-unknown error}"
+      fi
+    else
+      notify "Model ready · $(model_label "$name")" "You can pick it in the Library now"
+    fi
   else
     notify "Model download failed · $name" "Check your connection and try again (details: $LOG_FILE)"; log "download FAILED $name"
   fi
@@ -1146,11 +1213,11 @@ cmd_estimate() {
 # ----------------------------------------------------------- transcribe ----
 cmd_transcribe() {
   local id="${1:-}"; [[ -n "$id" ]] || die "usage: transcribe <id> [--model M] [--language L] [--from s --to s]"; shift
-  local model; model=$(cfg defaultModel); local lang; lang=$(cfg language); local threads; threads=$(cfg threads); local from="" to=""
+  local model; model=$(cfg defaultModel); local lang; lang=$(cfg language); local threads; threads=$(cfg threads); local from="" to="" dl=0
   while [[ $# -gt 0 ]]; do
     case "$1" in
       --model) model="$2"; shift 2 ;; --language) lang="$2"; shift 2 ;; --threads) threads="$2"; shift 2 ;;
-      --from) from="$2"; shift 2 ;; --to) to="$2"; shift 2 ;; *) die "unknown option: $1" ;;
+      --from) from="$2"; shift 2 ;; --to) to="$2"; shift 2 ;; --download) dl=1; shift ;; *) die "unknown option: $1" ;;
     esac
   done
   [[ -z "$from" ]] || valid_seconds "$from" || die "--from must be a non-negative number of seconds"
@@ -1161,7 +1228,19 @@ cmd_transcribe() {
   have voxtype || die "voxtype not installed"
   require_idle "$id"
   [[ $(jq -r '.duration_s // 0' "$dir/meta.json") == "0" ]] && die "$id has no audio yet"
-  if ! model_installed "$model"; then echo "omarecorder: model '$model' is not downloaded (run: omarecorder model download $model)" >&2; exit 3; fi
+  if ! model_installed "$model"; then
+    if (( dl )); then
+      # All the recording validations above already passed, so the intent is
+      # sound; park it on the download job and let _dl_worker fire it.
+      local then_json; then_json=$(jq -cn --arg id "$id" --arg l "$lang" --arg th "$threads" --arg f "$from" --arg t "$to" \
+        '{id:$id, language:$l, threads:$th, from:$f, to:$t}')
+      start_download "$model" "$then_json"
+      log "transcribe $id deferred until $model finishes downloading"
+      echo "will transcribe $id when $model is ready"
+      return 0
+    fi
+    echo "omarecorder: model '$model' is not downloaded (run: omarecorder model download $model)" >&2; exit 3
+  fi
   local unit="omarecorder-tx-$id"
   with_lock _claim_tx "$id" --arg id "$id" --arg m "$model" --arg u "$unit" --argjson t "$(now_epoch)" \
     '.jobs += [{type:"transcribe", id:$id, model:$m, unit:$u, started_at:$t}]' \
@@ -1441,7 +1520,7 @@ omarecorder $VERSION: record, keep, transcribe locally (voxtype)
   tidy <id>                                              rebuild transcript.tidy.md (paragraphs, loops removed)
   export <id> [--vault P | --dir P] [--no-open] [--raw]           transcript → Obsidian note (frontmatter + text)
   vaults [--json]                                        Obsidian vaults on this machine (* = open)
-  transcribe <id> [--model M] [--language L] [--from s --to s]
+  transcribe <id> [--model M] [--language L] [--from s --to s] [--download]
   cancel <id> | estimate <id> --model M
   models [--json] | model download <name>
   play <id> [--from s] | stop-play | open <id> | folder <id>
