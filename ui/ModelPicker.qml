@@ -35,17 +35,38 @@ Item {
     return m.size_mb + " MB ↓"
   }
   // "Fast ~4m"  /  "Accurate 1.6 GB ↓" (not downloaded yet)
-  function chipLabel(m) {
+  function fullLabel(m) {
     var extra = m.installed ? estimateText(m) : sizeText(m)
     return extra ? (m.label + " " + extra) : m.label
   }
+  // When the row cannot fit the full labels the chips drop their estimates
+  // (name only, estimate in the tooltip) instead of getting clipped. The
+  // container flips this by comparing its available width to fullWidth.
+  property bool compact: false
+  TextMetrics {
+    id: fullMetrics
+    font.family: root.fontFamily
+    font.pixelSize: Style.font.body
+    text: {
+      var t = ""
+      for (var i = 0; i < root.models.length; i++) if (root.models[i].label) t += root.fullLabel(root.models[i])
+      return t
+    }
+  }
+  // Full-label width estimate: text + per-chip padding and borders + gaps.
+  // Deliberately independent of `compact`, so the comparison cannot loop.
+  readonly property real fullWidth: Math.ceil(fullMetrics.width)
+    + 6 * Style.spacing.controlPaddingX + 2 * Style.spacing.md + 6 + Style.spacing.sm
   // Chips carry the three presets; voxtype can hold more models, but the
   // catalog the picker offers is exactly the labelled ones.
   function buildOptions() {
     var opts = []
     for (var i = 0; i < models.length; i++) {
       var m = models[i]
-      if (m.label) opts.push({ value: m.name, label: chipLabel(m), tooltip: m.name })
+      if (!m.label) continue
+      var extra = m.installed ? estimateText(m) : sizeText(m)
+      if (compact) opts.push({ value: m.name, label: m.label, tooltip: m.name + (extra ? " · " + extra : "") })
+      else opts.push({ value: m.name, label: fullLabel(m), tooltip: m.name })
     }
     return opts
   }

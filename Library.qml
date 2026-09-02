@@ -596,10 +596,14 @@ Item {
                 spacing: Style.spacing.sm
                 ModelPicker {
                   id: picker
-                  // The chip row takes its natural width, clamped to what the
-                  // main button and icon actions leave over (clipped, not
-                  // wrapped, when a narrow pane cannot fit all three chips).
-                  width: Math.min(picker.implicitWidth, parent.width - mainButton.width - iconActions.width - posReadout.width - parent.spacing * 3)
+                  // The chip row takes what the main button and icon actions
+                  // leave over. The readout and speed chip have fixed widths,
+                  // so the space is identical in every playback state, and
+                  // when the full labels do not fit the chips go compact
+                  // (names only, estimates in tooltips) instead of clipping.
+                  readonly property real rowAvail: parent.width - mainButton.width - iconActions.width - posReadout.width - speedChip.width - parent.spacing * 4
+                  compact: rowAvail < fullWidth
+                  width: Math.min(picker.implicitWidth, rowAvail)
                   anchors.verticalCenter: parent.verticalCenter
                   svc: root.svc
                   durationS: root.selected ? root.selected.duration_s : 0
@@ -690,18 +694,48 @@ Item {
                   onClicked: root.requestDelete()
                 }
                 }
-                Text {
-                  id: posReadout
-                  // Last in the row so no button shifts under the pointer when
-                  // playback starts. fmtClock matches the waveform labels.
-                  anchors.verticalCenter: parent.verticalCenter
-                  visible: !!(root.selected && root.playingId === root.selected.id)
-                  text: root.selected ? Fmt.fmtClock(root.positionS) + " / " + Fmt.fmtClock(root.selected.duration_s)
-                    + (root.speedX !== 1 ? " · " + root.speedX + "x" : "") : ""
-                  textFormat: Text.PlainText
-                  color: root.dim
+                TextMetrics {
+                  // The widest string this recording's readout can show: the
+                  // position never exceeds the duration. Sizing to it keeps
+                  // the whole row still while the numbers tick.
+                  id: posMetrics
                   font.family: root.fontFamily
                   font.pixelSize: Style.font.caption
+                  text: root.selected ? Fmt.fmtClock(root.selected.duration_s) + " / " + Fmt.fmtClock(root.selected.duration_s) : ""
+                }
+                Text {
+                  id: posReadout
+                  // Fixed-width slot so nothing shifts when playback starts,
+                  // visible whenever playback is possible. fmtClock matches
+                  // the waveform labels.
+                  anchors.verticalCenter: parent.verticalCenter
+                  visible: !!(root.selected && !root.selectedLive)
+                  width: Math.ceil(posMetrics.width)
+                  horizontalAlignment: Text.AlignRight
+                  text: root.selected ? Fmt.fmtClock(root.positionS) + " / " + Fmt.fmtClock(root.selected.duration_s) : ""
+                  textFormat: Text.PlainText
+                  color: root.playing ? root.foreground : root.dim
+                  font.family: root.fontFamily
+                  font.pixelSize: Style.font.caption
+                }
+                Button {
+                  id: speedChip
+                  // Right of the time so it reads as a playback property, not
+                  // a transcription one. Click cycles; Ctrl+S still works.
+                  // Fixed width (sized to the widest label) so switching
+                  // 1x/1.25x/1.5x/2x moves nothing.
+                  anchors.verticalCenter: parent.verticalCenter
+                  visible: posReadout.visible
+                  bordered: true
+                  text: root.speedX + "x"
+                  tooltipText: "Playback speed (Ctrl+S)"
+                  fontSize: Style.font.caption
+                  horizontalPadding: Style.spacing.sm; verticalPadding: Style.spacing.xxs
+                  foreground: root.speedX !== 1 ? Color.accent : root.dim
+                  fontFamily: root.fontFamily
+                  width: Math.ceil(speedMetrics.width) + Style.spacing.sm * 2 + 2
+                  TextMetrics { id: speedMetrics; font.family: root.fontFamily; font.pixelSize: Style.font.caption; text: "1.25x" }
+                  onClicked: root.cycleSpeed(1)
                 }
               }
 
