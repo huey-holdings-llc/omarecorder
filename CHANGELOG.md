@@ -3,7 +3,7 @@
 All notable changes to this project are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow SemVer.
 
-## [Unreleased]
+## [1.2.0] - 2026-09-02
 
 ### Added
 - Every recording can carry a short note. `omarecorder note <id> <text>` sets
