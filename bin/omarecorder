@@ -212,6 +212,14 @@ _claim_dl() {
       '.jobs += [{type:"download", model:$m, unit:$u, started_at:$t, expected_bytes:$b}]' <<<"$st")"
   fi
 }
+# Print the download job's chained intent and remove the job, in one locked
+# step (the _take_recording shape): a transcribe --download re-aim can never
+# land between the read and the removal and get silently dropped.
+_take_dl_then() {
+  local m="$1" st; st=$(read_state)
+  jq -c --arg m "$m" '[.jobs[] | select(.type=="download" and .model==$m)][0]."then" // empty' <<<"$st"
+  save_state "$(jq -c --arg m "$m" '.jobs |= map(select(.type != "download" or .model != $m))' <<<"$st")"
+}
 # Print the recording entry and null it, atomically; fail if there is none.
 _take_recording() {
   local st rec; st=$(read_state); rec=$(jq -c '.recording' <<<"$st")
@@ -1159,20 +1167,22 @@ _dl_worker() {
     state_set --arg m "$name" --argjson b "$b" '.jobs |= map(if .type=="download" and .model==$m then .bytes_done=$b else . end)' || true
   done
   local ok=0; wait "$child" && model_installed "$name" && ok=1
-  # Read the chain intent back fresh (transcribe --download may have re-aimed
-  # it mid-download), then drop our own job. cmd_list never reconciles, so a
-  # job left behind kept the UI saying "Downloading model..." until some other
-  # command happened to run.
-  local then_json; then_json=$(jq -c --arg m "$name" '[.jobs[] | select(.type=="download" and .model==$m)][0]."then" // empty' <<<"$(read_state)")
-  state_set --arg m "$name" '.jobs |= map(select(.type != "download" or .model != $m))' || true
+  # Take the chain intent and drop our own job atomically (transcribe
+  # --download may have re-aimed the intent right up to this moment).
+  # cmd_list never reconciles, so a job left behind kept the UI saying
+  # "Downloading model..." until some other command happened to run.
+  local then_json; then_json=$(with_lock _take_dl_then "$name") || then_json=""
   if (( ok )); then
     log "download ok $name"
     if [[ -n "$then_json" ]]; then
-      local tid tlang tthreads err
+      local tid tlang tthreads tfrom tto err
       tid=$(jq -r '.id // empty' <<<"$then_json"); tlang=$(jq -r '.language // empty' <<<"$then_json"); tthreads=$(jq -r '.threads // empty' <<<"$then_json")
+      tfrom=$(jq -r '.from // empty' <<<"$then_json"); tto=$(jq -r '.to // empty' <<<"$then_json")
       local -a targs=(transcribe "$tid" --model "$name")
       [[ -n "$tlang" ]] && targs+=(--language "$tlang")
       [[ -n "$tthreads" ]] && targs+=(--threads "$tthreads")
+      [[ -n "$tfrom" ]] && targs+=(--from "$tfrom")
+      [[ -n "$tto" ]] && targs+=(--to "$tto")
       if err=$("$SELF" "${targs[@]}" 2>&1 >/dev/null); then
         local d ttl=""; d=$(rec_dir "$tid" 2>/dev/null) && ttl=$(jq -r '.title // empty' "$d/meta.json" 2>/dev/null); ttl="${ttl:-$tid}"
         notify "Model ready · $(model_label "$name")" "Transcribing $ttl now"; log "download chained transcribe $tid"
@@ -1222,7 +1232,8 @@ cmd_transcribe() {
     if (( dl )); then
       # All the recording validations above already passed, so the intent is
       # sound; park it on the download job and let _dl_worker fire it.
-      local then_json; then_json=$(jq -cn --arg id "$id" --arg l "$lang" --arg th "$threads" '{id:$id, language:$l, threads:$th}')
+      local then_json; then_json=$(jq -cn --arg id "$id" --arg l "$lang" --arg th "$threads" --arg f "$from" --arg t "$to" \
+        '{id:$id, language:$l, threads:$th, from:$f, to:$t}')
       start_download "$model" "$then_json"
       log "transcribe $id deferred until $model finishes downloading"
       echo "will transcribe $id when $model is ready"

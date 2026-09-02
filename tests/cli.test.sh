@@ -473,9 +473,10 @@ printf '#!/bin/bash\nexit 1\n' > "$STUBFAIL/voxtype"
 chmod +x "$STUB/voxtype" "$STUBSNAP/voxtype" "$STUBFAIL/voxtype"
 
 # The intent lands on the download job, nested (never a top-level id).
-( PATH="$STUBSNAP:$PATH" VOXTYPE_MODELS_DIR="$DLM" "$CLI" transcribe "$IDD" --model small.en --download >/dev/null 2>&1 )
+( PATH="$STUBSNAP:$PATH" VOXTYPE_MODELS_DIR="$DLM" "$CLI" transcribe "$IDD" --model small.en --from 0 --to 2 --download >/dev/null 2>&1 )
 eq "download job carries then.id" "$(jq -r '.jobs[0]."then".id' "$TMP/state.mid")" "$IDD"
 eq "then.language recorded" "$(jq -r '.jobs[0]."then".language' "$TMP/state.mid")" "en"
+eq "then keeps the requested range" "$(jq -r '.jobs[0]."then" | "\(.from)-\(.to)"' "$TMP/state.mid")" "0-2"
 eq "download job keeps no top-level id" "$(jq -r '.jobs[0].id // "absent"' "$TMP/state.mid")" "absent"
 eq "failed download leaves no job behind" "$(jq -r '.jobs|length' "$RUN/state.json")" "0"
 
@@ -493,11 +494,13 @@ jq -cn '{recording:null,jobs:[],version:1}' > "$RUN/state.json"
 eq "failed chain leaves no jobs" "$(jq -r '.jobs|length' "$RUN/state.json")" "0"
 check "and no transcript" bash -c "! test -f \"$DD/transcript.md\""
 
-# The full chain: download lands, transcription follows on its own.
-( PATH="$STUB:$PATH" VOXTYPE_MODELS_DIR="$DLM" "$CLI" transcribe "$IDD" --model small.en --download >/dev/null 2>&1; echo $? > "$TMP/rc" )
+# The full chain: download lands, transcription follows on its own, with the
+# requested range replayed.
+( PATH="$STUB:$PATH" VOXTYPE_MODELS_DIR="$DLM" "$CLI" transcribe "$IDD" --model small.en --from 0 --to 2 --download >/dev/null 2>&1; echo $? > "$TMP/rc" )
 eq "chained download and transcribe exits 0" "$(cat "$TMP/rc")" "0"
 check "chained transcript written" bash -c "grep -q 'chained stub text' \"$DD/transcript.md\""
 eq "chained transcript records the model" "$(jq -r .transcript.model "$DD/meta.json")" "small.en"
+check "chained transcript keeps the range" bash -c "head -1 \"$DD/transcript.md\" | grep -q 'range=0-2'"
 eq "raw state holds no jobs afterwards" "$(jq -r '.jobs|length' "$RUN/state.json")" "0"
 
 # A chain whose recording is gone: model still lands, no transcribe job, logged.

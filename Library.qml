@@ -576,7 +576,9 @@ Item {
                   iconSpinning: !!root.selectedJob || !!picker.download
                   foreground: root.foreground
                   fontFamily: root.fontFamily
-                  enabled: !picker.download
+                  // Stays clickable during a download: a press re-aims the
+                  // chained transcription onto the selected recording (the
+                  // CLI attach path; last press wins).
                   onClicked: root.selectedJob ? root.cancelSelected() : root.transcribeSelected()
                 }
                 Row {
