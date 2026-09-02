@@ -361,9 +361,16 @@ check "paragraphs: more than one blank-line break" bash -c "[ \"\$(grep -c '^$' 
 check "piece boundary kept as a paragraph break" bash -c "grep -q '^Second piece begins here' '$DT2/transcript.tidy.md'"
 check "tidy header line" bash -c "head -1 '$DT2/transcript.tidy.md' | grep -q '<!-- omarecorder tidy'"
 check "meta records the tidy stats" bash -c "jq -e '.transcript.tidy.repeats_removed > 0 and .transcript.tidy.paragraphs > 1' '$DT2/meta.json'"
-check "marker at the collapse point with the copy count" grep -Fq 'we need to go around the back and try the door. (repeated 4x)' "$DT2/transcript.tidy.md"
+check "marker at the collapse point with the copy count" grep -Fq 'we need to go around the back and try the door (repeated 4x).' "$DT2/transcript.tidy.md"
 eq "marker appears exactly once" "$(grep -o '(repeated' "$DT2/transcript.tidy.md" | wc -l)" "1"
 eq "raw transcript carries no marker" "$(grep -o '(repeated' "$DT2/transcript.md" | wc -l)" "0"
+# Files tidied before the marker era have no "loops" field in the header;
+# list rebuilds them once and the new meta fields appear.
+sed -i '1s/.*/<!-- omarecorder tidy: 2 paragraphs, 33 repeated words removed, created=old -->/' "$DT2/transcript.tidy.md"
+jq 'del(.transcript.tidy.loops, .transcript.tidy.longest_run_words, .transcript.tidy.loop_warning)' "$DT2/meta.json" > "$DT2/meta.json.old" && mv "$DT2/meta.json.old" "$DT2/meta.json"
+$CLI list >/dev/null
+check "legacy tidy rebuilt by list" grep -q " loops," "$DT2/transcript.tidy.md"
+check "legacy rebuild fills the new meta" bash -c "jq -e '.transcript.tidy.longest_run_words == 33' '$DT2/meta.json'"
 check "meta counts one collapse point" bash -c "jq -e '.transcript.tidy.loops == 1' '$DT2/meta.json'"
 check "meta records the longest run" bash -c "jq -e '.transcript.tidy.longest_run_words == 33' '$DT2/meta.json'"
 check "33 removed words stay under the loop warning" bash -c "jq -e '.transcript.tidy.loop_warning == false' '$DT2/meta.json'"
@@ -387,7 +394,7 @@ IDL=$("$CLI" import "$TMP/quiet.wav" --title "Loop Test"); DL=$("$CLI" show "$ID
 } > "$DL/transcript.md"
 check "tidy runs on the loopy take" "$CLI" tidy "$IDL"
 check "a 55 word run trips the loop warning" bash -c "jq -e '.transcript.tidy.longest_run_words == 55 and .transcript.tidy.loop_warning == true' '$DL/meta.json'"
-check "loopy marker counts six copies" grep -Fq 'try the door. (repeated 6x)' "$DL/transcript.tidy.md"
+check "loopy marker counts six copies" grep -Fq 'try the door (repeated 6x).' "$DL/transcript.tidy.md"
 "$CLI" delete "$IDL" --yes >/dev/null
 
 echo "== busy guards"

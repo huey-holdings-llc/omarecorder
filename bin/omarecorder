@@ -716,7 +716,11 @@ cmd_list() {
       # redrawn the same way; once redrawn the width matches and the check
       # (a 4-byte header read) never fires again.
       if [[ -s "$d/audio.wav" ]] && { [[ ! -f "$d/waveform.png" ]] || [[ "$(png_width "$d/waveform.png")" != "$WAVE_W" ]]; }; then make_waveform "$d"; fi
-      [[ -s "$d/transcript.tidy.md" || ! -s "$d/transcript.md" ]] || tidy_transcript "$d"
+      # Tidy is rebuilt when missing, and once more for files from before the
+      # collapse markers and loop stats existed: the old header has no "loops"
+      # field, and after one rebuild it does, so the check (one head -1) never
+      # fires again.
+      if [[ -s "$d/transcript.md" ]] && { [[ ! -s "$d/transcript.tidy.md" ]] || ! head -1 "$d/transcript.tidy.md" | grep -q " loops,"; }; then tidy_transcript "$d"; fi
       rec_json "$d"
     done < <(find "$ROOT" -mindepth 1 -maxdepth 1 -type d -name '????-??-??_??????*' | sort -r) | jq -sc '.'
   )
@@ -964,7 +968,7 @@ function emit(w) {
   if (cnt >= para_words && w ~ /[.!?]["')\]]*$/) endpara()
   else if (cnt >= hard_words) endpara()
 }
-function flush_piece(   n, m, i, j, k, N, matched, t, reps, run) {
+function flush_piece(   n, m, i, j, k, N, matched, t, reps, run, last, punct) {
   n = split(piece, t, /[[:space:]]+/); m = 0
   for (i = 1; i <= n; i++) if (t[i] != "") { m++; tt[m] = t[i]; nt[m] = norm(t[i]) }
   n = m; i = 1
@@ -979,11 +983,16 @@ function flush_piece(   n, m, i, j, k, N, matched, t, reps, run) {
         # word of the block carries a "(repeated Nx)" marker; riding on a word
         # means it can never orphan at a paragraph break. The composite token
         # counts as one word toward the paragraph limits, an accepted skew.
+        # Terminal punctuation moves after the marker ("door (repeated 4x).")
+        # so emit() still sees the sentence end and paragraphing is unchanged.
         reps = (j - i) / N
         run = j - i - N; if (run > longest) longest = run
         loops++
         for (k = i; k < i + N - 1; k++) emit(tt[k])
-        emit(tt[i+N-1] " (repeated " reps "x)")
+        last = tt[i+N-1]; punct = ""
+        if (match(last, /[.!?]["')\]]*$/)) { punct = substr(last, RSTART); last = substr(last, 1, RSTART - 1) }
+        if (last != "") emit(last " (repeated " reps "x)" punct)
+        else emit("(repeated " reps "x)" punct)
         i = j; matched = 1; break
       }
     }
@@ -1084,7 +1093,8 @@ run_detached() {
   systemd-run --user --quiet --no-block --collect --service-type=oneshot -u "$unit" --description="$desc" \
     --setenv=OMARECORDER_DIR="${OMARECORDER_DIR:-}" --setenv=XDG_CONFIG_HOME="$XDG_CONFIG_HOME" --setenv=HOME="$HOME" \
     --setenv=XDG_STATE_HOME="$XDG_STATE_HOME" --setenv=XDG_RUNTIME_DIR="$XDG_RUNTIME_DIR" --setenv=OMARECORDER_RUN_DIR="${OMARECORDER_RUN_DIR:-}" --setenv=VOXTYPE_MODELS_DIR="$VOXTYPE_MODELS_DIR" \
-    --setenv=OMARECORDER_QUIET="${OMARECORDER_QUIET:-0}" --setenv=OMARECORDER_CHUNK_S="${OMARECORDER_CHUNK_S:-}" --setenv=PATH="$PATH" "$@"
+    --setenv=OMARECORDER_QUIET="${OMARECORDER_QUIET:-0}" --setenv=OMARECORDER_CHUNK_S="${OMARECORDER_CHUNK_S:-}" \
+    --setenv=OMARECORDER_LOOP_WARN_WORDS="${OMARECORDER_LOOP_WARN_WORDS:-}" --setenv=PATH="$PATH" "$@"
 }
 
 _dl_worker() {
