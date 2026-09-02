@@ -100,7 +100,7 @@ Item {
   function ensureSelection() { if (selectedIndex < 0 && rows.length > 0) selectedId = rows[0].id }
   readonly property string hintsText: root.trimMode
     ? "Space play   ←→ seek   [ ] mark start / end   Enter trim   Esc leave trim mode"
-    : "↑↓ select   Enter open / transcribe   Space play   ←→ seek   F2 rename   F3 trim   F4 raw   Del delete   Esc close"
+    : "↑↓ select   Enter open / transcribe   Ctrl+M model   Space play   ←→ seek   F2 rename   F3 trim   F4 raw   Del delete   Esc close"
   function select(delta) {
     if (rows.length === 0) return
     var i = selectedIndex < 0 ? (delta < 0 ? rows.length - 1 : 0) : (selectedIndex + delta + rows.length) % rows.length
@@ -120,6 +120,19 @@ Item {
     svc.transcribe(selected.id, modelForRun, svc.config.language || "en")
   }
   function cancelSelected() { if (svc && selected && selectedJob) svc.cancel(selected.id) }
+  // Ctrl+M walks the preset models (the ones with a label) in catalog order.
+  // Same gate as the picker's visibility: never while a job runs or the take is live.
+  function cycleModel(dir) {
+    if (!svc || !selected || selectedJob || selectedLive) return
+    var presets = []
+    for (var i = 0; i < svc.models.length; i++) if (svc.models[i].label) presets.push(svc.models[i])
+    if (presets.length === 0) return
+    var cur = -1
+    for (var j = 0; j < presets.length; j++) if (presets[j].name === modelForRun) { cur = j; break }
+    var next = cur < 0 ? (dir > 0 ? 0 : presets.length - 1) : (cur + dir + presets.length) % presets.length
+    chosenModel = presets[next].name
+    picker.value = presets[next].name
+  }
   function mpvSend(cmd) { if (mpvSock.connected) mpvSock.write(JSON.stringify({ command: cmd }) + "\n") }
   function stopPlayback() {
     if (playingId !== "" && svc) svc.stopPlay()
@@ -310,6 +323,9 @@ Item {
           }
           else if ((event.modifiers & Qt.ControlModifier) && event.key === Qt.Key_O && root.transcriptText.length > 0) {
             root.svc.exportToObsidian(root.selected.id, root.showRaw, function(code) { if (code === 0) sentFlash.restart() }); event.accepted = true
+          }
+          else if ((event.modifiers & Qt.ControlModifier) && event.key === Qt.Key_M) {
+            root.cycleModel((event.modifiers & Qt.ShiftModifier) ? -1 : 1); event.accepted = true
           }
           else if (event.key === Qt.Key_Return || event.key === Qt.Key_Enter) {
             if (root.svc && root.selected && root.selected.has_transcript && !(event.modifiers & Qt.ShiftModifier)) root.svc.openTranscript(root.selected.id)

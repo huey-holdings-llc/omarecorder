@@ -3,6 +3,13 @@
 All notable changes to this project are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow SemVer.
 
+## [Unreleased]
+
+### Added
+- `Ctrl+M` in the Library cycles the model preset (Fast, Balanced, Accurate)
+  without a mouse trip to the dropdown; `Ctrl+Shift+M` cycles backwards. Plain
+  letters keep feeding the search filter as before. (#16)
+
 ## [1.2.0] - 2026-09-02
 
 ### Added
