@@ -11,6 +11,9 @@ All notable changes to this project are documented here. Format follows
   handler now compares recording ids instead of row object identity, so only
   genuinely moving to a different recording resets playback and view state.
   (#30)
+- The waveform strip is drawn at 2400x128 instead of 800x64, so it stays sharp
+  on wide windows and high-DPI screens. Existing recordings get their strip
+  redrawn once, the first time the list sees the old size. (#17)
 
 ### Removed
 - `AGENTS.md` is no longer tracked in git. The marketplace review flagged it:
