@@ -552,7 +552,9 @@ Item {
                 spacing: Style.spacing.sm
                 ModelPicker {
                   id: picker
-                  // Sized to its longest label; the main button and icon actions follow.
+                  // The chip row takes its natural width, clamped to what the
+                  // main button and icon actions leave over (clipped, not
+                  // wrapped, when a narrow pane cannot fit all three chips).
                   width: Math.min(picker.implicitWidth, parent.width - mainButton.width - iconActions.width - posReadout.width - parent.spacing * 3)
                   anchors.verticalCenter: parent.verticalCenter
                   svc: root.svc
