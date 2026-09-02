@@ -385,13 +385,41 @@ check "paragraphs: more than one blank-line break" bash -c "[ \"\$(grep -c '^$' 
 check "piece boundary kept as a paragraph break" bash -c "grep -q '^Second piece begins here' '$DT2/transcript.tidy.md'"
 check "tidy header line" bash -c "head -1 '$DT2/transcript.tidy.md' | grep -q '<!-- omarecorder tidy'"
 check "meta records the tidy stats" bash -c "jq -e '.transcript.tidy.repeats_removed > 0 and .transcript.tidy.paragraphs > 1' '$DT2/meta.json'"
+check "marker at the collapse point with the copy count" grep -Fq 'we need to go around the back and try the door (repeated 4x).' "$DT2/transcript.tidy.md"
+eq "marker appears exactly once" "$(grep -o '(repeated' "$DT2/transcript.tidy.md" | wc -l)" "1"
+eq "raw transcript carries no marker" "$(grep -o '(repeated' "$DT2/transcript.md" | wc -l)" "0"
+# Files tidied before the marker era have no "loops" field in the header;
+# list rebuilds them once and the new meta fields appear.
+sed -i '1s/.*/<!-- omarecorder tidy: 2 paragraphs, 33 repeated words removed, created=old -->/' "$DT2/transcript.tidy.md"
+jq 'del(.transcript.tidy.loops, .transcript.tidy.longest_run_words, .transcript.tidy.loop_warning)' "$DT2/meta.json" > "$DT2/meta.json.old" && mv "$DT2/meta.json.old" "$DT2/meta.json"
+$CLI list >/dev/null
+check "legacy tidy rebuilt by list" grep -q " loops," "$DT2/transcript.tidy.md"
+check "legacy rebuild fills the new meta" bash -c "jq -e '.transcript.tidy.longest_run_words == 33' '$DT2/meta.json'"
+check "meta counts one collapse point" bash -c "jq -e '.transcript.tidy.loops == 1' '$DT2/meta.json'"
+check "meta records the longest run" bash -c "jq -e '.transcript.tidy.longest_run_words == 33' '$DT2/meta.json'"
+check "33 removed words stay under the loop warning" bash -c "jq -e '.transcript.tidy.loop_warning == false' '$DT2/meta.json'"
 check "show --json has tidy_path and tidy_text" bash -c "\"$CLI\" show '$IDT' --json | jq -e '.tidy_path and (.tidy_text | length > 0)'"
 eq "copy --print gives the tidy text" "$("$CLI" copy "$IDT" --print | grep -o 'go around the back' | wc -l)" "1"
 eq "copy --raw --print gives the raw text" "$("$CLI" copy "$IDT" --raw --print | grep -o 'go around the back' | wc -l)" "4"
 check "export uses the tidy text" bash -c "\"$CLI\" export '$IDT' --dir '$TMP/exp-tidy' --no-open >/dev/null && grep -o 'go around the back' '$TMP/exp-tidy/'*.md | wc -l | grep -qx 1"
 check "export --raw uses the raw text" bash -c "\"$CLI\" export '$IDT' --dir '$TMP/exp-raw' --raw --no-open >/dev/null && grep -o 'go around the back' '$TMP/exp-raw/'*.md | wc -l | grep -qx 4"
 check "list backfills tidy for an old transcript" bash -c "rm -f '$DT2/transcript.tidy.md'; \"$CLI\" list >/dev/null; test -s '$DT2/transcript.tidy.md'"
+check "warn threshold at 33 flips the flag" bash -c "OMARECORDER_LOOP_WARN_WORDS=33 \"$CLI\" tidy '$IDT' >/dev/null && jq -e '.transcript.tidy.loop_warning == true' '$DT2/meta.json'"
+check "warn threshold at 34 leaves it off" bash -c "OMARECORDER_LOOP_WARN_WORDS=34 \"$CLI\" tidy '$IDT' >/dev/null && jq -e '.transcript.tidy.loop_warning == false' '$DT2/meta.json'"
 "$CLI" delete "$IDT" --yes >/dev/null
+# A genuine whisper death loop: six copies of an 11-word phrase, 55 words gone
+# at a single collapse point, well over the default 40-word warning threshold.
+IDL=$("$CLI" import "$TMP/quiet.wav" --title "Loop Test"); DL=$("$CLI" show "$IDL" --json | jq -r .dir)
+{
+  printf '<!-- omarecorder model=base.en language=en created=x range=0-end chunks=1 -->\n'
+  printf 'The scene opens on the bridge. '
+  for _ in $(seq 1 6); do printf 'we need to go around the back and try the door. '; done
+  printf 'And the loop ends there.\n'
+} > "$DL/transcript.md"
+check "tidy runs on the loopy take" "$CLI" tidy "$IDL"
+check "a 55 word run trips the loop warning" bash -c "jq -e '.transcript.tidy.longest_run_words == 55 and .transcript.tidy.loop_warning == true' '$DL/meta.json'"
+check "loopy marker counts six copies" grep -Fq 'try the door (repeated 6x).' "$DL/transcript.tidy.md"
+"$CLI" delete "$IDL" --yes >/dev/null
 
 echo "== busy guards"
 IDG=$("$CLI" import "$TMP/quiet.wav" --title "Guard Test")

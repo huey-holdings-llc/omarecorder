@@ -55,6 +55,8 @@ QtObject {
   function jobProgressText(j) { return j && j.progress && j.progress.chunks > 1 ? j.progress.chunk + "/" + j.progress.chunks + " · " : "" }
   function isPartial(rec) { return !!(rec && rec.transcript && rec.transcript.partial) }
   function isStale(rec) { return !!(rec && rec.transcript && rec.transcript.stale) }
+  // The tidy pass flagged a long whisper repetition loop (policy lives in the CLI).
+  function isLoopy(rec) { return !!(rec && rec.transcript && rec.transcript.tidy && rec.transcript.tidy.loop_warning) }
   readonly property string activeJobTitle: activeJob ? (recordingById(activeJob.id) ? displayTitle(recordingById(activeJob.id)) : activeJob.id) : ""
   readonly property string defaultModel: config && config.defaultModel ? config.defaultModel : "base.en"
   readonly property string defaultSource: config && config.defaultSource ? config.defaultSource : "mic"

@@ -718,6 +718,19 @@ Item {
                 font.pixelSize: Style.font.caption
               }
 
+              Text {
+                visible: !root.selectedJob && root.svc && root.selected && root.svc.isLoopy(root.selected)
+                width: parent.width
+                text: "Whisper looped on this take (longest repeat "
+                  + (root.selected && root.selected.transcript && root.selected.transcript.tidy && root.selected.transcript.tidy.longest_run_words != null
+                     ? root.selected.transcript.tidy.longest_run_words : "?")
+                  + " words removed). Re-transcribe with a larger model or a shorter chunk length."
+                color: Color.accent
+                wrapMode: Text.Wrap
+                font.family: root.fontFamily
+                font.pixelSize: Style.font.caption
+              }
+
               // Transcript tools sit above the text, outside the scroll area, so
               // they stay put however far down a long transcript you are.
               Row {
