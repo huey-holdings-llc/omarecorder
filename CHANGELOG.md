@@ -3,7 +3,7 @@
 All notable changes to this project are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow SemVer.
 
-## [Unreleased]
+## [1.3.1] - 2026-09-02
 
 ### Fixed
 - The model chips no longer get clipped. The playback readout reserved width
