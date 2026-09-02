@@ -44,6 +44,14 @@ Item {
   property bool mpvPaused: false
   property real positionS: 0
   readonly property bool playing: playingId !== "" && !mpvPaused
+  // A listening preference, kept for the session: never reset per recording.
+  property real speedX: 1.0
+  readonly property var speedSteps: [1, 1.25, 1.5, 2]
+  function cycleSpeed(dir) {
+    var i = speedSteps.indexOf(speedX); if (i < 0) i = 0
+    speedX = speedSteps[(i + dir + speedSteps.length) % speedSteps.length]
+    mpvSend(["set_property", "speed", speedX])
+  }
 
   property color background: Color.popups.background
   property color foreground: Color.popups.text
@@ -106,7 +114,7 @@ Item {
   function ensureSelection() { if (selectedIndex < 0 && rows.length > 0) selectedId = rows[0].id }
   readonly property string hintsText: root.trimMode
     ? "Space play   ←→ seek   [ ] mark start / end   Enter trim   Esc leave trim mode"
-    : "↑↓ select   Enter open / transcribe   Ctrl+M model   Space play   ←→ seek   F2 rename   F3 trim   F4 raw   Del delete   Esc close"
+    : "↑↓ select   Enter open / transcribe   Ctrl+M model   Space play   Ctrl+S speed   ←→ seek   F2 rename   F3 trim   F4 raw   Del delete   Esc close"
   function select(delta) {
     if (rows.length === 0) return
     var i = selectedIndex < 0 ? (delta < 0 ? rows.length - 1 : 0) : (selectedIndex + delta + rows.length) % rows.length
@@ -252,6 +260,10 @@ Item {
       if (connected) {
         write(JSON.stringify({ command: ["observe_property", 1, "time-pos"] }) + "\n")
         write(JSON.stringify({ command: ["observe_property", 2, "pause"] }) + "\n")
+        write(JSON.stringify({ command: ["observe_property", 3, "speed"] }) + "\n")
+        // mpv respawns on every play; re-sending here is what makes the
+        // chosen speed a session preference rather than a per-play one.
+        if (root.speedX !== 1) write(JSON.stringify({ command: ["set_property", "speed", root.speedX] }) + "\n")
       } else if (root.playingId !== "" && !mpvRetry.running) {
         root.stopPlayback()   // mpv exited (end of file, or stop-play)
       }
@@ -266,6 +278,8 @@ Item {
             if (root.previewing && msg.data >= root.trimTo) { root.mpvSend(["set_property", "pause", true]); root.previewing = false }
           } else if (msg.name === "pause") {
             root.mpvPaused = msg.data === true
+          } else if (msg.name === "speed" && typeof msg.data === "number") {
+            root.speedX = msg.data
           }
         } else if (msg.event === "end-file") {
           root.stopPlayback()
@@ -353,6 +367,9 @@ Item {
           }
           else if ((event.modifiers & Qt.ControlModifier) && event.key === Qt.Key_M) {
             root.cycleModel((event.modifiers & Qt.ShiftModifier) ? -1 : 1); event.accepted = true
+          }
+          else if ((event.modifiers & Qt.ControlModifier) && event.key === Qt.Key_S) {
+            root.cycleSpeed((event.modifiers & Qt.ShiftModifier) ? -1 : 1); event.accepted = true
           }
           else if (event.key === Qt.Key_Return || event.key === Qt.Key_Enter) {
             if (root.svc && root.selected && root.selected.has_transcript && !(event.modifiers & Qt.ShiftModifier)) root.svc.openTranscript(root.selected.id)
@@ -679,7 +696,8 @@ Item {
                   // playback starts. fmtClock matches the waveform labels.
                   anchors.verticalCenter: parent.verticalCenter
                   visible: !!(root.selected && root.playingId === root.selected.id)
-                  text: root.selected ? Fmt.fmtClock(root.positionS) + " / " + Fmt.fmtClock(root.selected.duration_s) : ""
+                  text: root.selected ? Fmt.fmtClock(root.positionS) + " / " + Fmt.fmtClock(root.selected.duration_s)
+                    + (root.speedX !== 1 ? " · " + root.speedX + "x" : "") : ""
                   textFormat: Text.PlainText
                   color: root.dim
                   font.family: root.fontFamily
