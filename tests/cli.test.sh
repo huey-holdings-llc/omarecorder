@@ -520,6 +520,21 @@ DLM2="$TMP/dlmodels2"; mkdir -p "$DLM2"
 eq "plain download exits 0" "$(cat "$TMP/rc")" "0"
 eq "and its job is gone from the raw state" "$(jq -r '.jobs|length' "$RUN/state.json")" "0"
 
+# The chunk override (#38): validated, recorded in meta, parked and replayed.
+fails "chunk-s rejects zero" bash -c "PATH=\"$STUB:\$PATH\" VOXTYPE_MODELS_DIR=\"$DLM\" \"$CLI\" transcribe \"$IDD\" --model small.en --chunk-s 0"
+fails "chunk-s rejects non-numeric" bash -c "PATH=\"$STUB:\$PATH\" VOXTYPE_MODELS_DIR=\"$DLM\" \"$CLI\" transcribe \"$IDD\" --model small.en --chunk-s abc"
+jq -cn '{recording:null,jobs:[],version:1}' > "$RUN/state.json"
+( PATH="$STUB:$PATH" VOXTYPE_MODELS_DIR="$DLM" "$CLI" transcribe "$IDD" --model small.en --chunk-s 1 >/dev/null 2>&1; echo $? > "$TMP/rc" )
+eq "chunk override run exits 0" "$(cat "$TMP/rc")" "0"
+check "1 s pieces split the 3 s clip in three" bash -c "head -1 \"$DD/transcript.md\" | grep -q 'chunks=3'"
+eq "meta records the chunk length used" "$(jq -r .transcript.chunk_s "$DD/meta.json")" "1"
+mkdir -p "$TMP/dlm3"
+( PATH="$STUBSNAP:$PATH" VOXTYPE_MODELS_DIR="$TMP/dlm3" "$CLI" transcribe "$IDD" --model small.en --chunk-s 7 --download >/dev/null 2>&1 )
+eq "then carries chunk_s" "$(jq -r '.jobs[0]."then".chunk_s' "$TMP/state.mid")" "7"
+mkdir -p "$TMP/dlm4"; jq -cn '{recording:null,jobs:[],version:1}' > "$RUN/state.json"
+( PATH="$STUB:$PATH" VOXTYPE_MODELS_DIR="$TMP/dlm4" "$CLI" transcribe "$IDD" --model small.en --chunk-s 1 --download >/dev/null 2>&1 )
+check "replayed chunk override splits in three" bash -c "head -1 \"$DD/transcript.md\" | grep -q 'chunks=3'"
+
 # Guard rails unchanged.
 ( PATH="$STUB:$PATH" VOXTYPE_MODELS_DIR="$TMP/nomodels" "$CLI" transcribe "$IDD" --model small.en >/dev/null 2>&1; echo $? > "$TMP/rc" )
 eq "without --download still exit 3" "$(cat "$TMP/rc")" "3"
