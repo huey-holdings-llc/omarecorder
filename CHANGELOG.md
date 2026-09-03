@@ -15,6 +15,19 @@ All notable changes to this project are documented here. Format follows
   ran, the transcript header and `meta.json` say so; when it fails, the
   original audio is transcribed instead and the fallback is logged.
   `--no-enhance` overrides the config for one run. (#48)
+- A corrections dictionary tidy applies to every transcript: plain text at
+  `~/.config/omarecorder/dictionary`, one `what whisper wrote -> what you
+  meant` per line, matched literally, case-insensitively and on whole words
+  or phrases only. The raw transcript is never touched. It arrives seeded
+  with a starter set of real whisper mishearings (Omarchy names, terminal
+  vocabulary, tabletop and gaming words), created once and never rewritten
+  by the app. `omarecorder dictionary` lists, `add` appends, `edit` opens
+  the file, `export`/`import` move lists around (import merges: duplicates
+  skipped, a conflicting entry keeps yours, malformed lines named), and
+  `prompt --copy` puts a ready-made request on the clipboard so your own
+  LLM can suggest entries; Settings grew a row with all of it. Editing the
+  dictionary refreshes affected tidy transcripts the next time the Library
+  lists them. (#47)
 
 ## [1.3.1] - 2026-09-02
 
