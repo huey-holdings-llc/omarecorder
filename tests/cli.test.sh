@@ -421,6 +421,86 @@ check "a 55 word run trips the loop warning" bash -c "jq -e '.transcript.tidy.lo
 check "loopy marker counts six copies" grep -Fq 'try the door (repeated 6x).' "$DL/transcript.tidy.md"
 "$CLI" delete "$IDL" --yes >/dev/null
 
+echo "== dictionary"
+DICT="$XDG_CONFIG_HOME/omarecorder/dictionary"
+# The first dictionary command seeds the starter file; an existing file is
+# never touched again, however it got there.
+check "dictionary seeds the starter file" bash -c "\"$CLI\" dictionary >/dev/null && test -s \"$DICT\""
+check "starter teaches the safety rule" grep -q 'never map a word' "$DICT"
+check "starter corrects the app's own name" grep -Fq 'oma record -> OmaRecorder' "$DICT"
+NSEED=$("$CLI" dictionary --json | jq -r '.count')
+eq "count matches the entry lines in the file" "$(grep -Evc '^[[:space:]]*(#|$)' "$DICT")" "$NSEED"
+printf '# mine\n' > "$DICT"
+"$CLI" dictionary >/dev/null
+eq "an existing file is never reseeded" "$(cat "$DICT")" "# mine"
+check "help mentions dictionary" bash -c "\"$CLI\" help | grep -q dictionary"
+# A controlled dictionary exercises matching; entries are literal,
+# case-insensitive, whole words and phrases only.
+{
+  printf '# test entries\n'
+  printf 'hyper land -> Hyprland\n'
+  printf 'speed run -> speedrun\n'
+  printf 'peller -> Pelor\n'
+} > "$DICT"
+IDD=$("$CLI" import "$TMP/quiet.wav" --title "Dict Test"); DD=$("$CLI" show "$IDD" --json | jq -r .dir)
+{
+  printf '<!-- omarecorder model=base.en language=en created=x range=0-end chunks=1 -->\n'
+  printf 'We booted hyper land on the laptop. My speed run failed. HYPER LAND again. It ran hyper\n'
+  printf 'land fine.\n'
+  printf '\n'
+  printf 'The cleric of peller kept the speed running mark. Peller helps. That is peller'\''s shield.\n'
+} > "$DD/transcript.md"
+check "tidy applies the dictionary" "$CLI" tidy "$IDD"
+eq "phrase corrected, case-insensitive, across a line break" "$(grep -o 'Hyprland' "$DD/transcript.tidy.md" | wc -l)" "3"
+check "whole sentence reads corrected" grep -Fq 'My speedrun failed.' "$DD/transcript.tidy.md"
+check "no match inside a longer word" grep -Fq 'speed running' "$DD/transcript.tidy.md"
+eq "single word corrected, possessive included" "$(grep -o 'Pelor' "$DD/transcript.tidy.md" | wc -l)" "3"
+eq "raw transcript untouched by the dictionary" "$(grep -o 'hyper land' "$DD/transcript.md" | wc -l)" "1"
+check "meta counts the corrections" bash -c "jq -e '.transcript.tidy.dict_replacements >= 5' '$DD/meta.json'"
+# add: appends one validated entry
+check "dictionary add appends" bash -c "\"$CLI\" dictionary add 'oh ma' 'Omarchy' >/dev/null && grep -Fq 'oh ma -> Omarchy' \"$DICT\""
+fails "add rejects a duplicate heard form" "$CLI" dictionary add 'oh ma' 'OmaRecorder'
+fails "add rejects an empty heard form" "$CLI" dictionary add '' 'x'
+fails "add rejects an arrow in the heard form" "$CLI" dictionary add 'a -> b' 'c'
+eq "dictionary --json counts four entries" "$("$CLI" dictionary --json | jq -r '.count')" "4"
+# prompt: ready to paste, with the current entries inlined
+check "prompt embeds the current entries" bash -c "\"$CLI\" dictionary prompt | grep -Fq 'hyper land -> Hyprland'"
+check "prompt carries the phrase safety example" bash -c "\"$CLI\" dictionary prompt | grep -Fq 'get push'"
+# export writes a byte-identical copy
+check "export writes a copy" bash -c "\"$CLI\" dictionary export '$TMP/dict.copy' >/dev/null && diff -q \"$DICT\" '$TMP/dict.copy' >/dev/null"
+# import merges: new added, duplicates skipped, conflicts keep the existing
+# entry, malformed lines reported by number, all in one summary
+{
+  printf 'hyper land -> HyprLand\n'
+  printf 'speed run -> speedrun\n'
+  printf 'quick shell -> Quickshell\n'
+  printf 'garbage line without an arrow\n'
+} > "$TMP/dict.new"
+IMPOUT=$("$CLI" dictionary import "$TMP/dict.new")
+check "import adds the new entry" grep -Fq 'quick shell -> Quickshell' "$DICT"
+check "conflict keeps the existing correction" grep -Fq 'hyper land -> Hyprland' "$DICT"
+check "conflicting new form is not imported" bash -c "! grep -Fq 'HyprLand' \"$DICT\""
+check "summary counts one added" grep -q '1 added' <<<"$IMPOUT"
+check "summary counts one duplicate" grep -q '1 duplicate' <<<"$IMPOUT"
+check "summary counts one conflict" grep -q '1 conflict' <<<"$IMPOUT"
+check "summary names the malformed line" grep -q 'line 4' <<<"$IMPOUT"
+fails "import with nothing usable fails" bash -c "printf 'junk\n' > '$TMP/dict.junk' && \"$CLI\" dictionary import '$TMP/dict.junk'"
+# self-heal: a dictionary newer than a tidy file rebuilds it on list
+check "list refreshes tidy when the dictionary is newer" bash -c "sleep 1; \"$CLI\" dictionary add 'the laptop' 'the ThinkPad' >/dev/null && \"$CLI\" list >/dev/null && grep -q 'ThinkPad' '$DD/transcript.tidy.md'"
+"$CLI" delete "$IDD" --yes >/dev/null
+# Upgrade path: tidy files are current but the dictionary does not exist yet.
+# A plain list must seed the starter and refresh the stale tidies in the same
+# pass ("owl bear" is a starter entry the test dictionary above lacks).
+IDU=$("$CLI" import "$TMP/quiet.wav" --title "Upgrade Test"); DU=$("$CLI" show "$IDU" --json | jq -r .dir)
+printf '<!-- omarecorder model=base.en language=en created=x range=0-end chunks=1 -->\nThe owl bear waited by the door.\n' > "$DU/transcript.md"
+"$CLI" tidy "$IDU" >/dev/null
+rm -f "$DICT"; sleep 1
+"$CLI" list >/dev/null
+check "list seeds the dictionary on upgrade" test -s "$DICT"
+check "and refreshes existing tidies with the starter" grep -q 'owlbear' "$DU/transcript.tidy.md"
+"$CLI" delete "$IDU" --yes >/dev/null
+printf '# emptied by the test suite\n' > "$DICT"
+
 echo "== busy guards"
 IDG=$("$CLI" import "$TMP/quiet.wav" --title "Guard Test")
 jq -cn --arg id "$IDG" '{recording:null,jobs:[{type:"transcribe",id:$id,model:"base.en",started_at:0}],version:1}' > "$RUN/state.json"
@@ -534,6 +614,57 @@ eq "then carries chunk_s" "$(jq -r '.jobs[0]."then".chunk_s' "$TMP/state.mid")" 
 mkdir -p "$TMP/dlm4"; jq -cn '{recording:null,jobs:[],version:1}' > "$RUN/state.json"
 ( PATH="$STUB:$PATH" VOXTYPE_MODELS_DIR="$TMP/dlm4" "$CLI" transcribe "$IDD" --model small.en --chunk-s 1 --download >/dev/null 2>&1 )
 check "replayed chunk override splits in three" bash -c "head -1 \"$DD/transcript.md\" | grep -q 'chunks=3'"
+
+# The audio cleanup pass (#48): a temporary copy is enhanced (highpass,
+# afftdn, two-pass loudnorm) and transcribed; audio.wav is never modified.
+eq "enhanceAudio defaults to false" "$($CLI config get enhanceAudio)" "false"
+check "enhanceAudio accepts true" "$CLI" config set enhanceAudio true
+check "enhanceAudio stored as a real boolean" bash -c "\"$CLI\" config get --json | jq -e '.enhanceAudio == true' >/dev/null"
+fails "enhanceAudio rejects other values" "$CLI" config set enhanceAudio maybe
+"$CLI" config set enhanceAudio false >/dev/null
+cp "$DD/audio.wav" "$TMP/enh.before.wav"
+jq -cn '{recording:null,jobs:[],version:1}' > "$RUN/state.json"
+( PATH="$STUB:$PATH" VOXTYPE_MODELS_DIR="$DLM" "$CLI" transcribe "$IDD" --model small.en --enhance >/dev/null 2>&1; echo $? > "$TMP/rc" )
+eq "transcribe --enhance exits 0" "$(cat "$TMP/rc")" "0"
+check "header records the cleanup pass" bash -c "head -1 \"$DD/transcript.md\" | grep -q 'enhanced=true'"
+eq "meta records enhanced true" "$(jq -r .transcript.enhanced "$DD/meta.json")" "true"
+check "audio.wav untouched by the pass" cmp -s "$TMP/enh.before.wav" "$DD/audio.wav"
+check "no enhance temp left behind" bash -c "! ls \"$DD\"/audio.tx.* >/dev/null 2>&1"
+( PATH="$STUB:$PATH" VOXTYPE_MODELS_DIR="$DLM" "$CLI" transcribe "$IDD" --model small.en >/dev/null 2>&1 )
+check "off by default: header has no enhanced tag" bash -c "! head -1 \"$DD/transcript.md\" | grep -q enhanced"
+eq "meta records enhanced false" "$(jq -r .transcript.enhanced "$DD/meta.json")" "false"
+"$CLI" config set enhanceAudio true >/dev/null
+( PATH="$STUB:$PATH" VOXTYPE_MODELS_DIR="$DLM" "$CLI" transcribe "$IDD" --model small.en >/dev/null 2>&1 )
+check "config true turns the pass on" bash -c "head -1 \"$DD/transcript.md\" | grep -q 'enhanced=true'"
+( PATH="$STUB:$PATH" VOXTYPE_MODELS_DIR="$DLM" "$CLI" transcribe "$IDD" --model small.en --no-enhance >/dev/null 2>&1 )
+eq "--no-enhance overrides the config" "$(jq -r .transcript.enhanced "$DD/meta.json")" "false"
+"$CLI" config set enhanceAudio false >/dev/null
+# Chunked long take: the cleanup runs once on the tx input, before the split.
+( PATH="$STUB:$PATH" VOXTYPE_MODELS_DIR="$DLM" "$CLI" transcribe "$IDD" --model small.en --chunk-s 1 --enhance >/dev/null 2>&1; echo $? > "$TMP/rc" )
+eq "enhanced chunked run exits 0" "$(cat "$TMP/rc")" "0"
+check "still split into three pieces" bash -c "head -1 \"$DD/transcript.md\" | grep -q 'chunks=3'"
+check "and carries the enhanced tag" bash -c "head -1 \"$DD/transcript.md\" | grep -q 'enhanced=true'"
+# Parked on a download: the resolved choice rides the then intent and replays.
+mkdir -p "$TMP/dlm5"
+( PATH="$STUBSNAP:$PATH" VOXTYPE_MODELS_DIR="$TMP/dlm5" "$CLI" transcribe "$IDD" --model small.en --enhance --download >/dev/null 2>&1 )
+eq "then carries enhance" "$(jq -r '.jobs[0]."then".enhance' "$TMP/state.mid")" "true"
+mkdir -p "$TMP/dlm6"; jq -cn '{recording:null,jobs:[],version:1}' > "$RUN/state.json"
+( PATH="$STUB:$PATH" VOXTYPE_MODELS_DIR="$TMP/dlm6" "$CLI" transcribe "$IDD" --model small.en --enhance --download >/dev/null 2>&1 )
+check "replayed chain keeps the enhanced tag" bash -c "head -1 \"$DD/transcript.md\" | grep -q 'enhanced=true'"
+# A failing cleanup falls back to the original audio instead of failing the job.
+FFENH="$TMP/ffenh"; mkdir -p "$FFENH"
+REAL_FFMPEG=$(command -v ffmpeg)
+cat > "$FFENH/ffmpeg" <<FFEOF
+#!/bin/bash
+for a in "\$@"; do case "\$a" in *afftdn*) exit 1 ;; esac; done
+exec "$REAL_FFMPEG" "\$@"
+FFEOF
+chmod +x "$FFENH/ffmpeg"
+jq -cn '{recording:null,jobs:[],version:1}' > "$RUN/state.json"
+( PATH="$FFENH:$STUB:$PATH" VOXTYPE_MODELS_DIR="$DLM" "$CLI" transcribe "$IDD" --model small.en --enhance >/dev/null 2>&1; echo $? > "$TMP/rc" )
+eq "failed cleanup still transcribes" "$(cat "$TMP/rc")" "0"
+eq "and records enhanced false" "$(jq -r .transcript.enhanced "$DD/meta.json")" "false"
+check "fallback is logged" bash -c "grep -q 'enhance failed' \"$XDG_STATE_HOME/omarecorder/omarecorder.log\""
 
 # model cancel (#39): validated, idempotent, atomic job + chain removal.
 fails "cancel unknown model" "$CLI" model cancel bogus
@@ -904,6 +1035,14 @@ if command -v voxtype >/dev/null && [[ -f "${VOXTYPE_MODELS_DIR:-$HOME/.local/sh
   check "previous transcript kept on re-run" bash -c "head -1 '$D3/transcript.prev.md' | grep -q 'range=0-end'"
   eq "has_prev true after a re-run" "$($CLI show "$ID3" --json | jq -r .has_prev)" "true"
   check "show --json has prev_path and prev_text" bash -c "\"$CLI\" show '$ID3' --json | jq -e '.prev_path and (.prev_text | length > 0)'"
+
+  echo "== transcribe (cleanup pass, real engine)"
+  cp "$D3/audio.wav" "$TMP/enh.real.before.wav"
+  check "enhanced transcribe (real) succeeds" "$CLI" transcribe "$ID3" --model base.en --enhance
+  check "real enhanced header tag" bash -c "head -1 '$D3/transcript.md' | grep -q 'enhanced=true'"
+  check "enhanced transcript still mentions 'right'" bash -c "grep -qi right '$D3/transcript.md'"
+  check "recording unchanged by the real pass" cmp -s "$TMP/enh.real.before.wav" "$D3/audio.wav"
+  check "no enhance temps after the real pass" bash -c "! ls '$D3'/audio.tx.* >/dev/null 2>&1"
 
   echo "== transcribe (bad OMARECORDER_CHUNK_S falls back)"
   check "non-numeric OMARECORDER_CHUNK_S still transcribes" env OMARECORDER_CHUNK_S=abc "$CLI" transcribe "$ID3" --model base.en
