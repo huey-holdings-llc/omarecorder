@@ -168,13 +168,13 @@ are left untouched.
 
 ## Use
 
-* **Bar icon**: a microphone when idle. Left-click opens the popup, right-click
+* **Bar icon**: a pair of tape reels when idle. Left-click opens the popup, right-click
   starts or stops recording. While recording it becomes a red record glyph with
   a running `HH:MM:SS`, replaced by CLIP while the input is on the rails. An
   hourglass means a transcription is running.
 * **Popup keys**: `r` record/stop, `u` resume the last take (when offered),
-  `l` library, `i` import, `s` settings
-  (the Recent list folds away while they are open), `Up`/`Down` and `Enter`
+  `l` library, `i` import, `s` settings, `d` add a dictionary entry
+  (the Recent list folds away while settings are open), `Up`/`Down` and `Enter`
   on recent rows, `Esc`.
 * **Resume after a break**: stopping a recording arms a resume offer. While
   it stands, a "Resume last recording · stopped 12m ago" button sits under
@@ -248,8 +248,9 @@ playback speed (1x, 1.25x, 1.5x, 2x) for the rest of the session.
   skipped, a conflicting entry keeps yours). Edit the file and the Library
   refreshes affected transcripts the next time it lists them.
 * **Play and trim**: the waveform strip in the Library is a scrubber. Click to
-  seek, `Space` to play or pause. Playback runs in-process (QtMultimedia, loaded
-  only while the Library is open); `omarecorder play` uses mpv instead. The
+  seek, `Space` to play or pause. Playback runs in mpv, driven over its IPC
+  socket and started only while something plays; `omarecorder play` uses the
+  same player from the CLI. The
   scissors button (or `F3`) enters trim mode: two drag handles with start and
   end badges, or play and press `[` and `]` to mark the range at the playhead.
   Preview plays the range, Trim asks once ("Keep 00:12 to 24:36 and cut the
@@ -348,6 +349,7 @@ omarecorder record resume                                          continue the 
 omarecorder record stop | toggle | status [--json]                 control / inspect
 omarecorder import <file> [--move] [--title T]                     bring an existing audio file in
 omarecorder list [--json] | show <id> [--json] | analyze <id>      browse / measure levels
+omarecorder search <text>                                          ids whose transcript contains the text
 omarecorder rename <id> <title> | delete <id> [--yes] [--permanent] manage (delete moves to the trash)
 omarecorder note <id> <text>                                       set a note on a recording (empty text clears it)
 omarecorder trim <id> --from s --to s [--replace] | trim <id> --restore  cut the audio (first original kept)
@@ -357,9 +359,9 @@ omarecorder dictionary [--json] | dictionary add <heard> <written> corrections t
 omarecorder dictionary edit | prompt [--copy] | export [path] | import <file|--clipboard>
 omarecorder export <id> [--vault P | --dir P] [--no-open] [--raw]   transcript to an Obsidian note
 omarecorder vaults [--json]                                        Obsidian vaults on this machine (* = open)
-omarecorder transcribe <id> [--model M] [--language L] [--from s --to s] [--enhance|--no-enhance] [--download]
+omarecorder transcribe <id> [--model M] [--language L] [--from s --to s] [--chunk-s N] [--enhance|--no-enhance] [--download]
 omarecorder cancel <id> | estimate <id> --model M
-omarecorder models [--json] | model download <name>
+omarecorder models [--json] | model download <name> | model cancel <name>
 omarecorder play <id> [--from s] | stop-play | open <id> | folder <id>
 omarecorder config get [key|--json] | config set <key> <value>
 omarecorder setup check [--json] | library | status [--json] | version
@@ -435,6 +437,12 @@ No, never. With `enhanceAudio` on (or `transcribe <id> --enhance`), the cleanup
 runs on a temporary copy that only whisper hears and that is deleted
 afterwards; `audio.wav` stays exactly as recorded, and playback always plays
 what was actually recorded.
+
+When to turn it on: it helps close-microphone recordings in noisy rooms (a
+fan, a loud laptop). On distant-microphone recordings of several people, a
+D&D table say, it measurably hurt accuracy in testing, which is why it ships
+off by default. Try it per recording with `--enhance` before flipping the
+toggle.
 
 **Can I bring in recordings from elsewhere?**
 Yes. `omarecorder import <file>` (or `i` in the popup) takes anything ffmpeg can

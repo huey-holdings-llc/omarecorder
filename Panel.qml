@@ -146,6 +146,7 @@ Panel {
         else if (t === "s" || t === "S") root.settingsOpen = !root.settingsOpen
         else if (t === "i" || t === "I") root.importAudio()
         else if ((t === "u" || t === "U") && root.ready && root.svc.resumable && !root.recording) root.svc.resumeRecording()
+        else if ((t === "d" || t === "D") && root.ready) { root.settingsOpen = true; Qt.callLater(settingsSection.focusDictAdd) }
       }
 
       Flickable {
@@ -379,7 +380,10 @@ Panel {
           Text {
             width: parent.width
             horizontalAlignment: Text.AlignHCenter
-            text: "r record · l library · i import · s settings · Esc close"
+            // Wraps to a second centered line when the panel is narrow;
+            // the legend degrades, it never clips.
+            wrapMode: Text.Wrap
+            text: "r record · l library · i import · s settings · d dictionary · Esc close"
             color: root.dim
             font.family: root.fontFamily
             font.pixelSize: Style.font.caption

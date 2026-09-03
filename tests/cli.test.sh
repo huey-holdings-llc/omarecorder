@@ -499,6 +499,20 @@ rm -f "$DICT"; sleep 1
 check "list seeds the dictionary on upgrade" test -s "$DICT"
 check "and refreshes existing tidies with the starter" grep -q 'owlbear' "$DU/transcript.tidy.md"
 "$CLI" delete "$IDU" --yes >/dev/null
+
+echo "== ux polish"
+eq "empty list is script-clean" "$(OMARECORDER_DIR="$TMP/EmptyRoot" "$CLI" list)" ""
+check "dictionary list --json is JSON too" bash -c "\"$CLI\" dictionary list --json | jq -e '.count >= 0' >/dev/null"
+printf 'alpha -> beta -> gamma\n' > "$TMP/dict.arrows"
+"$CLI" dictionary import "$TMP/dict.arrows" >/dev/null
+check "json splits at the first arrow like the engine" bash -c "\"$CLI\" dictionary --json | jq -e '.entries[] | select(.heard==\"alpha\" and .written==\"beta -> gamma\")' >/dev/null"
+check "export failure dies in the house voice" bash -c "! \"$CLI\" dictionary export /nonexistent-dir/x 2>/dev/null && \"$CLI\" dictionary export /nonexistent-dir/x 2>&1 | grep -q 'omarecorder:'"
+printf 'junk one\njunk two\nreal -> entry\n' > "$TMP/dict.bad2"
+check "import names multiple malformed lines grammatically" bash -c "\"$CLI\" dictionary import '$TMP/dict.bad2' | grep -q 'lines 1, 2'"
+check "prompt defuses its own placeholder" bash -c "\"$CLI\" dictionary prompt | grep -Fq 'ask me what I talk about'"
+IDX=$("$CLI" import "$TMP/quiet.wav" --title "Hint Test")
+check "bogus model hint does not suggest an impossible download" bash -c "OUT=\$(\"$CLI\" transcribe '$IDX' --model bogus 2>&1); ! grep -q 'model download bogus' <<<\"\$OUT\" && grep -q 'not in the catalog' <<<\"\$OUT\""
+"$CLI" delete "$IDX" --yes >/dev/null
 printf '# emptied by the test suite\n' > "$DICT"
 
 echo "== busy guards"

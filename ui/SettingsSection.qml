@@ -16,6 +16,9 @@ Column {
   readonly property bool editing: dirField.activeFocus || dictHeard.activeFocus || dictWritten.activeFocus
   property bool dictAddOpen: false
   property string dictStatus: ""
+  // The popup's `d` key lands here: settings open, Add row expanded, cursor
+  // in the heard field.
+  function focusDictAdd() { dictAddOpen = true; dictHeard.forceActiveFocus() }
   readonly property var installedModels: {
     var out = []
     var ms = svc ? svc.models : []
@@ -102,35 +105,39 @@ Column {
       anchors.margins: Style.spacing.sm
       spacing: Style.spacing.xxs
       Text {
-        text: "Dictionary (" + ((root.svc && root.svc.dictionary) ? root.svc.dictionary.count : 0) + " entries) · fixes whisper mishearings in tidy transcripts"
+        text: "Dictionary (" + ((root.svc && root.svc.dictionary) ? root.svc.dictionary.count : 0) + " entries) · fixes words the transcriber keeps getting wrong"
         color: Qt.darker(root.foreground, 1.4); font.family: root.fontFamily; font.pixelSize: Style.font.caption
       }
       Row {
         width: parent.width; spacing: Style.spacing.sm
         Button {
           width: (parent.width - parent.spacing * 3) / 4; text: "Edit"
+          tooltipText: "Open the dictionary file in your editor"
           fontSize: Style.font.caption; horizontalPadding: Style.spacing.sm; verticalPadding: Style.spacing.xxs
           foreground: root.foreground; fontFamily: root.fontFamily
           onClicked: { if (root.svc) root.svc.dictEdit(); root.dictStatus = "opened in your editor" ; dictStatusClear.restart() }
         }
         Button {
-          width: (parent.width - parent.spacing * 3) / 4; text: "Add"
+          width: (parent.width - parent.spacing * 3) / 4; text: "Add (d)"
           active: root.dictAddOpen
+          tooltipText: "Add one correction: what was heard, what you meant"
           fontSize: Style.font.caption; horizontalPadding: Style.spacing.sm; verticalPadding: Style.spacing.xxs
           foreground: root.foreground; fontFamily: root.fontFamily
           onClicked: { root.dictAddOpen = !root.dictAddOpen; if (root.dictAddOpen) dictHeard.forceActiveFocus() }
         }
         Button {
           width: (parent.width - parent.spacing * 3) / 4; text: "Copy prompt"
+          tooltipText: "Copy a ready-made request to the clipboard; ask your LLM, then Paste entries"
           fontSize: Style.font.caption; horizontalPadding: Style.spacing.sm; verticalPadding: Style.spacing.xxs
           foreground: root.foreground; fontFamily: root.fontFamily
-          onClicked: if (root.svc) root.svc.dictCopyPrompt(function(code) { root.dictStatus = code === 0 ? "prompt copied; paste it into your LLM" : ""; dictStatusClear.restart() })
+          onClicked: if (root.svc) root.svc.dictCopyPrompt(function(code) { root.dictStatus = code === 0 ? "prompt copied · fill in the \"I talk about\" line, then paste it into your LLM" : (root.svc.lastError || "could not copy"); dictStatusClear.restart() })
         }
         Button {
           width: (parent.width - parent.spacing * 3) / 4; text: "Paste entries"
+          tooltipText: "Merge dictionary lines from the clipboard (duplicates skipped, conflicts keep yours)"
           fontSize: Style.font.caption; horizontalPadding: Style.spacing.sm; verticalPadding: Style.spacing.xxs
           foreground: root.foreground; fontFamily: root.fontFamily
-          onClicked: if (root.svc) root.svc.dictImportClipboard(function(code, out) { root.dictStatus = code === 0 ? String(out).trim() : ""; dictStatusClear.restart() })
+          onClicked: if (root.svc) root.svc.dictImportClipboard(function(code, out) { root.dictStatus = code === 0 ? String(out).trim() : (root.svc.lastError || "nothing imported"); dictStatusClear.restart() })
         }
       }
       Row {
