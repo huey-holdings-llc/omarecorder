@@ -128,7 +128,7 @@ Panel {
     open: root.opened
     focusTarget: keyCatcher
     contentWidth: panel.fittedContentWidth(Style.space(380))
-    contentHeight: panel.fittedContentHeight(column.implicitHeight, Style.space(600))
+    contentHeight: panel.fittedContentHeight(column.implicitHeight + keyLegend.implicitHeight + Style.spacing.xs, Style.space(600))
 
     PanelKeyCatcher {
       id: keyCatcher
@@ -151,7 +151,11 @@ Panel {
 
       Flickable {
         id: panelFlick
-        anchors.fill: parent
+        anchors.top: parent.top
+        anchors.left: parent.left
+        anchors.right: parent.right
+        anchors.bottom: keyLegend.top
+        anchors.bottomMargin: Style.spacing.xs
         contentWidth: width
         contentHeight: column.implicitHeight
         clip: true
@@ -377,18 +381,25 @@ Panel {
             fontFamily: root.fontFamily
           }
 
-          Text {
-            width: parent.width
-            horizontalAlignment: Text.AlignHCenter
-            // Wraps to a second centered line when the panel is narrow;
-            // the legend degrades, it never clips.
-            wrapMode: Text.Wrap
-            text: "r record · l library · i import · s settings · d dictionary · Esc close"
-            color: root.dim
-            font.family: root.fontFamily
-            font.pixelSize: Style.font.caption
-          }
         }
+      }
+
+      // The key legend is pinned below the scroll area, so it stays visible
+      // while the settings (or a long Recent list) scroll above it.
+      Text {
+        id: keyLegend
+        anchors.left: parent.left
+        anchors.right: parent.right
+        anchors.bottom: parent.bottom
+        horizontalAlignment: Text.AlignHCenter
+        // Wraps to a second centered line when the panel is narrow; the
+        // non-breaking spaces keep each key with its word, so a wrap can
+        // only happen at a separator, never between "d" and "dictionary".
+        wrapMode: Text.Wrap
+        text: "r record · l library · i import · s settings · d dictionary · Esc close"
+        color: root.dim
+        font.family: root.fontFamily
+        font.pixelSize: Style.font.caption
       }
     }
   }
