@@ -3,9 +3,14 @@
 All notable changes to this project are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow SemVer.
 
-## [Unreleased]
+## [1.4.0] - 2026-09-02
 
 ### Changed
+- The popup's key legend is pinned below the scroll area (it never scrolls
+  out of view), wraps only at its separators, and opening settings (or
+  pressing `d`) reliably lands on the whole section down to the dictionary
+  card. Every screenshot and the marketplace preview were retaken from this
+  release's UI.
 - Pre-release polish from a four-persona UX review. The dictionary card's
   buttons explain themselves (tooltips, a plain-language caption), report
   their failures instead of going quiet, and got a keyboard path (`d` in the
