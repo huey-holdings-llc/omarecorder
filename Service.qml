@@ -63,19 +63,19 @@ QtObject {
   readonly property string defaultSource: config && config.defaultSource ? config.defaultSource : "mic"
 
   // Resume offer: the CLI arms state.last_stop on a clean stop and withdraws
-  // it on a new start, trim, delete or window expiry; this re-checks only
-  // what moves without a state write of its own: the clock (so the button
-  // expires on time) and a transcribe job for the offered take (resuming is
-  // refused while one runs, so no button until it ends; jobs are mirrored
-  // from the same state.json).
+  // it on a new start, trim or delete; there is no time limit. This only
+  // re-checks a transcribe job for the offered take (resuming is refused
+  // while one runs, so no button until it ends; jobs are mirrored from the
+  // same state.json).
   readonly property var lastStop: (state && state.last_stop) ? state.last_stop : null
   readonly property bool resumable: !!(lastStop && lastStop.resumable === true && !recording
-    && now <= (lastStop.resume_until || 0) && !jobFor(lastStop.id))
+    && !jobFor(lastStop.id))
+  // The take's title, for the resume button's tooltip (the label itself
+  // stays generic: an untitled take's display title carries a date).
   readonly property string resumeTitle: {
     if (!lastStop) return ""
     var r = recordingById(lastStop.id)
-    var t = lastStop.title || (r ? displayTitle(r) : lastStop.id)
-    return t.length > 40 ? t.slice(0, 39) + "…" : t
+    return lastStop.title || (r ? displayTitle(r) : lastStop.id)
   }
   readonly property string resumeAgoText: {
     if (!lastStop) return ""
@@ -83,7 +83,8 @@ QtObject {
     if (s < 60) return "just now"
     var m = Math.floor(s / 60)
     if (m < 60) return m + "m ago"
-    return Math.floor(m / 60) + "h " + (m % 60) + "m ago"
+    if (m < 1440) return Math.floor(m / 60) + "h " + (m % 60) + "m ago"
+    return Math.floor(m / 1440) + "d ago"
   }
   function resumeRecording() { run(["record", "resume"]) }
 
@@ -248,7 +249,7 @@ QtObject {
     onTriggered: root.updateElapsed()
   }
 
-  // The resume offer ages ("stopped 12m ago") and expires while nothing else
+  // The resume offer's label ages ("stopped 12m ago") while nothing else
   // ticks, so a slow clock keeps `now` honest only while an offer is armed.
   property Timer resumeTimer: Timer {
     interval: 10000; repeat: true

@@ -103,11 +103,7 @@ strip_header() { sed '1{/^<!--/d}' "$1"; }
 CONFIG_DEFAULTS=$(jq -cn --arg dir "${OMARECORDER_DIR:-$HOME/Recordings}" '{
   recordingsDir: $dir, defaultSource: "mic", defaultModel: "base.en",
   language: "en", keepAwake: true, threads: 0, autoTranscribe: false,
-  resumeWindow: 7200,
   enhanceAudio: false, obsidianVault: "", exportDir: "" }')   # "" = automatic (see resolve_export_target)
-
-# The configured resume window in seconds, defaults applied (0 = resume off).
-resume_window() { local w; w=$(cfg resumeWindow); [[ "$w" =~ ^[0-9]+$ ]] || w=7200; echo "$w"; }
 
 load_config() {
   local file='{}'
@@ -127,7 +123,7 @@ _write_config() {
   local key="$1" val="$2" cur='{}' j
   [[ -f "$CONFIG_FILE" ]] && cur=$(jq -c . "$CONFIG_FILE")
   case "$key" in
-    threads|resumeWindow) j=$(jq -c --arg k "$key" --argjson v "$val" '.[$k]=$v' <<<"$cur") ;;
+    threads) j=$(jq -c --arg k "$key" --argjson v "$val" '.[$k]=$v' <<<"$cur") ;;
     keepAwake|autoTranscribe|enhanceAudio) j=$(jq -c --arg k "$key" --argjson v "$val" '.[$k]=$v' <<<"$cur") ;;
     *) j=$(jq -c --arg k "$key" --arg v "$val" '.[$k]=$v' <<<"$cur") ;;
   esac
@@ -153,15 +149,9 @@ cmd_config() {
         autoTranscribe) [[ "$val" =~ ^(true|false)$ ]] || die "autoTranscribe must be true|false" ;;
         enhanceAudio) [[ "$val" =~ ^(true|false)$ ]] || die "enhanceAudio must be true|false" ;;
         threads) [[ "$val" =~ ^[0-9]+$ ]] || die "threads must be an integer" ;;
-        resumeWindow) [[ "$val" =~ ^[0-9]+$ ]] || die "resumeWindow must be a whole number of seconds (0 turns resume off)" ;;
         *) die "unknown config key: $key" ;;
       esac
-      with_lock _write_config "$key" "$val"; load_config
-      # Turning the resume window off withdraws an armed offer right away:
-      # the popup derives its button from state.json alone and must not keep
-      # offering a resume that can only be refused.
-      if [[ "$key" == "resumeWindow" && "$val" == "0" ]]; then state_set '.last_stop = null'; else bump_state; fi
-      echo "$key=$val" ;;
+      with_lock _write_config "$key" "$val"; load_config; bump_state; echo "$key=$val" ;;
     *) die "usage: config get [key|--json] | config set <key> <value>" ;;
   esac
 }
@@ -378,14 +368,6 @@ _reconcile_state() {
     keep=$(jq -c --argjson j "$j" '. + [$j]' <<<"$keep")
   done < <(jq -c '.jobs[]' <<<"$st")
   st=$(jq -c --argjson k "$keep" '.jobs=$k' <<<"$st")
-  # A resume offer past its window (or with the feature turned off) is dropped
-  # here, so state.json never advertises a resume that would only be refused.
-  if [[ $(jq -r '.last_stop != null' <<<"$st") == "true" ]]; then
-    local win; win=$(resume_window)
-    if (( win == 0 )) || (( now > $(jq -r '.last_stop.resume_until // 0' <<<"$st") )); then
-      st=$(jq -c '.last_stop = null' <<<"$st"); changed=1; log "reconcile: resume window closed"
-    fi
-  fi
   [[ $changed == 1 ]] && save_state "$st"
   return 0
 }
@@ -614,21 +596,20 @@ start_take_meter() {
 
 # record resume: continue the most recently stopped take. Never automatic (the
 # toggle and start always begin a new recording); only the last stop is
-# offered, within resumeWindow seconds, and only while the take is unedited.
-# The new audio goes to separate segment files (audio.seg.wav, or the
-# mic/system pair for a "both" take) and is joined losslessly on stop, so a
-# crash mid-resume leaves the original exactly as it was.
+# offered, only while the take is unedited, and for as long as the offer
+# stands (there is no time limit: a new recording, a trim or a delete is what
+# withdraws it). The new audio goes to separate segment files (audio.seg.wav,
+# or the mic/system pair for a "both" take) and is joined losslessly on stop,
+# so a crash mid-resume leaves the original exactly as it was.
 record_resume() {
   [[ $# -eq 0 ]] || die "usage: record resume"
-  reconcile_state   # an expired offer is withdrawn before we look at it
-  (( $(resume_window) > 0 )) || die "resume is off (config resumeWindow is 0)"
+  reconcile_state
   local st; st=$(read_state)
   [[ $(jq -r '.recording != null' <<<"$st") == "true" ]] && die "already recording"
   local ls; ls=$(jq -c '.last_stop' <<<"$st")
   [[ "$ls" != "null" ]] || die "nothing to resume"
   local id; id=$(jq -r '.id // empty' <<<"$ls")
   id_valid "$id" || { state_set '.last_stop = null'; die "nothing to resume"; }
-  (( $(now_epoch) <= $(jq -r '.resume_until // 0' <<<"$ls") )) || die "the resume window for $id has passed"
   [[ $(jq -r '.resumable == true' <<<"$ls") == "true" ]] || die "$id was trimmed; restore it first (trim $id --restore), then resume"
   local dir; dir=$(rec_dir "$id") || { state_set '.last_stop = null'; die "no recording with id $id"; }
   require_idle "$id"
@@ -853,21 +834,20 @@ recover_segments() {
 }
 
 # arm_resume <dir> <id> <stopped_epoch>: remember a clean stop so `record
-# resume` can continue this take within the configured window (resumeWindow
-# seconds, 0 = off). The stop of a resumed take lands here too: it becomes
-# the last stop again. stopped_epoch is when the recorders were told to stop,
-# not when the slow finalize (mixing, waveform, levels) ended, and the write
-# is guarded: by arm time a newer take may have started (its start cleared
-# the offer on purpose) or stopped (its offer is newer), and an older stop
-# must never clobber either.
+# resume` can continue this take. There is no time limit: the offer stands
+# until it is consumed, a new recording starts, or the take is trimmed or
+# deleted. The stop of a resumed take lands here too: it becomes the last
+# stop again. stopped_epoch is when the recorders were told to stop, not
+# when the slow finalize (mixing, waveform, levels) ended, and the write is
+# guarded: by arm time a newer take may have started (its start cleared the
+# offer on purpose) or stopped (its offer is newer), and an older stop must
+# never clobber either.
 arm_resume() {
-  local dir="$1" id="$2" stopped="$3" win ttl
-  win=$(resume_window)
-  if (( win == 0 )); then bump_state; return 0; fi
+  local dir="$1" id="$2" stopped="$3" ttl
   ttl=$(jq -r '.title // ""' "$dir/meta.json" 2>/dev/null || echo "")
-  state_set --arg id "$id" --arg t "$ttl" --argjson at "$stopped" --argjson until "$((stopped + win))" \
+  state_set --arg id "$id" --arg t "$ttl" --argjson at "$stopped" \
     '.last_stop = (if .recording == null and ((.last_stop == null) or ((.last_stop.stopped_at // 0) <= $at))
-       then {id:$id, title:$t, stopped_at:$at, resume_until:$until, resumable:true} else .last_stop end)'
+       then {id:$id, title:$t, stopped_at:$at, resumable:true} else .last_stop end)'
 }
 
 # finalize_audio <dir>: fill duration/size in meta.json from audio.wav, and
@@ -989,7 +969,7 @@ cmd_status() {
   local out; out=$(jq -c --argjson now "$(now_epoch)" --arg mdir "$VOXTYPE_MODELS_DIR" '
     .recording |= (if . == null then null else . + {elapsed_s: ($now - .started_at)} end)
     | .jobs |= map(. + {elapsed_s: ($now - .started_at)})
-    | .resume = (.last_stop as $ls | if .recording == null and $ls != null and $ls.resumable == true and $now <= ($ls.resume_until // 0)
+    | .resume = (.last_stop as $ls | if .recording == null and $ls != null and $ls.resumable == true
           and (([.jobs[] | select(.type == "transcribe" and .id == $ls.id)] | length) == 0)
         then ($ls + {stopped_ago_s: ($now - ($ls.stopped_at // $now))}) else null end)' <<<"$st")
   # Download progress (bytes_done) is written into the job by _dl_worker itself.

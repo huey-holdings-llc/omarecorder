@@ -176,11 +176,12 @@ are left untouched.
   `l` library, `i` import, `s` settings
   (the Recent list folds away while they are open), `Up`/`Down` and `Enter`
   on recent rows, `Esc`.
-* **Resume after a break**: stopping a recording arms a resume offer for two
-  hours (`resumeWindow` seconds in the config, 0 turns the feature off). While
-  it is armed, a subdued "Resume '<title>' · stopped 12m ago" button sits under
-  Record in the popup, and `omarecorder record resume` does the same from a
-  script. Resuming is never automatic: the bar right-click, the keybinding and
+* **Resume after a break**: stopping a recording arms a resume offer. While
+  it stands, a "Resume last recording · stopped 12m ago" button sits under
+  Record in the popup (the take's title is in its tooltip), and `omarecorder
+  record resume` does the same from a script. There is no time limit: the
+  offer stays until you resume, start a new recording, or trim or delete the
+  take. Resuming is never automatic: the bar right-click, the keybinding and
   the Record button always start a new recording. The continuation is captured
   as a separate segment file and joined losslessly onto the take when you stop
   (for a "both" take the fresh pair is mixed and all three tracks are joined);
@@ -322,9 +323,7 @@ Config keys (`omarecorder config get --json`): `recordingsDir` (`~/Recordings`),
 `keepAwake` (`true`, a systemd idle/sleep inhibitor while recording),
 `autoTranscribe` (`false`; when `true`, stopping a recording starts a
 transcription with the default model, but only if that model is already
-downloaded), `resumeWindow` (`7200`; how long a stopped recording can be
-resumed, in seconds, 0 turns resume off; the window is fixed when the
-recording stops), `enhanceAudio` (`false`; when `true`, transcription runs an
+downloaded), `enhanceAudio` (`false`; when `true`, transcription runs an
 audio cleanup pass, a highpass filter, noise reduction and loudness
 normalization, on a temporary copy of the audio and transcribes that copy;
 `audio.wav` is never modified, and `transcribe <id> --enhance` /

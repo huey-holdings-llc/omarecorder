@@ -244,17 +244,33 @@ Panel {
             onClicked: root.recording ? root.svc.stopRecording(true) : root.toggleRecording()
           }
 
-          // Resume the last stopped take (#49): a subdued secondary affordance
-          // that appears only while the CLI offers one. Record and the toggle
-          // above always start fresh; resuming is its own deliberate action.
+          // Resume the last stopped take (#49): a full-width button in the
+          // same family as Record, directly below it, shown only while the
+          // CLI offers one. Record and the toggle always start fresh;
+          // resuming is its own deliberate action. The label stays generic
+          // (an untitled take's display title carries a date and read badly
+          // when it got cut off); the take's title lives in the tooltip, and
+          // the label is elided up front because the kit button cannot.
           Button {
+            id: resumeButton
             visible: root.ready && !root.recording && root.svc.resumable
             width: parent.width
-            text: "Resume '" + root.svc.resumeTitle + "' · stopped " + root.svc.resumeAgoText + "  (u)"
+            text: resumeLabel.elidedText
             iconText: "󰑊"
-            foreground: root.dim
+            foreground: root.foreground
             fontFamily: root.fontFamily
+            tooltipText: root.ready ? root.svc.resumeTitle : ""
             onClicked: root.svc.resumeRecording()
+            TextMetrics {
+              id: resumeLabel
+              font.family: root.fontFamily
+              font.pixelSize: resumeButton.fontSize
+              elide: Text.ElideRight
+              // The room the label really has: button width minus the icon,
+              // the row gap, the paddings and the reserved border.
+              elideWidth: Math.max(60, resumeButton.width - resumeButton.horizontalPadding * 2 - Style.font.icon - Style.spacing.controlGap * 2)
+              text: root.ready ? "Resume last recording · stopped " + root.svc.resumeAgoText + "  (u)" : ""
+            }
           }
 
           PanelSeparator { width: parent.width; foreground: root.foreground }

@@ -764,8 +764,8 @@ chmod +x "$FAKEAUDIO/pactl" "$FAKEAUDIO/pw-record"
 FAKEPATH="$FAKEAUDIO:$PATH"
 jq -cn '{recording:null,jobs:[],version:1}' > "$RUN/state.json"
 
-eq "resumeWindow defaults to 7200" "$("$CLI" config get resumeWindow)" "7200"
-fails "resumeWindow rejects a non-number" "$CLI" config set resumeWindow soon
+fails "the resumeWindow key is gone" "$CLI" config get resumeWindow
+fails "and cannot be set either" "$CLI" config set resumeWindow 60
 fails "record resume with nothing stopped" "$CLI" record resume
 fails "record resume rejects extra arguments" "$CLI" record resume now
 
@@ -777,7 +777,7 @@ RD="$OMARECORDER_DIR/$RID Resume Take"
 eq "stop arms the resume offer" "$(jq -r '.last_stop.id' "$RUN/state.json")" "$RID"
 eq "the offer carries the title" "$(jq -r '.last_stop.title' "$RUN/state.json")" "Resume Take"
 eq "the offer starts resumable" "$(jq -r '.last_stop.resumable' "$RUN/state.json")" "true"
-check "resume_until is stopped_at plus the window" bash -c "jq -e '.last_stop.resume_until - .last_stop.stopped_at == 7200' '$RUN/state.json'"
+check "the offer records the stop moment and no expiry" bash -c "jq -e '.last_stop.stopped_at > 0 and (.last_stop | has(\"resume_until\") | not)' '$RUN/state.json'"
 "$CLI" config set threads 0 >/dev/null
 eq "the offer survives unrelated state writes" "$(jq -r '.last_stop.id' "$RUN/state.json")" "$RID"
 eq "status --json makes the offer" "$("$CLI" status --json | jq -r '.resume.id')" "$RID"
@@ -821,32 +821,19 @@ eq "the new take is the one offered now" "$(jq -r '.last_stop.id' "$RUN/state.js
 "$CLI" delete "$NEWID" --yes >/dev/null
 eq "deleting the offered take clears the offer" "$(jq -r '.last_stop' "$RUN/state.json")" "null"
 
-# The window: an expired offer is dropped and refused; 0 turns resume off.
+# No time limit: only the popup button and the hotkey resume, and the bar
+# right-click always starts fresh, so the offer simply stands until it is
+# consumed, a new recording starts, or the take is trimmed or deleted.
 NOW=$(date +%s)
-armresume() { # <id> [resume_until]
-  jq -cn --arg id "$1" --argjson t "$((NOW - 100))" --argjson u "${2:-$((NOW + 7200))}" \
-    '{recording:null,jobs:[],version:1,last_stop:{id:$id,title:"Resume Take",stopped_at:$t,resume_until:$u,resumable:true}}' > "$RUN/state.json"
+armresume() { # <id> [stopped_at]
+  jq -cn --arg id "$1" --argjson t "${2:-$((NOW - 100))}" \
+    '{recording:null,jobs:[],version:1,last_stop:{id:$id,title:"Resume Take",stopped_at:$t,resumable:true}}' > "$RUN/state.json"
 }
-armresume "$RID" "$((NOW - 5))"
-eq "an expired offer is not made" "$("$CLI" status --json | jq -r '.resume')" "null"
-eq "and reconcile drops it from the state" "$(jq -r '.last_stop' "$RUN/state.json")" "null"
-armresume "$RID" "$((NOW - 5))"
-fails "resume past the window is refused" env PATH="$FAKEPATH" "$CLI" record resume
-"$CLI" config set resumeWindow 0 >/dev/null
-armresume "$RID"
-fails "resume is off at resumeWindow 0" env PATH="$FAKEPATH" "$CLI" record resume
-"$CLI" status >/dev/null
-eq "window off: the armed offer is dropped too" "$(jq -r '.last_stop' "$RUN/state.json")" "null"
-RID0=$(PATH="$FAKEPATH" "$CLI" record start --title "No Offer")
-( PATH="$FAKEPATH" "$CLI" record stop >/dev/null 2>&1 )
-eq "window off: a stop arms nothing" "$(jq -r '.last_stop' "$RUN/state.json")" "null"
-"$CLI" delete "$RID0" --yes >/dev/null
-"$CLI" config set resumeWindow 60 >/dev/null
-RID1=$(PATH="$FAKEPATH" "$CLI" record start --title "Short Window")
-( PATH="$FAKEPATH" "$CLI" record stop >/dev/null 2>&1 )
-check "a custom window is honoured" bash -c "jq -e '.last_stop.resume_until - .last_stop.stopped_at == 60' '$RUN/state.json'"
-"$CLI" delete "$RID1" --yes >/dev/null
-"$CLI" config set resumeWindow 7200 >/dev/null
+armresume "$RID" "$((NOW - 100000))"
+eq "an offer from yesterday still stands" "$("$CLI" status --json | jq -r '.resume.id')" "$RID"
+eq "and reconcile leaves it alone" "$(jq -r '.last_stop.id' "$RUN/state.json")" "$RID"
+check "a day-old offer still resumes" bash -c "PATH=\"$FAKEPATH\" \"$CLI\" record resume >/dev/null && PATH=\"$FAKEPATH\" \"$CLI\" record stop >/dev/null"
+eq "day-old resume added its seam" "$(jq -c '.resume_seams | length' "$RD/meta.json")" "3"
 
 # A trimmed take is not resumable; restore brings the offer back.
 armresume "$RID"
@@ -857,7 +844,7 @@ fails "resume of a trimmed take is refused" env PATH="$FAKEPATH" "$CLI" record r
 "$CLI" trim "$RID" --restore >/dev/null
 eq "restore turns the offer back on" "$(jq -r '.last_stop.resumable' "$RUN/state.json")" "true"
 check "and resume works again after the restore" bash -c "PATH=\"$FAKEPATH\" \"$CLI\" record resume >/dev/null && PATH=\"$FAKEPATH\" \"$CLI\" record stop >/dev/null"
-eq "three seams after the restore-and-recut path" "$(jq -c '.resume_seams | length' "$RD/meta.json")" "3"
+eq "four seams after the restore-and-recut path" "$(jq -c '.resume_seams | length' "$RD/meta.json")" "4"
 # The disk is the truth: a restore point on disk refuses even an armed offer.
 armresume "$RID"
 touch "$RD/audio.orig.wav"
@@ -957,17 +944,10 @@ jq -cn --arg id "$SID" '{id:$id,title:"Slow Stop",source:"mic",created:"2026-02-
 sleep 60 >/dev/null 2>&1 & SPID=$!
 jq -cn --arg id "$SID" --arg dir "$SD" --argjson p "$SPID" --argjson t "$NOW" \
   '{recording:{id:$id,dir:$dir,source:"mic",pids:[$p],started_at:$t},jobs:[],version:1,
-    last_stop:{id:"2026-02-05_050505",title:"Newer",stopped_at:($t+50),resume_until:($t+7250),resumable:true}}' > "$RUN/state.json"
+    last_stop:{id:"2026-02-05_050505",title:"Newer",stopped_at:($t+50),resumable:true}}' > "$RUN/state.json"
 ( PATH="$FAKEPATH" "$CLI" record stop >/dev/null 2>&1 )
 eq "a late arm never clobbers a newer offer" "$(jq -r '.last_stop.id' "$RUN/state.json")" "2026-02-05_050505"
 "$CLI" delete "$SID" --yes >/dev/null
-
-# Turning the window off withdraws an armed offer at once: the popup derives
-# its button from state.json alone and must never offer a dead resume.
-NOW=$(date +%s); armresume "2026-02-06_060606"
-"$CLI" config set resumeWindow 0 >/dev/null
-eq "setting the window to 0 withdraws the armed offer" "$(jq -r '.last_stop' "$RUN/state.json")" "null"
-"$CLI" config set resumeWindow 7200 >/dev/null
 
 # While a resume is still starting (its recorder held back), the take must
 # already be reserved in the state: a trim, rename, delete or stop in that
@@ -994,11 +974,11 @@ eq "reserved take joined to 6 s" "$(jq -r .duration_s "$RSD/meta.json")" "6"
 NOW=$(date +%s)
 jq -cn --argjson t "$NOW" '{recording:null,version:1,
   jobs:[{type:"transcribe",id:"2026-02-07_070707",model:"base.en",started_at:$t}],
-  last_stop:{id:"2026-02-07_070707",title:"Busy",stopped_at:$t,resume_until:($t+7200),resumable:true}}' > "$RUN/state.json"
+  last_stop:{id:"2026-02-07_070707",title:"Busy",stopped_at:$t,resumable:true}}' > "$RUN/state.json"
 eq "no offer while the take is transcribing" "$("$CLI" status --json | jq -r '.resume')" "null"
 fails "resume refused while the take transcribes" env PATH="$FAKEPATH" "$CLI" record resume
 jq -cn --argjson t "$NOW" '{recording:null,version:1,jobs:[],
-  last_stop:{id:"2026-02-07_070707",title:"Busy",stopped_at:$t,resume_until:($t+7200),resumable:true}}' > "$RUN/state.json"
+  last_stop:{id:"2026-02-07_070707",title:"Busy",stopped_at:$t,resumable:true}}' > "$RUN/state.json"
 eq "the offer returns when the job ends" "$("$CLI" status --json | jq -r '.resume.id')" "2026-02-07_070707"
 jq -cn '{recording:null,jobs:[],version:1}' > "$RUN/state.json"
 

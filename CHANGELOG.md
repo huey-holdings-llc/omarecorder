@@ -6,17 +6,18 @@ All notable changes to this project are documented here. Format follows
 ## [Unreleased]
 
 ### Added
-- A stopped recording can be resumed for a while: `record resume` on the CLI,
-  and a subdued "Resume '<title>' · stopped 12m ago" button under Record in
-  the popup, continue the most recently stopped take. The continuation is
-  captured as a separate segment and joined losslessly on stop; the seam
-  offsets land in `meta.json` as `resume_seams`, duration, size, levels and
-  the waveform are refreshed, and an existing transcript is flagged stale the
-  way trim does it. Only the last stop is offered, within `resumeWindow`
-  seconds (default 7200, 0 turns the feature off), and never automatically:
-  the bar toggle and Record always start a new recording, and a trimmed take
-  asks to be restored first. A crash mid-resume leaves the original untouched
-  and joins the segment through the existing crash recovery. (#49)
+- The last stopped recording can be resumed: `record resume` on the CLI, and
+  a full-width "Resume last recording · stopped 12m ago" button under Record
+  in the popup (the take's title is in its tooltip), continue the most
+  recently stopped take. The continuation is captured as a separate segment
+  and joined losslessly on stop; the seam offsets land in `meta.json` as
+  `resume_seams`, duration, size, levels and the waveform are refreshed, and
+  an existing transcript is flagged stale the way trim does it. There is no
+  time limit: the offer stands until it is used, a new recording starts, or
+  the take is trimmed or deleted, and it is never automatic: the bar toggle
+  and Record always start a new recording, and a trimmed take asks to be
+  restored first. A crash mid-resume leaves the original untouched and joins
+  the segment through the existing crash recovery. (#49)
 - An optional audio cleanup pass at transcription time, off by default. With
   the `enhanceAudio` config toggle on (popup settings, next to the transcribe
   toggle) or `transcribe <id> --enhance`, the transcription pipeline copies
