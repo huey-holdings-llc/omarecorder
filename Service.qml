@@ -31,6 +31,7 @@ QtObject {
   property var models: []
   property var vaults: []      // Obsidian vaults from `omarecorder vaults --json` (open one first)
   property var config: ({})
+  property var dictionary: ({ count: 0, entries: [] })
   property var setup: ({ ok: true })
   property string lastError: ""
   property var level: null            // {peak_db, clip, t} while recording (watched file)
@@ -80,8 +81,9 @@ QtObject {
   }
 
   // ---- loaders ----
-  function refresh() { refreshList(); refreshModels(); refreshConfig(); refreshSetup(); refreshVaults() }
+  function refresh() { refreshList(); refreshModels(); refreshConfig(); refreshSetup(); refreshVaults(); refreshDictionary() }
   function refreshList() { if (!listProc.running) listProc.running = true }
+  function refreshDictionary() { if (!dictProc.running) dictProc.running = true }
   function refreshModels() { if (!modelsProc.running) modelsProc.running = true }
   function refreshVaults() { if (!vaultsProc.running) vaultsProc.running = true }
   function refreshConfig() { if (!configProc.running) configProc.running = true }
@@ -169,6 +171,12 @@ QtObject {
   // The CLI picks the vault/folder (config, then the open vault) and opens the note in Obsidian.
   function exportToObsidian(id, raw, onDone) { run(raw ? ["export", id, "--raw"] : ["export", id], onDone) }
   function setConfig(key, value) { run(["config", "set", key, String(value)], function() { refreshConfig() }) }
+  // Dictionary actions run through the CLI like everything else; add/import
+  // re-read the count so the settings row stays honest.
+  function dictAdd(heard, written, onDone) { run(["dictionary", "add", heard, written], function(code, out) { if (code === 0) root.refreshDictionary(); if (onDone) onDone(code, out) }) }
+  function dictEdit() { run(["dictionary", "edit"]) }
+  function dictCopyPrompt(onDone) { run(["dictionary", "prompt", "--copy"], onDone) }
+  function dictImportClipboard(onDone) { run(["dictionary", "import", "--clipboard"], function(code, out) { if (code === 0) root.refreshDictionary(); if (onDone) onDone(code, out) }) }
   function openLibrary() { Quickshell.execDetached(["omarchy-shell", "shell", "toggle", pluginId]) }
 
   // ---- plumbing ----
@@ -231,6 +239,11 @@ QtObject {
     command: [root.cli, "vaults", "--json"]
     stdout: StdioCollector { id: vaultsOut; waitForEnd: true }
     onExited: function(code) { if (code === 0) { try { root.vaults = JSON.parse(vaultsOut.text) } catch (e) {} } }
+  }
+  property Process dictProc: Process {
+    command: [root.cli, "dictionary", "--json"]
+    stdout: StdioCollector { id: dictOut; waitForEnd: true }
+    onExited: function(code) { if (code === 0) { try { root.dictionary = JSON.parse(dictOut.text) } catch (e) {} } }
   }
   property Process configProc: Process {
     command: [root.cli, "config", "get", "--json"]

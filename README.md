@@ -217,6 +217,19 @@ playback speed (1x, 1.25x, 1.5x, 2x) for the rest of the session.
   `copy` and Send to Obsidian use whichever is showing (`--raw` on the CLI).
   `omarecorder tidy <id>` rebuilds it; older transcripts get one the first time
   the Library lists them.
+* **Dictionary**: tidy also applies your corrections dictionary, a plain text
+  file of `what whisper wrote -> what you meant` lines
+  (`~/.config/omarecorder/dictionary`). Matching is literal, case-insensitive
+  and whole words or phrases only, never regex, and it only ever touches the
+  tidy text; the raw transcript stays exactly what whisper produced. It comes
+  seeded with a starter set of things whisper reliably mishears ("hyper land"
+  for Hyprland, "owl bear" for owlbear, "clawed code" for Claude Code), created
+  once and never rewritten by the app afterwards. Settings has the entry count
+  with Edit, Add, Copy prompt and Paste entries; "Copy prompt" puts a ready
+  request on the clipboard for your favorite LLM to suggest entries for your
+  own vocabulary, and "Paste entries" merges its answer back in (duplicates
+  skipped, a conflicting entry keeps yours). Edit the file and the Library
+  refreshes affected transcripts the next time it lists them.
 * **Play and trim**: the waveform strip in the Library is a scrubber. Click to
   seek, `Space` to play or pause. Playback runs in-process (QtMultimedia, loaded
   only while the Library is open); `omarecorder play` uses mpv instead. The
@@ -317,6 +330,8 @@ omarecorder note <id> <text>                                       set a note on
 omarecorder trim <id> --from s --to s [--replace] | trim <id> --restore  cut the audio (first original kept)
 omarecorder copy <id> [--raw] [--print]                            transcript text to the clipboard
 omarecorder tidy <id>                                              rebuild transcript.tidy.md (paragraphs, loops removed)
+omarecorder dictionary [--json] | dictionary add <heard> <written> corrections tidy applies (whisper mishearings)
+omarecorder dictionary edit | prompt [--copy] | export [path] | import <file|--clipboard>
 omarecorder export <id> [--vault P | --dir P] [--no-open] [--raw]   transcript to an Obsidian note
 omarecorder vaults [--json]                                        Obsidian vaults on this machine (* = open)
 omarecorder transcribe <id> [--model M] [--language L] [--from s --to s] [--download]
@@ -410,6 +425,15 @@ a plain script and runs on every transcript.
 **Does it need Obsidian?**
 No. Without a vault the note lands next to the recording. Everything else works
 the same.
+
+**Why doesn't the starter dictionary fix "cash" to "cache" or "get" to "git"?**
+Because those left sides are ordinary English, and a whole-word substitution
+would corrupt normal speech ("I paid cash"). The safe form is a longer phrase:
+the starter ships `get push -> git push` instead of `get -> git`, and the same
+rule is worth following in your own entries. Two mishearings substitution
+cannot fix at all: "respec" comes out as "respect" and "gnoll" comes out as
+"null", both real words. A dictionary entry would do more harm than good
+there, so those stay as they are.
 
 ## Troubleshooting
 

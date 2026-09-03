@@ -25,6 +25,7 @@ if [[ -z "${XDG_RUNTIME_DIR:-}" ]]; then
 fi
 CONFIG_DIR="$XDG_CONFIG_HOME/omarecorder"
 CONFIG_FILE="$CONFIG_DIR/config.json"
+DICT_FILE="$CONFIG_DIR/dictionary"
 STATE_DIR="$XDG_STATE_HOME/omarecorder"
 BENCH_FILE="$STATE_DIR/bench.json"
 LOG_FILE="$STATE_DIR/omarecorder.log"
@@ -804,7 +805,9 @@ cmd_list() {
       # collapse markers and loop stats existed: the old header has no "loops"
       # field, and after one rebuild it does, so the check (one head -1) never
       # fires again.
-      if [[ -s "$d/transcript.md" ]] && { [[ ! -s "$d/transcript.tidy.md" ]] || ! head -1 "$d/transcript.tidy.md" | grep -q " loops,"; }; then tidy_transcript "$d"; fi
+      # A dictionary edited after a tidy was built means stale corrections:
+      # rebuild once, and the fresh tidy's mtime stops the check firing again.
+      if [[ -s "$d/transcript.md" ]] && { [[ ! -s "$d/transcript.tidy.md" ]] || ! head -1 "$d/transcript.tidy.md" | grep -q " loops," || [[ -f "$DICT_FILE" && "$DICT_FILE" -nt "$d/transcript.tidy.md" ]]; }; then tidy_transcript "$d"; fi
       rec_json "$d"
     done < <(find "$ROOT" -mindepth 1 -maxdepth 1 -type d -name '????-??-??_??????*' | sort -r) | jq -sc '.'
   )
@@ -1054,6 +1057,237 @@ cmd_export() {
 # deterministic: collapse phrases whisper repeated back to back (its "loops"),
 # then lay the words out in paragraphs at sentence ends, with every piece
 # boundary (blank line) kept as a paragraph break. The raw file is never touched.
+# ----------------------------------------------------------- dictionary ----
+# A plain-text corrections list applied by tidy: literal, case-insensitive,
+# whole-word/phrase substitutions for things whisper reliably mishears.
+# The file is the user's; it is seeded once with a starter set and never
+# rewritten by the app afterwards (add/import only append).
+seed_dictionary() {
+  [[ -f "$DICT_FILE" ]] && return 0
+  mkdir -p "$CONFIG_DIR"
+  cat > "$DICT_FILE" <<'SEED'
+# OmaRecorder dictionary: corrections applied to tidy transcripts.
+# One per line:   what whisper wrote -> what you meant
+# Matching is literal, case-insensitive, whole words/phrases only. No regex.
+# Rule of thumb: never map a word that could be ordinary English on its own
+# ("cash", "get", "pseudo"); use a longer phrase instead ("get push -> git push").
+# Your favorite LLM can extend this list: omarecorder dictionary prompt --copy
+
+# Omarchy and friends
+omarkey -> Omarchy
+oma record -> OmaRecorder
+omarecord -> OmaRecorder
+hyperland -> Hyprland
+hyper land -> Hyprland
+quick shell -> Quickshell
+vox type -> voxtype
+way bar -> Waybar
+pipe wire -> PipeWire
+system d -> systemd
+
+# Terminal talk
+cube control -> kubectl
+cube cuttle -> kubectl
+engine x -> nginx
+neo vim -> Neovim
+dot files -> dotfiles
+clawed code -> Claude Code
+get push -> git push
+get pull -> git pull
+get commit -> git commit
+get checkout -> git checkout
+get check out -> git checkout
+
+# Around the table
+owl bear -> owlbear
+bug beer -> bugbear
+typhling -> tiefling
+tifling -> tiefling
+never winter -> Neverwinter
+Faerun -> Faerûn
+Peller -> Pelor
+katan -> Catan
+gloom haven -> Gloomhaven
+plains walker -> planeswalker
+
+# Gamer to gamer
+speed run -> speedrun
+speed running -> speedrunning
+speed runner -> speedrunner
+theory crafting -> theorycrafting
+min maxing -> min-maxing
+min maxed -> min-maxed
+SEED
+}
+
+# dict_entries: the parsed entries as "heard -> written" lines, one per entry,
+# whitespace normalized. The single source of truth for what counts as an
+# entry; list/count/prompt/import all go through it.
+dict_entries() {
+  [[ -f "$DICT_FILE" ]] || return 0
+  awk '
+    { sub(/\r$/, "") }
+    /^[[:space:]]*(#|$)/ { next }
+    { p = index($0, " -> "); if (p == 0) next
+      h = substr($0, 1, p - 1); w = substr($0, p + 4)
+      gsub(/^[[:space:]]+|[[:space:]]+$/, "", h); gsub(/^[[:space:]]+|[[:space:]]+$/, "", w)
+      gsub(/[[:space:]]+/, " ", h); gsub(/[[:space:]]+/, " ", w)
+      if (h != "" && w != "") printf "%s -> %s\n", h, w }
+  ' "$DICT_FILE"
+}
+dict_count() { dict_entries | wc -l; }
+
+# DICT_AWK: applies the entries to header-stripped transcript text, piece by
+# piece (blank-line blocks), so a phrase split across raw lines still matches.
+# Longest heard form wins; boundaries are non-alphanumeric, so possessives
+# ("peller's") match and words inside longer words ("speed running" for the
+# "speed run" entry) do not. Replacement text is emitted verbatim and is never
+# rescanned by the entry that produced it.
+read -r -d '' DICT_AWK <<'AWK' || true
+BEGIN {
+  n = 0
+  while ((getline line < dictfile) > 0) {
+    sub(/\r$/, "", line)
+    if (line ~ /^[[:space:]]*(#|$)/) continue
+    p = index(line, " -> "); if (p == 0) continue
+    h = substr(line, 1, p - 1); w = substr(line, p + 4)
+    gsub(/^[[:space:]]+|[[:space:]]+$/, "", h); gsub(/^[[:space:]]+|[[:space:]]+$/, "", w)
+    gsub(/[[:space:]]+/, " ", h); gsub(/[[:space:]]+/, " ", w)
+    if (h == "" || w == "") continue
+    n++; heard[n] = tolower(h); wr[n] = w; hl[n] = length(h)
+  }
+  close(dictfile)
+  for (i = 1; i < n; i++) for (j = i + 1; j <= n; j++)
+    if (hl[j] > hl[i]) { t = heard[i]; heard[i] = heard[j]; heard[j] = t
+                         t = wr[i]; wr[i] = wr[j]; wr[j] = t
+                         u = hl[i]; hl[i] = hl[j]; hl[j] = u }
+}
+function isword(c) { return c ~ /[A-Za-z0-9]/ }
+function fix(s,   i, lc, pos, off, pre, post, acc) {
+  for (i = 1; i <= n; i++) {
+    lc = tolower(s); off = 1; acc = ""
+    while ((pos = index(substr(lc, off), heard[i])) > 0) {
+      pos += off - 1
+      pre = (pos > 1) ? substr(s, pos - 1, 1) : " "
+      post = substr(s, pos + hl[i], 1); if (post == "") post = " "
+      if (!isword(pre) && !isword(post)) {
+        acc = acc substr(s, off, pos - off) wr[i]
+        off = pos + hl[i]; reps++
+      } else {
+        acc = acc substr(s, off, pos - off + 1)
+        off = pos + 1
+      }
+    }
+    s = acc substr(s, off)
+  }
+  return s
+}
+function flushp() { if (piece != "") { gsub(/[[:space:]]+/, " ", piece); print fix(piece); piece = "" } }
+/^[[:space:]]*$/ { flushp(); print ""; next }
+{ piece = piece " " $0 }
+END { flushp(); print reps + 0 > statsfile }
+AWK
+
+cmd_dictionary() {
+  local sub="${1:-list}"; shift || true
+  case "$sub" in
+    list|--json)
+      seed_dictionary
+      if [[ "$sub" == "--json" ]]; then
+        dict_entries | jq -Rn --arg file "$DICT_FILE" \
+          '{file: $file, entries: [inputs | capture("^(?<heard>.*) -> (?<written>.*)$")], count: 0} | .count = (.entries | length)'
+      else dict_entries; fi ;;
+    add)
+      local h="${1:-}" w="${2:-}"
+      h=$(tr -s '[:space:]' ' ' <<<"$h"); h="${h# }"; h="${h% }"
+      w=$(tr -s '[:space:]' ' ' <<<"$w"); w="${w# }"; w="${w% }"
+      [[ -n "$h" && -n "$w" ]] || die "usage: dictionary add <heard> <written>"
+      [[ "$h" != *" -> "* && "$w" != *" -> "* ]] || die "entries cannot contain \" -> \""
+      seed_dictionary
+      local lc_h; lc_h=$(tr '[:upper:]' '[:lower:]' <<<"$h")
+      if dict_entries | awk -v h="$lc_h" 'tolower(substr($0, 1, index($0, " -> ") - 1)) == h { found = 1 } END { exit !found }'; then
+        die "\"$h\" is already in the dictionary; edit the file to change it"
+      fi
+      printf '%s -> %s\n' "$h" "$w" >> "$DICT_FILE"
+      bump_state; echo "added: $h -> $w" ;;
+    edit)
+      seed_dictionary
+      setsid xdg-open "$DICT_FILE" >/dev/null 2>&1 < /dev/null &
+      echo "$DICT_FILE" ;;
+    prompt)
+      seed_dictionary
+      { cat <<'P1'
+You're helping me extend a speech-to-text corrections dictionary. My recorder
+transcribes locally with Whisper, then applies these fixes. Format: one per
+line, `what whisper wrote -> what I meant`. Matching is literal,
+case-insensitive, whole-word/whole-phrase; no regex.
+
+Safety rule: only suggest entries whose left side would essentially never
+appear as ordinary English ("plains walker" is safe; "cash" is not, even
+though I mean "cache"). Defuse homophones with longer phrases
+("get push -> git push", never "get -> git").
+
+My current dictionary:
+P1
+        dict_entries
+        cat <<'P2'
+
+I talk about: [describe your hobbies, campaign and character names, projects, coworkers]
+
+Reply with new entries only, one per line, exactly in the format above, no commentary.
+P2
+      } | if [[ "${1:-}" == "--copy" ]]; then
+        have wl-copy || die "wl-copy not found (pacman -S wl-clipboard)"
+        wl-copy; echo "prompt copied to the clipboard"
+      else cat; fi ;;
+    export)
+      seed_dictionary
+      if [[ -n "${1:-}" ]]; then cp -- "$DICT_FILE" "$1" && echo "$1"; else cat "$DICT_FILE"; fi ;;
+    import)
+      local srcdesc="${1:-}"; [[ -n "$srcdesc" ]] || die "usage: dictionary import <file|--clipboard>"
+      seed_dictionary
+      local tmp="$RUN_DIR/dict.import.$$"; mkdir -p "$RUN_DIR"
+      if [[ "$srcdesc" == "--clipboard" ]]; then
+        have wl-paste || die "wl-paste not found (pacman -S wl-clipboard)"
+        wl-paste > "$tmp" || { rm -f "$tmp"; die "clipboard is empty"; }
+      else
+        [[ -f "$srcdesc" ]] || die "no such file: $srcdesc"
+        cp -- "$srcdesc" "$tmp"
+      fi
+      # Existing entries, keyed by lowercased heard form.
+      declare -A have_w=()
+      local line h w lc_h lineno=0 added=0 dups=0 conflicts=0 badlines=()
+      while IFS= read -r line; do
+        h="${line%% -> *}"; w="${line#* -> }"
+        lc_h=$(tr '[:upper:]' '[:lower:]' <<<"$h"); have_w["$lc_h"]="$w"
+      done < <(dict_entries)
+      local out=""
+      while IFS= read -r line || [[ -n "$line" ]]; do
+        lineno=$((lineno + 1)); line="${line%$'\r'}"
+        [[ "$line" =~ ^[[:space:]]*(#|$) ]] && continue
+        if [[ "$line" != *" -> "* ]]; then badlines+=("$lineno"); continue; fi
+        h="${line%% -> *}"; w="${line#* -> }"
+        h=$(tr -s '[:space:]' ' ' <<<"$h"); h="${h# }"; h="${h% }"
+        w=$(tr -s '[:space:]' ' ' <<<"$w"); w="${w# }"; w="${w% }"
+        if [[ -z "$h" || -z "$w" ]]; then badlines+=("$lineno"); continue; fi
+        lc_h=$(tr '[:upper:]' '[:lower:]' <<<"$h")
+        if [[ -n "${have_w[$lc_h]:-}" ]]; then
+          if [[ "${have_w[$lc_h]}" == "$w" ]]; then dups=$((dups + 1)); else conflicts=$((conflicts + 1)); fi
+          continue
+        fi
+        have_w["$lc_h"]="$w"; out+="$h -> $w"$'\n'; added=$((added + 1))
+      done < "$tmp"
+      rm -f "$tmp"
+      (( added + dups + conflicts > 0 )) || die "nothing usable to import"
+      [[ -n "$out" ]] && printf '%s' "$out" >> "$DICT_FILE"
+      local summary="$added added, $dups duplicates skipped, $conflicts conflicts kept yours"
+      (( ${#badlines[@]} > 0 )) && summary+=", ${#badlines[@]} malformed (line ${badlines[*]})"
+      (( added > 0 )) && bump_state
+      echo "$summary" ;;
+    *) die "usage: dictionary [--json] | add <heard> <written> | edit | prompt [--copy] | export [path] | import <file|--clipboard>" ;;
+  esac
+}
+
 read -r -d '' TIDY_AWK <<'AWK' || true
 function norm(w) { w = tolower(w); gsub(/[^a-z0-9]/, "", w); return (w == "" ? "\001" : w) }
 function block_eq(a, b, N,   k) { for (k = 0; k < N; k++) if (nt[a+k] != nt[b+k]) return 0; return 1 }
@@ -1104,10 +1338,21 @@ END { flush_piece(); printf "%s\n", out; print paras + 0, removed + 0, loops + 0
 
 AWK
 tidy_transcript() {
-  local dir="$1" paras removed loops longest; local src="$dir/transcript.md" out="$dir/transcript.tidy.md" stats="$RUN_DIR/tidy.$$.stats"
+  local dir="$1" paras removed loops longest dreps=0
+  local src="$dir/transcript.md" out="$dir/transcript.tidy.md" stats="$RUN_DIR/tidy.$$.stats" dstats="$RUN_DIR/dict.$$.stats"
   [[ -s "$src" ]] || return 0
   mkdir -p "$RUN_DIR"
-  if ! strip_header "$src" | awk -v statsfile="$stats" "$TIDY_AWK" > "$out.tmp.$$"; then rm -f "$out.tmp.$$" "$stats"; log "tidy failed in $dir"; return 0; fi
+  seed_dictionary
+  if (( $(dict_count) > 0 )); then
+    if ! strip_header "$src" | awk -v dictfile="$DICT_FILE" -v statsfile="$dstats" "$DICT_AWK" \
+        | awk -v statsfile="$stats" "$TIDY_AWK" > "$out.tmp.$$"; then
+      rm -f "$out.tmp.$$" "$stats" "$dstats"; log "tidy failed in $dir"; return 0
+    fi
+    read -r dreps < "$dstats" 2>/dev/null || dreps=0; rm -f "$dstats"
+    [[ "$dreps" =~ ^[0-9]+$ ]] || dreps=0
+  else
+    if ! strip_header "$src" | awk -v statsfile="$stats" "$TIDY_AWK" > "$out.tmp.$$"; then rm -f "$out.tmp.$$" "$stats"; log "tidy failed in $dir"; return 0; fi
+  fi
   read -r paras removed loops longest < "$stats"; rm -f "$stats"
   # loop_warning: one single collapse removed at least this many words. maxN is
   # 14, so a legitimate re-utterance removes at most 14 words and even a triple
@@ -1116,8 +1361,8 @@ tidy_transcript() {
   [[ "$lw" =~ ^[0-9]+$ ]] || lw=40
   { printf '<!-- omarecorder tidy: %s paragraphs, %s repeated words removed, %s loops, created=%s -->\n' "$paras" "$removed" "$loops" "$(now_iso)"; cat "$out.tmp.$$"; } > "$out"
   rm -f "$out.tmp.$$"
-  update_meta "$dir" '.transcript = ((.transcript // {}) + {tidy:{paragraphs:$p, repeats_removed:$r, loops:$l, longest_run_words:$g, loop_warning:($g >= $w), created:$c}})' \
-    --argjson p "$paras" --argjson r "$removed" --argjson l "$loops" --argjson g "$longest" --argjson w "$lw" --arg c "$(now_iso)" || true
+  update_meta "$dir" '.transcript = ((.transcript // {}) + {tidy:{paragraphs:$p, repeats_removed:$r, loops:$l, longest_run_words:$g, loop_warning:($g >= $w), dict_replacements:$dr, created:$c}})' \
+    --argjson p "$paras" --argjson r "$removed" --argjson l "$loops" --argjson g "$longest" --argjson w "$lw" --argjson dr "$dreps" --arg c "$(now_iso)" || true
 }
 
 cmd_tidy() { # tidy <id>: (re)build transcript.tidy.md
@@ -1602,6 +1847,8 @@ omarecorder $VERSION: record, keep, transcribe locally (voxtype)
   trim <id> --from s --to s [--replace] | trim <id> --restore  cut the audio (first original kept as audio.orig.wav)
   copy <id> [--raw] [--print]                            transcript text to the clipboard
   tidy <id>                                              rebuild transcript.tidy.md (paragraphs, loops removed)
+  dictionary [--json] | dictionary add <heard> <written> corrections tidy applies (whisper mishearings)
+  dictionary edit | prompt [--copy] | export [path] | import <file|--clipboard>
   export <id> [--vault P | --dir P] [--no-open] [--raw]           transcript → Obsidian note (frontmatter + text)
   vaults [--json]                                        Obsidian vaults on this machine (* = open)
   transcribe <id> [--model M] [--language L] [--from s --to s] [--chunk-s N] [--download]
@@ -1634,6 +1881,7 @@ main() {
     delete) cmd_delete "$@" ;;
     copy) cmd_copy "$@" ;;
     tidy) cmd_tidy "$@" ;;
+    dictionary) cmd_dictionary "$@" ;;
     export) cmd_export "$@" ;;
     vaults) cmd_vaults "$@" ;;
     transcribe) cmd_transcribe "$@" ;;
