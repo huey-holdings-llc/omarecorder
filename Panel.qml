@@ -145,6 +145,7 @@ Panel {
         else if (t === "l" || t === "L") root.openLibrary()
         else if (t === "s" || t === "S") root.settingsOpen = !root.settingsOpen
         else if (t === "i" || t === "I") root.importAudio()
+        else if ((t === "u" || t === "U") && root.ready && root.svc.resumable && !root.recording) root.svc.resumeRecording()
       }
 
       Flickable {
@@ -241,6 +242,19 @@ Panel {
             // The button stops without the long-take confirmation the
             // keyboard and right-click paths get; clicking it is deliberate.
             onClicked: root.recording ? root.svc.stopRecording(true) : root.toggleRecording()
+          }
+
+          // Resume the last stopped take (#49): a subdued secondary affordance
+          // that appears only while the CLI offers one. Record and the toggle
+          // above always start fresh; resuming is its own deliberate action.
+          Button {
+            visible: root.ready && !root.recording && root.svc.resumable
+            width: parent.width
+            text: "Resume '" + root.svc.resumeTitle + "' · stopped " + root.svc.resumeAgoText + "  (u)"
+            iconText: "󰑊"
+            foreground: root.dim
+            fontFamily: root.fontFamily
+            onClicked: root.svc.resumeRecording()
           }
 
           PanelSeparator { width: parent.width; foreground: root.foreground }
