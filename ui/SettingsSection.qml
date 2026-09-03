@@ -65,6 +65,14 @@ Column {
     foreground: root.foreground; fontFamily: root.fontFamily
     onClicked: if (root.svc) root.svc.setConfig("autoTranscribe", root.cfg.autoTranscribe === true ? "false" : "true")
   }
+  Toggle {
+    width: parent.width
+    label: "Clean up audio before transcribing"
+    description: "Noise and level cleanup on a temporary copy; the recording itself is never altered"
+    checked: root.cfg.enhanceAudio === true
+    foreground: root.foreground; fontFamily: root.fontFamily
+    onClicked: if (root.svc) root.svc.setConfig("enhanceAudio", root.cfg.enhanceAudio === true ? "false" : "true")
+  }
   Column {
     width: parent.width; spacing: Style.spacing.xxs
     Text {
