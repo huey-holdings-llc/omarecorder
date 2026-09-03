@@ -790,6 +790,10 @@ cmd_search() {
 
 cmd_list() {
   mkdir -p "$ROOT"
+  # Seed before the freshness checks below: on an upgrade every tidy file is
+  # current and nothing else would ever create the starter dictionary, and the
+  # fresh file's mtime is what makes the same pass rebuild those tidies.
+  seed_dictionary
   # One jq per recording plus a single collect: rebuilding a growing array per
   # row was O(n^2) and made the Library open slow at a few hundred recordings.
   local arr d

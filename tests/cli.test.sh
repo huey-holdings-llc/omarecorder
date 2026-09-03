@@ -488,6 +488,17 @@ fails "import with nothing usable fails" bash -c "printf 'junk\n' > '$TMP/dict.j
 # self-heal: a dictionary newer than a tidy file rebuilds it on list
 check "list refreshes tidy when the dictionary is newer" bash -c "sleep 1; \"$CLI\" dictionary add 'the laptop' 'the ThinkPad' >/dev/null && \"$CLI\" list >/dev/null && grep -q 'ThinkPad' '$DD/transcript.tidy.md'"
 "$CLI" delete "$IDD" --yes >/dev/null
+# Upgrade path: tidy files are current but the dictionary does not exist yet.
+# A plain list must seed the starter and refresh the stale tidies in the same
+# pass ("owl bear" is a starter entry the test dictionary above lacks).
+IDU=$("$CLI" import "$TMP/quiet.wav" --title "Upgrade Test"); DU=$("$CLI" show "$IDU" --json | jq -r .dir)
+printf '<!-- omarecorder model=base.en language=en created=x range=0-end chunks=1 -->\nThe owl bear waited by the door.\n' > "$DU/transcript.md"
+"$CLI" tidy "$IDU" >/dev/null
+rm -f "$DICT"; sleep 1
+"$CLI" list >/dev/null
+check "list seeds the dictionary on upgrade" test -s "$DICT"
+check "and refreshes existing tidies with the starter" grep -q 'owlbear' "$DU/transcript.tidy.md"
+"$CLI" delete "$IDU" --yes >/dev/null
 printf '# emptied by the test suite\n' > "$DICT"
 
 echo "== busy guards"
