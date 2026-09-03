@@ -5,6 +5,23 @@ All notable changes to this project are documented here. Format follows
 
 ## [Unreleased]
 
+### Changed
+- Pre-release polish from a four-persona UX review. The dictionary card's
+  buttons explain themselves (tooltips, a plain-language caption), report
+  their failures instead of going quiet, and got a keyboard path (`d` in the
+  popup opens straight into adding an entry). The Library metadata line now
+  says when a transcript came from cleaned-up audio and how many dictionary
+  corrections tidy applied. `dictionary list --json` accepts the trailing
+  flag like every other command, `--json` splits multi-arrow entries the
+  same way the engine does, large imports are no longer slow, a failed
+  export dies in the house voice, and an unknown model no longer gets a
+  download suggestion that cannot work. An empty `list` at a terminal says
+  how to start; the "Transcript ready" notification says when the cleanup
+  pass fell back to the original audio; the LLM prompt tells the model to
+  ask rather than guess when the "I talk about" line was left unfilled. The
+  README's CLI block and two stale claims (idle icon, playback engine) were
+  brought back in line with the code.
+
 ### Added
 - The last stopped recording can be resumed: `record resume` on the CLI, and
   a full-width "Resume last recording · stopped 12m ago" button under Record

@@ -74,7 +74,7 @@ Column {
     var miss = s.missing || []
     for (var i = 0; i < miss.length; i++) {
       if (miss[i].tool === "voxtype") continue   // covered above with the Omarchy command
-      out.push(miss[i].tool + " is missing. Install it with: pacman -S " + miss[i].package + (miss[i].required ? "" : " (only needed for " + miss[i]["for"] + ")"))
+      out.push(miss[i].tool + " is missing. Install it with: sudo pacman -S " + miss[i].package + (miss[i].required ? "" : " (only needed for " + miss[i]["for"] + ")"))
     }
     if (!s.mic_ok) out.push("No microphone found. Plug one in or pick 'system' as the source")
     if (!s.recordingsDir_ok) out.push("Cannot write to " + s.recordingsDir)

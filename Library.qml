@@ -548,11 +548,13 @@ Item {
                     : root.svc.fmtDate(root.selected.created) + " · " + root.svc.fmtDuration(root.selected.duration_s) + " · " + root.svc.fmtBytes(root.selected.size_bytes)
                     + " · " + root.svc.sourceLabel(root.selected.source)
                     + (root.selected.transcript ? " · transcribed with " + root.selected.transcript.model : "")
+                    + (root.selected.transcript && root.selected.transcript.enhanced ? " · audio cleaned up" : "")
                     + (root.selected.exported_to ? " · in Obsidian" : "")
                     + (root.svc.isClipped(root.selected) ? " · ⚠ clipped" : "")
                     + (root.svc.isPartial(root.selected) ? " · partial transcript" : "")
                     + (root.selected.trim ? " · trimmed" : "")
                     + (root.selected.transcript && root.selected.transcript.tidy && root.selected.transcript.tidy.repeats_removed > 0 && !root.showRaw ? " · " + root.selected.transcript.tidy.repeats_removed + " repeats removed" : "")
+                    + (root.selected.transcript && root.selected.transcript.tidy && root.selected.transcript.tidy.dict_replacements > 0 && !root.showRaw ? " · " + root.selected.transcript.tidy.dict_replacements + " corrections" : "")
                     + (root.playing ? " · ▶ playing" : ""))
                   : ""
                 textFormat: Text.PlainText

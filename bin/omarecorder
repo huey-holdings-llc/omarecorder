@@ -1060,6 +1060,9 @@ cmd_list() {
   )
   [[ -n "$arr" ]] || arr='[]'
   if [[ "${1:-}" == "--json" ]]; then jq . <<<"$arr"; return 0; fi
+  # A human at an empty terminal deserves a next step; scripts (no tty) keep
+  # getting the clean empty output they parse.
+  if [[ "$arr" == "[]" && -t 1 ]]; then echo "No recordings yet. Start one with: omarecorder record start"; return 0; fi
   while IFS=$'\t' read -r rid rdur rt rclip rtitle; do
     printf '%s  %s  %s%s  %s\n' "$rid" "$(fmt_hms "$rdur")" "$rt" "$([[ $rclip == true ]] && echo ' ⚠clipped' || echo '')" "$rtitle"
   done < <(jq -r '.[] | [.id, (.duration_s // 0), (if .has_transcript then "✓" else "·" end), (.levels.clipped // false), .title] | @tsv' <<<"$arr")
@@ -1448,9 +1451,11 @@ cmd_dictionary() {
   case "$sub" in
     list|--json)
       seed_dictionary
-      if [[ "$sub" == "--json" ]]; then
+      # The non-greedy heard capture splits at the FIRST arrow, matching the
+      # engine and the human list; trailing --json follows the house shape.
+      if [[ "$sub" == "--json" || "${1:-}" == "--json" ]]; then
         dict_entries | jq -Rn --arg file "$DICT_FILE" \
-          '{file: $file, entries: [inputs | capture("^(?<heard>.*) -> (?<written>.*)$")], count: 0} | .count = (.entries | length)'
+          '{file: $file, entries: [inputs | capture("^(?<heard>.*?) -> (?<written>.*)$")], count: 0} | .count = (.entries | length)'
       else dict_entries; fi ;;
     add)
       local h="${1:-}" w="${2:-}"
@@ -1459,7 +1464,7 @@ cmd_dictionary() {
       [[ -n "$h" && -n "$w" ]] || die "usage: dictionary add <heard> <written>"
       [[ "$h" != *" -> "* && "$w" != *" -> "* ]] || die "entries cannot contain \" -> \""
       seed_dictionary
-      local lc_h; lc_h=$(tr '[:upper:]' '[:lower:]' <<<"$h")
+      local lc_h="${h,,}"
       if dict_entries | awk -v h="$lc_h" 'tolower(substr($0, 1, index($0, " -> ") - 1)) == h { found = 1 } END { exit !found }'; then
         die "\"$h\" is already in the dictionary; edit the file to change it"
       fi
@@ -1482,6 +1487,9 @@ appear as ordinary English ("plains walker" is safe; "cash" is not, even
 though I mean "cache"). Defuse homophones with longer phrases
 ("get push -> git push", never "get -> git").
 
+If the "I talk about" line below still shows bracketed placeholder text, stop
+and ask me what I talk about before suggesting anything.
+
 My current dictionary:
 P1
         dict_entries
@@ -1497,7 +1505,7 @@ P2
       else cat; fi ;;
     export)
       seed_dictionary
-      if [[ -n "${1:-}" ]]; then cp -- "$DICT_FILE" "$1" && echo "$1"; else cat "$DICT_FILE"; fi ;;
+      if [[ -n "${1:-}" ]]; then cp -- "$DICT_FILE" "$1" 2>/dev/null || die "cannot write $1"; echo "$1"; else cat "$DICT_FILE"; fi ;;
     import)
       local srcdesc="${1:-}"; [[ -n "$srcdesc" ]] || die "usage: dictionary import <file|--clipboard>"
       seed_dictionary
@@ -1509,12 +1517,14 @@ P2
         [[ -f "$srcdesc" ]] || die "no such file: $srcdesc"
         cp -- "$srcdesc" "$tmp"
       fi
-      # Existing entries, keyed by lowercased heard form.
+      # Existing entries, keyed by lowercased heard form. Pure bash per line
+      # (${h,,}, parameter replaces): a subshell per line made a 5,000-line
+      # import take ~47 s.
       declare -A have_w=()
       local line h w lc_h lineno=0 added=0 dups=0 conflicts=0 badlines=()
       while IFS= read -r line; do
         h="${line%% -> *}"; w="${line#* -> }"
-        lc_h=$(tr '[:upper:]' '[:lower:]' <<<"$h"); have_w["$lc_h"]="$w"
+        lc_h="${h,,}"; have_w["$lc_h"]="$w"
       done < <(dict_entries)
       local out=""
       while IFS= read -r line || [[ -n "$line" ]]; do
@@ -1522,10 +1532,10 @@ P2
         [[ "$line" =~ ^[[:space:]]*(#|$) ]] && continue
         if [[ "$line" != *" -> "* ]]; then badlines+=("$lineno"); continue; fi
         h="${line%% -> *}"; w="${line#* -> }"
-        h=$(tr -s '[:space:]' ' ' <<<"$h"); h="${h# }"; h="${h% }"
-        w=$(tr -s '[:space:]' ' ' <<<"$w"); w="${w# }"; w="${w% }"
+        h="${h//$'\t'/ }"; while [[ "$h" == *'  '* ]]; do h="${h//  / }"; done; h="${h# }"; h="${h% }"
+        w="${w//$'\t'/ }"; while [[ "$w" == *'  '* ]]; do w="${w//  / }"; done; w="${w# }"; w="${w% }"
         if [[ -z "$h" || -z "$w" ]]; then badlines+=("$lineno"); continue; fi
-        lc_h=$(tr '[:upper:]' '[:lower:]' <<<"$h")
+        lc_h="${h,,}"
         if [[ -n "${have_w[$lc_h]:-}" ]]; then
           if [[ "${have_w[$lc_h]}" == "$w" ]]; then dups=$((dups + 1)); else conflicts=$((conflicts + 1)); fi
           continue
@@ -1536,7 +1546,8 @@ P2
       (( added + dups + conflicts > 0 )) || die "nothing usable to import"
       [[ -n "$out" ]] && printf '%s' "$out" >> "$DICT_FILE"
       local summary="$added added, $dups duplicates skipped, $conflicts conflicts kept yours"
-      (( ${#badlines[@]} > 0 )) && summary+=", ${#badlines[@]} malformed (line ${badlines[*]})"
+      if (( ${#badlines[@]} == 1 )); then summary+=", 1 malformed (line ${badlines[0]})"
+      elif (( ${#badlines[@]} > 1 )); then local bl; bl=$(printf '%s, ' "${badlines[@]}"); summary+=", ${#badlines[@]} malformed (lines ${bl%, })"; fi
       (( added > 0 )) && bump_state
       echo "$summary" ;;
     *) die "usage: dictionary [--json] | add <heard> <written> | edit | prompt [--copy] | export [path] | import <file|--clipboard>" ;;
@@ -1826,7 +1837,14 @@ cmd_transcribe() {
       echo "will transcribe $id when $model is ready"
       return 0
     fi
-    echo "omarecorder: model '$model' is not downloaded (run: omarecorder model download $model)" >&2; exit 3
+    # Suggest the download only when it can actually work: non-catalog names
+    # are allowed when installed, but `model download` would refuse them.
+    if jq -e --arg m "$model" '.[] | select(.name==$m)' <<<"$MODEL_CATALOG" >/dev/null; then
+      echo "omarecorder: model '$model' is not downloaded (run: omarecorder model download $model)" >&2
+    else
+      echo "omarecorder: model '$model' is not installed and not in the catalog (omarecorder models lists what is available)" >&2
+    fi
+    exit 3
   fi
   local unit="omarecorder-tx-$id"
   with_lock _claim_tx "$id" --arg id "$id" --arg m "$model" --arg u "$unit" --argjson t "$(now_epoch)" \
@@ -1949,13 +1967,14 @@ _tx_worker() {
   # on a temporary copy: audio.wav is never modified, and playback always plays
   # what was recorded. A failed pass falls back to the original audio; the
   # transcription itself must never die on a cosmetic step.
-  local enhanced=false
+  local enhanced=false enh_skipped=false
   if [[ "$enhance" == "true" ]]; then
     local enhwav="$dir/audio.tx.enh.wav"
     if enhance_audio "$input" "$enhwav" "$errlog"; then
       input="$enhwav"; enhanced=true
       local edur; edur=$(audio_duration "$enhwav"); [[ -n "$edur" ]] && dur="$edur"
     else
+      enh_skipped=true
       log "enhance failed for $id; transcribing the original audio"
     fi
   fi
@@ -2018,7 +2037,9 @@ _tx_worker() {
   tidy_transcript "$dir"
   state_set --arg id "$id" '.jobs |= map(select(.id != $id))' || true
   log "transcribe ok $id model=$model pieces=$n elapsed=${elapsed}s rtf=$rtf"
-  notify "Transcript ready · $ttl" "$(model_label "$model") took $(fmt_hms "${elapsed%.*}"). Click to open" -- "$SELF" open "$id"
+  local ready_note; ready_note="$(model_label "$model") took $(fmt_hms "${elapsed%.*}")."
+  [[ "$enh_skipped" == true ]] && ready_note+=" Audio cleanup failed, so the original audio was transcribed."
+  notify "Transcript ready · $ttl" "$ready_note Click to open" -- "$SELF" open "$id"
 }
 # publish_transcript <dir> <body> <model> <lang> <from> <to> <chunks> <partial> [enhanced]: header + body → transcript.md (atomic)
 publish_transcript() {
