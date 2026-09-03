@@ -392,10 +392,11 @@ Panel {
         anchors.right: parent.right
         anchors.bottom: parent.bottom
         horizontalAlignment: Text.AlignHCenter
-        // Wraps to a second centered line when the panel is narrow;
-        // the legend degrades, it never clips.
+        // Wraps to a second centered line when the panel is narrow; the
+        // non-breaking spaces keep each key with its word, so a wrap can
+        // only happen at a separator, never between "d" and "dictionary".
         wrapMode: Text.Wrap
-        text: "r record · l library · i import · s settings · d dictionary · Esc close"
+        text: "r record · l library · i import · s settings · d dictionary · Esc close"
         color: root.dim
         font.family: root.fontFamily
         font.pixelSize: Style.font.caption
