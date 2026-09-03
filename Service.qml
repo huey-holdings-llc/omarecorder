@@ -61,6 +61,27 @@ QtObject {
   readonly property string defaultModel: config && config.defaultModel ? config.defaultModel : "base.en"
   readonly property string defaultSource: config && config.defaultSource ? config.defaultSource : "mic"
 
+  // Resume offer: the CLI arms state.last_stop on a clean stop and withdraws
+  // it on a new start, trim, delete or window expiry; this only re-checks the
+  // window against the ticking clock so the button disappears on time.
+  readonly property var lastStop: (state && state.last_stop) ? state.last_stop : null
+  readonly property bool resumable: !!(lastStop && lastStop.resumable === true && !recording && now <= (lastStop.resume_until || 0))
+  readonly property string resumeTitle: {
+    if (!lastStop) return ""
+    var r = recordingById(lastStop.id)
+    var t = lastStop.title || (r ? displayTitle(r) : lastStop.id)
+    return t.length > 40 ? t.slice(0, 39) + "…" : t
+  }
+  readonly property string resumeAgoText: {
+    if (!lastStop) return ""
+    var s = Math.max(0, now - (lastStop.stopped_at || now))
+    if (s < 60) return "just now"
+    var m = Math.floor(s / 60)
+    if (m < 60) return m + "m ago"
+    return Math.floor(m / 60) + "h " + (m % 60) + "m ago"
+  }
+  function resumeRecording() { run(["record", "resume"]) }
+
   function fmtHms(s) { return Fmt.fmtHms(s) }
   function fmtDuration(s) { return Fmt.fmtDuration(s) }
   function fmtDate(iso) { return Fmt.fmtDate(iso) }
@@ -212,6 +233,14 @@ QtObject {
 
   property Timer elapsedTimer: Timer {
     interval: 1000; repeat: true; running: root.recording || root.transcribing || root.downloading
+    onTriggered: root.updateElapsed()
+  }
+
+  // The resume offer ages ("stopped 12m ago") and expires while nothing else
+  // ticks, so a slow clock keeps `now` honest only while an offer is armed.
+  property Timer resumeTimer: Timer {
+    interval: 10000; repeat: true
+    running: !!(root.lastStop && root.lastStop.resumable === true) && !root.recording
     onTriggered: root.updateElapsed()
   }
 

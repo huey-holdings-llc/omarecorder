@@ -172,9 +172,25 @@ are left untouched.
   starts or stops recording. While recording it becomes a red record glyph with
   a running `HH:MM:SS`, replaced by CLIP while the input is on the rails. An
   hourglass means a transcription is running.
-* **Popup keys**: `r` record/stop, `l` library, `i` import, `s` settings
+* **Popup keys**: `r` record/stop, `u` resume the last take (when offered),
+  `l` library, `i` import, `s` settings
   (the Recent list folds away while they are open), `Up`/`Down` and `Enter`
   on recent rows, `Esc`.
+* **Resume after a break**: stopping a recording arms a resume offer for two
+  hours (`resumeWindow` seconds in the config, 0 turns the feature off). While
+  it is armed, a subdued "Resume '<title>' · stopped 12m ago" button sits under
+  Record in the popup, and `omarecorder record resume` does the same from a
+  script. Resuming is never automatic: the bar right-click, the keybinding and
+  the Record button always start a new recording. The continuation is captured
+  as a separate segment file and joined losslessly onto the take when you stop
+  (for a "both" take the fresh pair is mixed and all three tracks are joined);
+  duration, size, levels and the waveform update, the seam offsets are kept in
+  `meta.json` as `resume_seams`, and an existing transcript is flagged stale,
+  like trim. Only the most recently stopped take is offered, and a trimmed
+  take is not resumable: restore it first, then resume and recut. If the
+  recorder dies mid-resume, the original take is untouched and the segment is
+  joined by the normal crash recovery on the next command. This is
+  deliberately not general editing; there is no appending to older takes.
 * **Library keys**: type to search titles and transcript text (transcript
   matches join the list a beat later). `Up`/`Down`, `PgUp`/`PgDn`, `Home`/`End`
   select. `Enter` opens the transcript, or transcribes if there is none
@@ -268,7 +284,7 @@ stay in the folder, so a bad mix can be redone by hand with ffmpeg.
     ├── audio.wav                       16 kHz mono s16 (whisper-native, about 115 MB per hour)
     ├── audio.orig.wav                  only after a trim (unless --replace)
     ├── waveform.png                    2400x128 strip, redrawn on stop, import, trim and analyze
-    ├── meta.json                       title, source, duration, levels, transcript, trim, exported_to
+    ├── meta.json                       title, source, duration, levels, transcript, trim, resume_seams, exported_to
     ├── transcript.md                   header line + plain text, exactly as whisper wrote it
     ├── transcript.tidy.md              paragraphs, repeated passages removed (what the Library shows)
     ├── transcript.prev.md              the previous transcript, kept when you transcribe again
@@ -293,9 +309,12 @@ Config keys (`omarecorder config get --json`): `recordingsDir` (`~/Recordings`),
 `keepAwake` (`true`, a systemd idle/sleep inhibitor while recording),
 `autoTranscribe` (`false`; when `true`, stopping a recording starts a
 transcription with the default model, but only if that model is already
-downloaded), `threads` (`0` lets voxtype decide), `obsidianVault` (empty = the
-open vault), `exportDir` (empty = automatic). Environment: `OMARECORDER_DIR`
-overrides `recordingsDir`, `OMARECORDER_CHUNK_S` sets the piece length.
+downloaded), `resumeWindow` (`7200`; how long a stopped recording can be
+resumed, in seconds, 0 turns resume off; the window is fixed when the
+recording stops), `threads` (`0` lets voxtype decide), `obsidianVault`
+(empty = the open vault), `exportDir` (empty = automatic). Environment:
+`OMARECORDER_DIR` overrides `recordingsDir`, `OMARECORDER_CHUNK_S` sets the
+piece length.
 
 ### Models
 
@@ -309,6 +328,7 @@ time each model transcribes a take of 60 seconds or more.
 
 ```
 omarecorder record start [--source mic|system|both] [--title T]   start a recording
+omarecorder record resume                                          continue the last stopped recording
 omarecorder record stop | toggle | status [--json]                 control / inspect
 omarecorder import <file> [--move] [--title T]                     bring an existing audio file in
 omarecorder list [--json] | show <id> [--json] | analyze <id>      browse / measure levels

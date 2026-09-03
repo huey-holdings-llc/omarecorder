@@ -102,7 +102,11 @@ strip_header() { sed '1{/^<!--/d}' "$1"; }
 CONFIG_DEFAULTS=$(jq -cn --arg dir "${OMARECORDER_DIR:-$HOME/Recordings}" '{
   recordingsDir: $dir, defaultSource: "mic", defaultModel: "base.en",
   language: "en", keepAwake: true, threads: 0, autoTranscribe: false,
+  resumeWindow: 7200,
   obsidianVault: "", exportDir: "" }')   # "" = automatic (see resolve_export_target)
+
+# The configured resume window in seconds, defaults applied (0 = resume off).
+resume_window() { local w; w=$(cfg resumeWindow); [[ "$w" =~ ^[0-9]+$ ]] || w=7200; echo "$w"; }
 
 load_config() {
   local file='{}'
@@ -122,7 +126,7 @@ _write_config() {
   local key="$1" val="$2" cur='{}' j
   [[ -f "$CONFIG_FILE" ]] && cur=$(jq -c . "$CONFIG_FILE")
   case "$key" in
-    threads) j=$(jq -c --arg k "$key" --argjson v "$val" '.[$k]=$v' <<<"$cur") ;;
+    threads|resumeWindow) j=$(jq -c --arg k "$key" --argjson v "$val" '.[$k]=$v' <<<"$cur") ;;
     keepAwake|autoTranscribe) j=$(jq -c --arg k "$key" --argjson v "$val" '.[$k]=$v' <<<"$cur") ;;
     *) j=$(jq -c --arg k "$key" --arg v "$val" '.[$k]=$v' <<<"$cur") ;;
   esac
@@ -147,6 +151,7 @@ cmd_config() {
         keepAwake) [[ "$val" =~ ^(true|false)$ ]] || die "keepAwake must be true|false" ;;
         autoTranscribe) [[ "$val" =~ ^(true|false)$ ]] || die "autoTranscribe must be true|false" ;;
         threads) [[ "$val" =~ ^[0-9]+$ ]] || die "threads must be an integer" ;;
+        resumeWindow) [[ "$val" =~ ^[0-9]+$ ]] || die "resumeWindow must be a whole number of seconds (0 turns resume off)" ;;
         *) die "unknown config key: $key" ;;
       esac
       with_lock _write_config "$key" "$val"; load_config; bump_state; echo "$key=$val" ;;
@@ -155,10 +160,10 @@ cmd_config() {
 }
 
 # ----------------------------------------------------------------- state ----
-EMPTY_STATE='{"recording":null,"jobs":[],"version":0}'
-read_state() { # always normalized to {recording, jobs, version}
+EMPTY_STATE='{"recording":null,"jobs":[],"version":0,"last_stop":null}'
+read_state() { # always normalized to {recording, jobs, version, last_stop}
   { [[ -f "$STATE_FILE" ]] && cat "$STATE_FILE" 2>/dev/null || echo "$EMPTY_STATE"; } \
-    | jq -c '{recording: (.recording // null), jobs: (.jobs // []), version: (.version // 0)}' 2>/dev/null || echo "$EMPTY_STATE"
+    | jq -c '{recording: (.recording // null), jobs: (.jobs // []), version: (.version // 0), last_stop: (.last_stop // null)}' 2>/dev/null || echo "$EMPTY_STATE"
 }
 # save_state <json>: bumps version and writes atomically (callers hold the lock)
 save_state() { write_json "$STATE_FILE" "$(jq -c '.version = ((.version // 0) + 1)' <<<"$1")"; }
@@ -182,6 +187,16 @@ state_set() { with_lock _state_set "$@"; }
 _claim_recording() {
   local st; st=$(read_state)
   [[ $(jq -r '.recording != null' <<<"$st") == "true" ]] && return 1
+  save_state "$(jq -c "$@" <<<"$st")"
+}
+# Like _claim_recording, but only while the resume offer still names this id
+# and is still resumable: a concurrent trim, delete or new start must not be
+# overtaken between record resume's checks and its claim.
+_claim_resume() {
+  local id="$1"; shift
+  local st; st=$(read_state)
+  [[ $(jq -r '.recording != null' <<<"$st") == "true" ]] && return 1
+  [[ $(jq -r --arg id "$id" '.last_stop != null and .last_stop.id == $id and .last_stop.resumable == true' <<<"$st") == "true" ]] || return 1
   save_state "$(jq -c "$@" <<<"$st")"
 }
 _claim_tx() {
@@ -319,6 +334,14 @@ _reconcile_state() {
     keep=$(jq -c --argjson j "$j" '. + [$j]' <<<"$keep")
   done < <(jq -c '.jobs[]' <<<"$st")
   st=$(jq -c --argjson k "$keep" '.jobs=$k' <<<"$st")
+  # A resume offer past its window (or with the feature turned off) is dropped
+  # here, so state.json never advertises a resume that would only be refused.
+  if [[ $(jq -r '.last_stop != null' <<<"$st") == "true" ]]; then
+    local win; win=$(resume_window)
+    if (( win == 0 )) || (( now > $(jq -r '.last_stop.resume_until // 0' <<<"$st") )); then
+      st=$(jq -c '.last_stop = null' <<<"$st"); changed=1; log "reconcile: resume window closed"
+    fi
+  fi
   [[ $changed == 1 ]] && save_state "$st"
   return 0
 }
@@ -328,6 +351,11 @@ _reconcile_state() {
 # outside the state lock; only the final bump touches state.json.
 recover_take() {
   local ddir="$1"
+  # A resume that died leaves the original take intact plus segment files;
+  # repair and join them the way a clean stop would (see recover_segments).
+  if [[ -f "$ddir/audio.seg.wav" || -f "$ddir/mic.seg.wav" || -f "$ddir/system.seg.wav" ]]; then
+    recover_segments "$ddir"
+  fi
   # A "both" take that died before the mix has only mic.wav + system.wav.
   if [[ ! -f "$ddir/audio.wav" && -f "$ddir/mic.wav" && -f "$ddir/system.wav" ]]; then
     repair_wav "$ddir/mic.wav" || true; repair_wav "$ddir/system.wav" || true; mix_both "$ddir" || true
@@ -433,10 +461,11 @@ cmd_record() {
   local sub="${1:-status}"; shift || true
   case "$sub" in
     start) record_start "$@" ;;
+    resume) record_resume "$@" ;;
     stop) record_stop "$@" ;;
     toggle) reconcile_state; if [[ $(jq -r '.recording != null' <<<"$(read_state)") == "true" ]]; then record_stop; else record_start "$@"; fi ;;
     status) cmd_status "$@" ;;
-    *) die "usage: record start [--source mic|system|both] [--title T] | stop [--force] | toggle | status" ;;
+    *) die "usage: record start [--source mic|system|both] [--title T] | resume | stop [--force] | toggle | status" ;;
   esac
 }
 
@@ -470,44 +499,20 @@ record_start() {
       inputs+=("mic|$mic|$dir/mic.wav" "sink|$sys|$dir/system.wav") ;;
   esac
 
-  local pids='[]' files='[]' in kind target file pid
-  for in in "${inputs[@]}"; do
-    kind="${in%%|*}"; in="${in#*|}"; target="${in%%|*}"; file="${in#*|}"
-    local -a props=(); [[ "$kind" == "sink" ]] && props=(-P '{ stream.capture.sink = true }')
-    setsid pw-record --target "$target" "${props[@]}" --rate "$RATE" --channels 1 --format s16 "$file" >/dev/null 2>&1 < /dev/null &
-    pid=$!
-    local i=0
-    while (( i < 30 )) && pid_alive "$pid" && [[ ! -f "$file" ]]; do sleep 0.1; i=$((i+1)); done
-    if ! pid_alive "$pid"; then
-      for p in $(jq -r '.[]' <<<"$pids"); do kill -INT "$p" 2>/dev/null || true; done
-      rm -rf "$dir"; notify "Recording failed" "pw-record could not open $target"
-      die "pw-record exited immediately for $target"
-    fi
-    pids=$(jq -c --argjson p "$pid" '. + [$p]' <<<"$pids")
-    files=$(jq -c --arg f "$file" '. + [$f]' <<<"$files")
-  done
-
-  if [[ $(cfg keepAwake) == "true" ]] && have systemd-inhibit; then
-    local first; first=$(jq -r '.[0]' <<<"$pids")
-    setsid systemd-inhibit --what=idle:sleep --who=omarecorder --why="Recording audio" \
-      tail --pid="$first" -f /dev/null >/dev/null 2>&1 < /dev/null &
+  if ! spawn_recorders "${inputs[@]}"; then
+    rm -rf "$dir"; notify "Recording failed" "pw-record could not open $SPAWN_FAIL"
+    die "pw-record exited immediately for $SPAWN_FAIL"
   fi
-
-  # Live input meter: an independent ffmpeg reader on the same source writes
-  # $LEVEL_FILE a few times a second; the shell watches that file. It lives and
-  # dies with the first recorder (watchdog in _meter_loop) and never affects the take.
-  local meter_pid=null
-  if have ffmpeg; then
-    local mtarget="${mic:-}"; [[ "$source" == "system" ]] && mtarget="$sys.monitor"   # ffmpeg -f pulse knows the .monitor name
-    write_json "$LEVEL_FILE" '{"peak_db":-99,"clip":false,"t":0}'
-    setsid "$SELF" _meter "$mtarget" "$(jq -r '.[0]' <<<"$pids")" >/dev/null 2>&1 < /dev/null &
-    meter_pid=$!
-  fi
+  local pids="$SPAWNED_PIDS" files="$SPAWNED_FILES" p
+  start_keepawake "$(jq -r '.[0]' <<<"$pids")"
+  start_take_meter "$source" "${mic:-}" "${sys:-}" "$(jq -r '.[0]' <<<"$pids")"
+  local meter_pid="$METER_PID"
   write_initial_meta "$dir" "$id" "$title" "$source" "$(now_iso)"
   # Claim atomically: two rapid starts must not both pass the check above and
-  # leave one set of recorders orphaned with no state pointing at them.
+  # leave one set of recorders orphaned with no state pointing at them. A new
+  # recording also withdraws any resume offer: only the last stop is resumable.
   if ! with_lock _claim_recording --arg id "$id" --arg source "$source" --argjson pids "$pids" --argjson files "$files" --arg dir "$dir" --argjson t "$(now_epoch)" --argjson mp "$meter_pid" \
-    '.recording = {id:$id, source:$source, dir:$dir, started_at:$t, pids:$pids, files:$files, meter_pid:$mp}'; then
+    '.recording = {id:$id, source:$source, dir:$dir, started_at:$t, pids:$pids, files:$files, meter_pid:$mp} | .last_stop = null'; then
     for p in $(jq -r '.[]' <<<"$pids"); do kill -INT "$p" 2>/dev/null || true; done
     stop_meter "${meter_pid/null/}"
     rm -rf "$dir"
@@ -516,6 +521,115 @@ record_start() {
   log "record start $id source=$source dir=$dir"
   local src_label; case "$source" in mic) src_label="microphone" ;; system) src_label="system audio" ;; both) src_label="microphone + system audio" ;; esac
   notify "Recording started" "${title:-$id}, $src_label. Click the bar icon or press the toggle to stop."
+  echo "$id"
+}
+
+# spawn_recorders <input>...: one pw-record per "kind|target|file" triple.
+# Fills SPAWNED_PIDS/SPAWNED_FILES (JSON arrays). When a recorder dies right
+# away every started one is stopped, SPAWN_FAIL names the target, and the
+# caller owns any folder cleanup (a fresh start removes its folder, a resume
+# must never touch the existing take).
+spawn_recorders() {
+  SPAWNED_PIDS='[]'; SPAWNED_FILES='[]'; SPAWN_FAIL=""
+  local in kind target file pid p i
+  for in in "$@"; do
+    kind="${in%%|*}"; in="${in#*|}"; target="${in%%|*}"; file="${in#*|}"
+    local -a props=(); [[ "$kind" == "sink" ]] && props=(-P '{ stream.capture.sink = true }')
+    setsid pw-record --target "$target" "${props[@]}" --rate "$RATE" --channels 1 --format s16 "$file" >/dev/null 2>&1 < /dev/null &
+    pid=$!
+    i=0
+    while (( i < 30 )) && pid_alive "$pid" && [[ ! -f "$file" ]]; do sleep 0.1; i=$((i+1)); done
+    if ! pid_alive "$pid"; then
+      for p in $(jq -r '.[]' <<<"$SPAWNED_PIDS"); do kill -INT "$p" 2>/dev/null || true; done
+      SPAWN_FAIL="$target"; return 1
+    fi
+    SPAWNED_PIDS=$(jq -c --argjson p "$pid" '. + [$p]' <<<"$SPAWNED_PIDS")
+    SPAWNED_FILES=$(jq -c --arg f "$file" '. + [$f]' <<<"$SPAWNED_FILES")
+  done
+}
+
+# start_keepawake <pid>: a systemd idle/sleep inhibitor that dies with that pid
+start_keepawake() {
+  [[ $(cfg keepAwake) == "true" ]] && have systemd-inhibit || return 0
+  setsid systemd-inhibit --what=idle:sleep --who=omarecorder --why="Recording audio" \
+    tail --pid="$1" -f /dev/null >/dev/null 2>&1 < /dev/null &
+}
+
+# start_take_meter <source> <mic> <sys> <first_pid>: sets METER_PID.
+# Live input meter: an independent ffmpeg reader on the same source writes
+# $LEVEL_FILE a few times a second; the shell watches that file. It lives and
+# dies with the first recorder (watchdog in _meter_loop) and never affects the take.
+start_take_meter() {
+  METER_PID=null
+  have ffmpeg || return 0
+  local mtarget="$2"; [[ "$1" == "system" ]] && mtarget="$3.monitor"   # ffmpeg -f pulse knows the .monitor name
+  write_json "$LEVEL_FILE" '{"peak_db":-99,"clip":false,"t":0}'
+  setsid "$SELF" _meter "$mtarget" "$4" >/dev/null 2>&1 < /dev/null &
+  METER_PID=$!
+}
+
+# record resume: continue the most recently stopped take. Never automatic (the
+# toggle and start always begin a new recording); only the last stop is
+# offered, within resumeWindow seconds, and only while the take is unedited.
+# The new audio goes to separate segment files (audio.seg.wav, or the
+# mic/system pair for a "both" take) and is joined losslessly on stop, so a
+# crash mid-resume leaves the original exactly as it was.
+record_resume() {
+  [[ $# -eq 0 ]] || die "usage: record resume"
+  reconcile_state   # an expired offer is withdrawn before we look at it
+  (( $(resume_window) > 0 )) || die "resume is off (config resumeWindow is 0)"
+  local st; st=$(read_state)
+  [[ $(jq -r '.recording != null' <<<"$st") == "true" ]] && die "already recording"
+  local ls; ls=$(jq -c '.last_stop' <<<"$st")
+  [[ "$ls" != "null" ]] || die "nothing to resume"
+  local id; id=$(jq -r '.id // empty' <<<"$ls")
+  id_valid "$id" || { state_set '.last_stop = null'; die "nothing to resume"; }
+  (( $(now_epoch) <= $(jq -r '.resume_until // 0' <<<"$ls") )) || die "the resume window for $id has passed"
+  [[ $(jq -r '.resumable == true' <<<"$ls") == "true" ]] || die "$id was trimmed; restore it first (trim $id --restore), then resume"
+  local dir; dir=$(rec_dir "$id") || { state_set '.last_stop = null'; die "no recording with id $id"; }
+  require_idle "$id"
+  # The disk is the truth on edits: any restore point or trim record means the
+  # audio is no longer what was stopped, and appending to it would be editing.
+  if [[ -f "$dir/audio.orig.wav" || $(jq -r 'has("trim")' "$dir/meta.json") == "true" ]]; then
+    die "$id was trimmed; restore it first (trim $id --restore), then resume"
+  fi
+  [[ -f "$dir/audio.wav" ]] || die "no audio.wav in $dir"
+  local source; source=$(jq -r '.source // ""' "$dir/meta.json")
+  [[ "$source" =~ ^(mic|system|both)$ ]] || die "$id cannot be resumed (source: ${source:-unknown})"
+  have pw-record || die "pw-record not found (pipewire)"
+  mkdir -p "$RUN_DIR"
+  rm -f "$dir/audio.seg.wav" "$dir/mic.seg.wav" "$dir/system.seg.wav"
+  local -a inputs=(); local mic="" sys=""
+  case "$source" in
+    mic) mic=$(resolve_mic); [[ -n "$mic" ]] || die "no microphone source found"; inputs+=("mic|$mic|$dir/audio.seg.wav") ;;
+    system) sys=$(resolve_system); [[ -n "$sys" ]] || die "no output sink found"; inputs+=("sink|$sys|$dir/audio.seg.wav") ;;
+    both)
+      [[ -f "$dir/mic.wav" && -f "$dir/system.wav" ]] || die "$id is missing its raw tracks (mic.wav/system.wav) and cannot be resumed"
+      mic=$(resolve_mic); sys=$(resolve_system)
+      [[ -n "$mic" && -n "$sys" ]] || die "need both a microphone and an output sink"
+      inputs+=("mic|$mic|$dir/mic.seg.wav" "sink|$sys|$dir/system.seg.wav") ;;
+  esac
+  if ! spawn_recorders "${inputs[@]}"; then
+    rm -f "$dir/audio.seg.wav" "$dir/mic.seg.wav" "$dir/system.seg.wav"
+    notify "Resume failed" "pw-record could not open $SPAWN_FAIL"
+    die "pw-record exited immediately for $SPAWN_FAIL"
+  fi
+  local pids="$SPAWNED_PIDS" files="$SPAWNED_FILES" p
+  start_keepawake "$(jq -r '.[0]' <<<"$pids")"
+  start_take_meter "$source" "$mic" "$sys" "$(jq -r '.[0]' <<<"$pids")"
+  local meter_pid="$METER_PID"
+  # The claim consumes the offer: it only lands while last_stop still names
+  # this id and is still resumable (see _claim_resume).
+  if ! with_lock _claim_resume "$id" --arg id "$id" --arg source "$source" --argjson pids "$pids" --argjson files "$files" --arg dir "$dir" --argjson t "$(now_epoch)" --argjson mp "$meter_pid" \
+    '.recording = {id:$id, source:$source, dir:$dir, started_at:$t, pids:$pids, files:$files, meter_pid:$mp, resume:true} | .last_stop = null'; then
+    for p in $(jq -r '.[]' <<<"$pids"); do kill -INT "$p" 2>/dev/null || true; done
+    stop_meter "${meter_pid/null/}"
+    rm -f "$dir/audio.seg.wav" "$dir/mic.seg.wav" "$dir/system.seg.wav"
+    die "could not resume $id (it is no longer the last stopped recording)"
+  fi
+  log "record resume $id source=$source dir=$dir"
+  local ttl; ttl=$(jq -r '.title // empty' "$dir/meta.json"); ttl="${ttl:-$id}"
+  notify "Recording resumed" "$ttl. The new audio is appended when you stop."
   echo "$id"
 }
 
@@ -558,14 +672,23 @@ record_stop() { # [--force]
   bump_state
   [[ -d "$dir" ]] || die "recording folder vanished: $dir"
 
-  if [[ "$source" == "both" ]] && ! mix_both "$dir"; then
+  if [[ $(jq -r '.resume // false' <<<"$rec") == "true" ]]; then
+    # A resumed take: the fresh segment(s) are joined onto the original.
+    # append_segments is all-or-nothing, so a failure leaves the take exactly
+    # as it was, with the segment files kept next to it.
+    if ! append_segments "$dir" "$source"; then
+      bump_state
+      notify "Recording saved, but joining failed · ${id}" "the original take is untouched and the new segment is kept next to it (details: $LOG_FILE)"
+      die "could not join the resumed segment for $id; it is kept in $dir"
+    fi
+  elif [[ "$source" == "both" ]] && ! mix_both "$dir"; then
     bump_state
     notify "Recording saved, but mixing failed · ${id}" "mic.wav and system.wav are kept in the recording folder; audio.wav could not be produced (details: $LOG_FILE)"
     die "amix failed for $id; mic.wav and system.wav are kept in $dir"
   fi
   finalize_audio "$dir"
   analyze_levels "$dir"
-  bump_state   # duration/levels are in meta now; let the UI re-list
+  arm_resume "$dir" "$id"   # duration/levels are in meta now; the write also lets the UI re-list
   local dur; dur=$(jq -r '.duration_s // 0' "$dir/meta.json")
   log "record stop $id duration=${dur}s"
   local ttl; ttl=$(jq -r '.title // empty' "$dir/meta.json"); ttl="${ttl:-$id}"
@@ -601,12 +724,85 @@ record_stop() { # [--force]
   echo "$id ($(fmt_hms "$dur"))"
 }
 
-# mix_both <dir>: mic.wav + system.wav → audio.wav (mono, whisper rate)
-mix_both() {
-  local dir="$1"
-  ffmpeg -v error -y -i "$dir/mic.wav" -i "$dir/system.wav" \
-    -filter_complex "amix=inputs=2:duration=longest:normalize=0" -ar "$RATE" -ac 1 -c:a pcm_s16le "$dir/audio.wav.tmp.$$.wav" 2>>"$LOG_FILE" \
-    && mv -f "$dir/audio.wav.tmp.$$.wav" "$dir/audio.wav" || { rm -f "$dir/audio.wav.tmp.$$.wav"; log "amix failed in $dir"; return 1; }
+# mix_pair <mic> <sys> <out>: two tracks → one mono mix at the whisper rate
+mix_pair() {
+  local out="$3"
+  ffmpeg -v error -y -i "$1" -i "$2" \
+    -filter_complex "amix=inputs=2:duration=longest:normalize=0" -ar "$RATE" -ac 1 -c:a pcm_s16le "$out.tmp.$$.wav" 2>>"$LOG_FILE" \
+    && mv -f "$out.tmp.$$.wav" "$out" || { rm -f "$out.tmp.$$.wav"; log "amix failed for $out"; return 1; }
+}
+# mix_both <dir>: mic.wav + system.wav → audio.wav
+mix_both() { mix_pair "$1/mic.wav" "$1/system.wav" "$1/audio.wav"; }
+
+# concat_wav <dir> <base> <seg>: base + seg → <base>.cat.tmp.$$.wav, losslessly
+# (identical formats, `-c copy` through the concat demuxer). The list file
+# holds only the two fixed file names, relative to the folder it sits in, so
+# no user-controlled path ever enters it.
+concat_wav() {
+  local dir="$1" base="$2" seg="$3" list="$1/concat.tmp.$$.txt"
+  printf "file '%s'\nfile '%s'\n" "$base" "$seg" > "$list"
+  if ffmpeg -v error -y -f concat -i "$list" -c copy "$dir/$base.cat.tmp.$$.wav" 2>>"$LOG_FILE"; then rm -f "$list"
+  else rm -f "$list" "$dir/$base.cat.tmp.$$.wav"; log "concat failed for $dir/$base"; return 1; fi
+}
+
+# append_segments <dir> <source>: join the resume segment(s) onto the take and
+# note the seam. For "both" the fresh pair is mixed first, then all three
+# files are joined. All-or-nothing: every concat lands in a temp and the
+# originals are replaced only once all of them succeeded, so a failure leaves
+# the take as it was, with the segment files still in the folder. An existing
+# transcript no longer describes the audio, so it is flagged stale like trim.
+append_segments() {
+  local dir="$1" source="$2" seam b
+  if [[ "$source" == "both" ]]; then
+    [[ -f "$dir/mic.seg.wav" && -f "$dir/system.seg.wav" ]] || { log "resume: segment tracks missing in $dir"; return 1; }
+    mix_pair "$dir/mic.seg.wav" "$dir/system.seg.wav" "$dir/audio.seg.wav" || return 1
+  fi
+  [[ -f "$dir/audio.seg.wav" ]] || { log "resume: no audio.seg.wav in $dir"; return 1; }
+  seam=$(audio_duration "$dir/audio.wav"); seam=${seam:-0}
+  local -a bases=(audio)
+  [[ "$source" == "both" ]] && bases+=(mic system)
+  for b in "${bases[@]}"; do
+    concat_wav "$dir" "$b.wav" "$b.seg.wav" || { rm -f "$dir"/*.cat.tmp.*.wav; return 1; }
+  done
+  for b in "${bases[@]}"; do mv -f "$dir/$b.wav.cat.tmp.$$.wav" "$dir/$b.wav"; done
+  rm -f "$dir/audio.seg.wav" "$dir/mic.seg.wav" "$dir/system.seg.wav"
+  update_meta "$dir" '.resume_seams = ((.resume_seams // []) + [$s]) | (if .transcript != null then .transcript.stale = true else . end)' \
+    --argjson s "$seam"
+  return 0
+}
+
+# recover_segments <dir>: the crash-recovery leg of resume. The original take
+# is intact on disk; only the segment(s) need a header repair before the same
+# join a clean stop performs. A husk with nothing beyond a WAV header is
+# dropped so the take stays exactly as it was.
+recover_segments() {
+  local ddir="$1" source f keep=0
+  source=$(jq -r '.source // ""' "$ddir/meta.json" 2>/dev/null)
+  for f in "$ddir/audio.seg.wav" "$ddir/mic.seg.wav" "$ddir/system.seg.wav"; do
+    [[ -f "$f" ]] || continue
+    repair_wav "$f" || true
+    (( $(file_size "$f") > 44 )) && keep=1
+  done
+  if (( keep == 0 )); then
+    rm -f "$ddir/audio.seg.wav" "$ddir/mic.seg.wav" "$ddir/system.seg.wav"
+    log "resume recovery: dropped empty segment in $ddir"; return 0
+  fi
+  if append_segments "$ddir" "$source"; then log "resume recovery: joined segment in $ddir"
+  else log "resume recovery: could not join segment in $ddir; the files are kept"; fi
+  return 0
+}
+
+# arm_resume <dir> <id>: remember a clean stop so `record resume` can continue
+# this take within the configured window (resumeWindow seconds, 0 = off). The
+# stop of a resumed take lands here too: it becomes the last stop again.
+arm_resume() {
+  local dir="$1" id="$2" win now ttl
+  win=$(resume_window)
+  if (( win == 0 )); then bump_state; return 0; fi
+  now=$(now_epoch)
+  ttl=$(jq -r '.title // ""' "$dir/meta.json" 2>/dev/null || echo "")
+  state_set --arg id "$id" --arg t "$ttl" --argjson now "$now" --argjson until "$((now + win))" \
+    '.last_stop = {id:$id, title:$t, stopped_at:$now, resume_until:$until, resumable:true}'
 }
 
 # finalize_audio <dir>: fill duration/size in meta.json from audio.wav, and
@@ -727,7 +923,9 @@ cmd_status() {
   local st; st=$(read_state)
   local out; out=$(jq -c --argjson now "$(now_epoch)" --arg mdir "$VOXTYPE_MODELS_DIR" '
     .recording |= (if . == null then null else . + {elapsed_s: ($now - .started_at)} end)
-    | .jobs |= map(. + {elapsed_s: ($now - .started_at)})' <<<"$st")
+    | .jobs |= map(. + {elapsed_s: ($now - .started_at)})
+    | .resume = (if .recording == null and .last_stop != null and .last_stop.resumable == true and $now <= (.last_stop.resume_until // 0)
+        then (.last_stop + {stopped_ago_s: ($now - (.last_stop.stopped_at // $now))}) else null end)' <<<"$st")
   # Download progress (bytes_done) is written into the job by _dl_worker itself.
   if [[ "${1:-}" == "--json" ]]; then jq . <<<"$out"; return 0; fi
   if [[ $(jq -r '.recording != null' <<<"$out") == "true" ]]; then
@@ -844,7 +1042,10 @@ cmd_trim() {
     mv -f "$dir/audio.orig.wav" "$dir/audio.wav"
     finalize_audio "$dir"; analyze_levels "$dir"
     update_meta "$dir" 'del(.trim) | (if .transcript != null then .transcript.stale = true else . end)'
-    bump_state; log "trim restore $id"
+    # The take is back to the audio that was stopped, so a standing resume
+    # offer for it is valid again (restore first, then resume and recut).
+    state_set --arg id "$id" '.last_stop |= (if . != null and .id == $id then . + {resumable:true} else . end)'
+    log "trim restore $id"
     echo "$id ($(fmt_hms "$(jq -r '.duration_s // 0' "$dir/meta.json")"))"; return 0
   fi
   [[ -n "$from" && -n "$to" ]] || die "$usage"
@@ -863,7 +1064,8 @@ cmd_trim() {
   local has_o=false; [[ -f "$dir/audio.orig.wav" ]] && has_o=true
   update_meta "$dir" '.trim = {from:($f|tonumber), to:($t|tonumber), at:$now, original:$o} | (if .transcript != null then .transcript.stale = true else . end)' \
     --arg f "$from" --arg t "$to" --arg now "$(now_iso)" --argjson o "$has_o"
-  bump_state
+  # An edited take is not resumable (a restore turns the offer back on).
+  state_set --arg id "$id" '.last_stop |= (if . != null and .id == $id then . + {resumable:false} else . end)'
   local ndur; ndur=$(jq -r '.duration_s // 0' "$dir/meta.json")
   log "trim $id ${from}-${to}s -> ${ndur}s replace=$replace original=$has_o"
   echo "$id ($(fmt_hms "$ndur"))"
@@ -887,7 +1089,9 @@ cmd_rename() {
   local new="$ROOT/$id"; [[ -n "$title" ]] && new="$ROOT/$id $title"
   if [[ "$new" != "$dir" ]]; then mv "$dir" "$new"; fi
   update_meta "$new" '.title = $t' --arg t "$title"
-  bump_state; log "rename $id -> '$title'"; echo "$new"
+  # A standing resume offer shows the title in the popup; keep it current.
+  state_set --arg id "$id" --arg t "$title" '.last_stop |= (if . != null and .id == $id then . + {title:$t} else . end)'
+  log "rename $id -> '$title'"; echo "$new"
 }
 
 cmd_note() {
@@ -913,7 +1117,9 @@ cmd_delete() {
   if (( permanent )); then rm -rf "$dir"; log "delete $id (permanent)"
   elif have gio && gio trash "$dir" 2>>"$LOG_FILE"; then log "delete $id (trash)"
   else die "could not move $id to the trash (gio); use --permanent to delete it for good"; fi
-  bump_state; echo "deleted $id"
+  # A deleted take can never be resumed; withdraw its offer with it.
+  state_set --arg id "$id" '.last_stop = (if .last_stop != null and .last_stop.id == $id then null else .last_stop end)'
+  echo "deleted $id"
 }
 
 # copy <id> [--print]: transcript text (without the header line) to the clipboard
@@ -1593,6 +1799,7 @@ usage() {
 omarecorder $VERSION: record, keep, transcribe locally (voxtype)
 
   record start [--source mic|system|both] [--title T]   start a recording
+  record resume                                          continue the last stopped recording
   record stop | toggle | status [--json]                 control / inspect
   import <file> [--move] [--title T]                     bring an existing audio file in
   list [--json] | show <id> [--json] | analyze <id>      browse / measure levels

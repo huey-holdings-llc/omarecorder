@@ -605,6 +605,181 @@ eq "raw-only text no longer matches" "$("$CLI" search heron)" "[]"
 eq "early match in a large transcript still found" "$("$CLI" search needle)" "[\"$SA\"]"
 "$CLI" delete "$SA" --yes >/dev/null; "$CLI" delete "$SB" --yes >/dev/null
 
+echo "== record resume"
+# A fake audio stack: pactl reports one microphone and one sink, and pw-record
+# "records" by copying the 3 s quiet fixture into its target file and sleeping
+# until the stop signal arrives. That makes the whole start/stop/resume/join
+# pipeline testable with no hardware at all.
+FAKEAUDIO="$TMP/fakeaudio"; mkdir -p "$FAKEAUDIO"
+cat > "$FAKEAUDIO/pactl" <<'STUBEOF'
+#!/bin/bash
+case "$*" in
+  "get-default-source") echo fakemic ;;
+  "list short sources") printf '0\tfakemic\tPipeWire\ts16le 1ch 16000Hz\tRUNNING\n' ;;
+  "get-default-sink") echo fakesink ;;
+esac
+exit 0
+STUBEOF
+cat > "$FAKEAUDIO/pw-record" <<STUBEOF
+#!/bin/bash
+for f in "\$@"; do :; done   # the output file is the last argument
+cp "$TMP/quiet.wav" "\$f"
+exec sleep 600
+STUBEOF
+chmod +x "$FAKEAUDIO/pactl" "$FAKEAUDIO/pw-record"
+FAKEPATH="$FAKEAUDIO:$PATH"
+jq -cn '{recording:null,jobs:[],version:1}' > "$RUN/state.json"
+
+eq "resumeWindow defaults to 7200" "$("$CLI" config get resumeWindow)" "7200"
+fails "resumeWindow rejects a non-number" "$CLI" config set resumeWindow soon
+fails "record resume with nothing stopped" "$CLI" record resume
+fails "record resume rejects extra arguments" "$CLI" record resume now
+
+# A clean stop arms the offer; the state survives unrelated mutations.
+RID=$(PATH="$FAKEPATH" "$CLI" record start --title "Resume Take")
+check "fake stack records" test -n "$RID"
+RD="$OMARECORDER_DIR/$RID Resume Take"
+( PATH="$FAKEPATH" "$CLI" record stop >/dev/null 2>&1 )
+eq "stop arms the resume offer" "$(jq -r '.last_stop.id' "$RUN/state.json")" "$RID"
+eq "the offer carries the title" "$(jq -r '.last_stop.title' "$RUN/state.json")" "Resume Take"
+eq "the offer starts resumable" "$(jq -r '.last_stop.resumable' "$RUN/state.json")" "true"
+check "resume_until is stopped_at plus the window" bash -c "jq -e '.last_stop.resume_until - .last_stop.stopped_at == 7200' '$RUN/state.json'"
+"$CLI" config set threads 0 >/dev/null
+eq "the offer survives unrelated state writes" "$(jq -r '.last_stop.id' "$RUN/state.json")" "$RID"
+eq "status --json makes the offer" "$("$CLI" status --json | jq -r '.resume.id')" "$RID"
+check "and says how long ago the stop was" bash -c "\"$CLI\" status --json | jq -e '.resume.stopped_ago_s >= 0'"
+"$CLI" rename "$RID" "Renamed Take" >/dev/null
+eq "rename keeps the offer's title current" "$(jq -r '.last_stop.title' "$RUN/state.json")" "Renamed Take"
+"$CLI" rename "$RID" "Resume Take" >/dev/null
+
+# The happy path: resume records a separate segment, stop joins it losslessly.
+eq "stopped take is 3 s" "$(jq -r .duration_s "$RD/meta.json")" "3"
+jq -c '.transcript = {model:"base.en"}' "$RD/meta.json" > "$RD/meta.json.t" && mv -f "$RD/meta.json.t" "$RD/meta.json"
+touch "$TMP/resume.marker"
+check "record resume continues the take" bash -c "PATH=\"$FAKEPATH\" \"$CLI\" record resume >/dev/null"
+check "the continuation is a separate segment file" test -s "$RD/audio.seg.wav"
+eq "the original is untouched while resuming" "$(jq -r .duration_s "$RD/meta.json")" "3"
+eq "state marks the recording as a resume" "$("$CLI" status --json | jq -r '.recording.resume')" "true"
+eq "no offer while recording" "$("$CLI" status --json | jq -r '.resume')" "null"
+eq "the offer is consumed by the resume" "$(jq -r '.last_stop' "$RUN/state.json")" "null"
+fails "a second resume is refused while recording" env PATH="$FAKEPATH" "$CLI" record resume
+( PATH="$FAKEPATH" "$CLI" record stop >/dev/null 2>&1 )
+eq "joined take is 6 s" "$(jq -r .duration_s "$RD/meta.json")" "6"
+eq "audio.wav really is 6 s" "$(ffprobe -v error -show_entries format=duration -of csv=p=0 "$RD/audio.wav" | cut -d. -f1)" "6"
+eq "the seam offset is recorded" "$(jq -c .resume_seams "$RD/meta.json")" "[3]"
+eq "size updated after the join" "$(jq -r .size_bytes "$RD/meta.json")" "$(stat -c %s "$RD/audio.wav")"
+eq "the transcript is flagged stale" "$(jq -r .transcript.stale "$RD/meta.json")" "true"
+check "levels re-measured" bash -c "jq -e '.levels.peak_db' '$RD/meta.json'"
+check "waveform regenerated" bash -c "find '$RD' -maxdepth 1 -name waveform.png -newer '$TMP/resume.marker' | grep -q ."
+check "segment files cleaned up" bash -c "! ls '$RD'/*.seg.wav >/dev/null 2>&1"
+eq "the resumed take is offered again" "$(jq -r '.last_stop.id' "$RUN/state.json")" "$RID"
+check "a second resume appends a second seam" bash -c "PATH=\"$FAKEPATH\" \"$CLI\" record resume >/dev/null && PATH=\"$FAKEPATH\" \"$CLI\" record stop >/dev/null"
+eq "two seams now" "$(jq -c .resume_seams "$RD/meta.json")" "[3,6]"
+eq "9 s after two resumes" "$(jq -r .duration_s "$RD/meta.json")" "9"
+
+# Never automatic: toggle and start always begin a new recording.
+check "toggle with an offer armed starts fresh" bash -c "PATH=\"$FAKEPATH\" \"$CLI\" record toggle >/dev/null"
+NEWID=$("$CLI" status --json | jq -r '.recording.id')
+check "and it is a new take, not the resumable one" test "$NEWID" != "$RID"
+eq "starting a new recording clears the offer" "$(jq -r '.last_stop' "$RUN/state.json")" "null"
+( PATH="$FAKEPATH" "$CLI" record stop >/dev/null 2>&1 )
+eq "the new take is the one offered now" "$(jq -r '.last_stop.id' "$RUN/state.json")" "$NEWID"
+"$CLI" delete "$NEWID" --yes >/dev/null
+eq "deleting the offered take clears the offer" "$(jq -r '.last_stop' "$RUN/state.json")" "null"
+
+# The window: an expired offer is dropped and refused; 0 turns resume off.
+NOW=$(date +%s)
+armresume() { # <id> [resume_until]
+  jq -cn --arg id "$1" --argjson t "$((NOW - 100))" --argjson u "${2:-$((NOW + 7200))}" \
+    '{recording:null,jobs:[],version:1,last_stop:{id:$id,title:"Resume Take",stopped_at:$t,resume_until:$u,resumable:true}}' > "$RUN/state.json"
+}
+armresume "$RID" "$((NOW - 5))"
+eq "an expired offer is not made" "$("$CLI" status --json | jq -r '.resume')" "null"
+eq "and reconcile drops it from the state" "$(jq -r '.last_stop' "$RUN/state.json")" "null"
+armresume "$RID" "$((NOW - 5))"
+fails "resume past the window is refused" env PATH="$FAKEPATH" "$CLI" record resume
+"$CLI" config set resumeWindow 0 >/dev/null
+armresume "$RID"
+fails "resume is off at resumeWindow 0" env PATH="$FAKEPATH" "$CLI" record resume
+"$CLI" status >/dev/null
+eq "window off: the armed offer is dropped too" "$(jq -r '.last_stop' "$RUN/state.json")" "null"
+RID0=$(PATH="$FAKEPATH" "$CLI" record start --title "No Offer")
+( PATH="$FAKEPATH" "$CLI" record stop >/dev/null 2>&1 )
+eq "window off: a stop arms nothing" "$(jq -r '.last_stop' "$RUN/state.json")" "null"
+"$CLI" delete "$RID0" --yes >/dev/null
+"$CLI" config set resumeWindow 60 >/dev/null
+RID1=$(PATH="$FAKEPATH" "$CLI" record start --title "Short Window")
+( PATH="$FAKEPATH" "$CLI" record stop >/dev/null 2>&1 )
+check "a custom window is honoured" bash -c "jq -e '.last_stop.resume_until - .last_stop.stopped_at == 60' '$RUN/state.json'"
+"$CLI" delete "$RID1" --yes >/dev/null
+"$CLI" config set resumeWindow 7200 >/dev/null
+
+# A trimmed take is not resumable; restore brings the offer back.
+armresume "$RID"
+"$CLI" trim "$RID" --from 0 --to 2 >/dev/null
+eq "trim turns the offer off" "$(jq -r '.last_stop.resumable' "$RUN/state.json")" "false"
+eq "a trimmed offer is hidden from status" "$("$CLI" status --json | jq -r '.resume')" "null"
+fails "resume of a trimmed take is refused" env PATH="$FAKEPATH" "$CLI" record resume
+"$CLI" trim "$RID" --restore >/dev/null
+eq "restore turns the offer back on" "$(jq -r '.last_stop.resumable' "$RUN/state.json")" "true"
+check "and resume works again after the restore" bash -c "PATH=\"$FAKEPATH\" \"$CLI\" record resume >/dev/null && PATH=\"$FAKEPATH\" \"$CLI\" record stop >/dev/null"
+eq "three seams after the restore-and-recut path" "$(jq -c '.resume_seams | length' "$RD/meta.json")" "3"
+# The disk is the truth: a restore point on disk refuses even an armed offer.
+armresume "$RID"
+touch "$RD/audio.orig.wav"
+fails "a restore point on disk refuses the resume" env PATH="$FAKEPATH" "$CLI" record resume
+rm -f "$RD/audio.orig.wav"
+jq -cn '{recording:null,jobs:[],version:1}' > "$RUN/state.json"
+"$CLI" delete "$RID" --yes >/dev/null
+
+# A "both" take: the segment pair is mixed and all three tracks are joined.
+BID=$(PATH="$FAKEPATH" "$CLI" record start --source both --title "Both Resume")
+BD="$OMARECORDER_DIR/$BID Both Resume"
+( PATH="$FAKEPATH" "$CLI" record stop >/dev/null 2>&1 )
+eq "both take mixed to 3 s" "$(jq -r .duration_s "$BD/meta.json")" "3"
+check "both resume starts" bash -c "PATH=\"$FAKEPATH\" \"$CLI\" record resume >/dev/null"
+check "a segment pair is recording" test -s "$BD/mic.seg.wav" -a -s "$BD/system.seg.wav"
+( PATH="$FAKEPATH" "$CLI" record stop >/dev/null 2>&1 )
+eq "both: the mix is 6 s" "$(jq -r .duration_s "$BD/meta.json")" "6"
+eq "both: mic.wav joined too" "$(ffprobe -v error -show_entries format=duration -of csv=p=0 "$BD/mic.wav" | cut -d. -f1)" "6"
+eq "both: system.wav joined too" "$(ffprobe -v error -show_entries format=duration -of csv=p=0 "$BD/system.wav" | cut -d. -f1)" "6"
+eq "both: seam recorded" "$(jq -c .resume_seams "$BD/meta.json")" "[3]"
+check "both: segments cleaned up" bash -c "! ls '$BD'/*.seg.wav >/dev/null 2>&1"
+"$CLI" delete "$BID" --yes >/dev/null
+
+# A crash mid-resume: the original is untouched and the segment is joined by
+# the existing crash-recovery path on the next command.
+CID="2026-02-01_010101"; CD="$OMARECORDER_DIR/$CID Crash Resume"; mkdir -p "$CD"
+cp "$TMP/quiet.wav" "$CD/audio.wav"; cp "$TMP/quiet.wav" "$CD/audio.seg.wav"
+jq -cn --arg id "$CID" '{id:$id,title:"Crash Resume",source:"mic",created:"2026-02-01T01:01:01+0000",duration_s:3,size_bytes:0,sample_rate:16000,transcript:null,notes:""}' > "$CD/meta.json"
+jq -cn --arg id "$CID" --arg dir "$CD" '{recording:{id:$id,source:"mic",dir:$dir,started_at:0,pids:[999999],files:[],resume:true},jobs:[],version:1}' > "$RUN/state.json"
+eq "status clears the dead resume" "$("$CLI" status)" "idle"
+eq "the crashed segment was joined" "$(jq -r .duration_s "$CD/meta.json")" "6"
+eq "recovery records the seam" "$(jq -c .resume_seams "$CD/meta.json")" "[3]"
+check "no segment left after recovery" bash -c "! ls '$CD'/*.seg.wav >/dev/null 2>&1"
+"$CLI" delete "$CID" --yes >/dev/null
+# A husk of a segment (nothing beyond a header) is dropped, take unchanged.
+CID2="2026-02-02_020202"; CD2="$OMARECORDER_DIR/$CID2 Husk Resume"; mkdir -p "$CD2"
+cp "$TMP/quiet.wav" "$CD2/audio.wav"; head -c 44 /dev/zero > "$CD2/audio.seg.wav"
+jq -cn --arg id "$CID2" '{id:$id,title:"Husk Resume",source:"mic",created:"2026-02-02T02:02:02+0000",duration_s:3,size_bytes:0,sample_rate:16000,transcript:null,notes:""}' > "$CD2/meta.json"
+jq -cn --arg id "$CID2" --arg dir "$CD2" '{recording:{id:$id,source:"mic",dir:$dir,started_at:0,pids:[999999],files:[],resume:true},jobs:[],version:1}' > "$RUN/state.json"
+"$CLI" status >/dev/null
+eq "a husk segment is dropped, take unchanged" "$(jq -r .duration_s "$CD2/meta.json")" "3"
+check "husk segment removed" bash -c "! test -e '$CD2/audio.seg.wav'"
+"$CLI" delete "$CID2" --yes >/dev/null
+# A crashed "both" resume joins all three tracks.
+CID3="2026-02-03_030303"; CD3="$OMARECORDER_DIR/$CID3 Both Crash Resume"; mkdir -p "$CD3"
+cp "$TMP/quiet.wav" "$CD3/audio.wav"; cp "$TMP/quiet.wav" "$CD3/mic.wav"; cp "$TMP/quiet.wav" "$CD3/system.wav"
+cp "$TMP/quiet.wav" "$CD3/mic.seg.wav"; cp "$TMP/quiet.wav" "$CD3/system.seg.wav"
+jq -cn --arg id "$CID3" '{id:$id,title:"Both Crash Resume",source:"both",created:"2026-02-03T03:03:03+0000",duration_s:3,size_bytes:0,sample_rate:16000,transcript:null,notes:""}' > "$CD3/meta.json"
+jq -cn --arg id "$CID3" --arg dir "$CD3" '{recording:{id:$id,source:"both",dir:$dir,started_at:0,pids:[999999],files:[],resume:true},jobs:[],version:1}' > "$RUN/state.json"
+"$CLI" status >/dev/null
+eq "both crash: the mix is 6 s" "$(jq -r .duration_s "$CD3/meta.json")" "6"
+eq "both crash: mic.wav joined" "$(ffprobe -v error -show_entries format=duration -of csv=p=0 "$CD3/mic.wav" | cut -d. -f1)" "6"
+eq "both crash: system.wav joined" "$(ffprobe -v error -show_entries format=duration -of csv=p=0 "$CD3/system.wav" | cut -d. -f1)" "6"
+"$CLI" delete "$CID3" --yes >/dev/null
+jq -cn '{recording:null,jobs:[],version:1}' > "$RUN/state.json"
+
 echo "== transcribe"
 if command -v voxtype >/dev/null && [[ -f "${VOXTYPE_MODELS_DIR:-$HOME/.local/share/voxtype/models}/ggml-base.en.bin" && -f "$TMP/speech12.wav" ]]; then
   ID3=$($CLI import "$TMP/speech12.wav" --title "Speech 12s")
@@ -732,6 +907,17 @@ if pactl list short sources 2>/dev/null | grep -qv '\.monitor'; then
   check "toggle starts" "$CLI" record toggle --source mic
   sleep 1
   check "toggle stops" "$CLI" record toggle
+  # resume on real hardware: the segment comes from the real recorder
+  IDRR=$("$CLI" record start --title "Resume real"); sleep 1
+  "$CLI" record stop >/dev/null
+  check "real resume starts" "$CLI" record resume
+  sleep 1
+  "$CLI" record stop >/dev/null
+  DRR="$OMARECORDER_DIR/$IDRR Resume real"
+  eq "real resume recorded one seam" "$(jq -r '.resume_seams | length' "$DRR/meta.json")" "1"
+  check "joined take runs past the seam" bash -c "jq -e '.duration_s >= .resume_seams[0]' '$DRR/meta.json'"
+  eq "real resumed audio is one valid wav" "$(ffprobe -v error -select_streams a:0 -show_entries stream=codec_name,sample_rate,channels -of csv=p=0 "$DRR/audio.wav")" "pcm_s16le,16000,1"
+  "$CLI" delete "$IDRR" --yes >/dev/null
   # long-take stop confirmation: past the threshold the first stop only arms,
   # a second inside 10 s goes through, and --force (the popup button) skips it
   IDL=$(OMARECORDER_STOP_CONFIRM_S=1 "$CLI" record start --title "Long take")
