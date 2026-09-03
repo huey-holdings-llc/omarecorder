@@ -52,10 +52,14 @@ Panel {
     if (ready) svc.refresh()
     Qt.callLater(function() { keyCatcher.forceActiveFocus() })
   }
-  // Settings live at the bottom of a capped popup: Recent folds away while they
-  // are open, and the scroll follows after the relayout from the visible flips.
+  // Settings live at the bottom of a capped popup: Recent folds away while
+  // they are open. One deferred scroll is not enough, because the popup
+  // itself grows over the next frames as the section lays out, so the view
+  // follows the bottom until the user takes over or settings close.
+  property bool settingsFollowBottom: false
   onSettingsOpenChanged: {
     cursorActive = false; cursorIndex = -1
+    settingsFollowBottom = settingsOpen
     Qt.callLater(function() {
       if (!panelFlick) return
       panelFlick.contentY = settingsOpen ? Math.max(0, panelFlick.contentHeight - panelFlick.height) : 0
@@ -146,7 +150,7 @@ Panel {
         else if (t === "s" || t === "S") root.settingsOpen = !root.settingsOpen
         else if (t === "i" || t === "I") root.importAudio()
         else if ((t === "u" || t === "U") && root.ready && root.svc.resumable && !root.recording) root.svc.resumeRecording()
-        else if ((t === "d" || t === "D") && root.ready) { root.settingsOpen = true; Qt.callLater(settingsSection.focusDictAdd) }
+        else if ((t === "d" || t === "D") && root.ready) { root.settingsOpen = true; root.settingsFollowBottom = true; Qt.callLater(settingsSection.focusDictAdd) }
       }
 
       Flickable {
@@ -162,6 +166,9 @@ Panel {
         boundsBehavior: Flickable.StopAtBounds
         flickableDirection: Flickable.VerticalFlick
         interactive: contentHeight > height
+        onContentHeightChanged: if (root.settingsFollowBottom) contentY = Math.max(0, contentHeight - height)
+        onHeightChanged: if (root.settingsFollowBottom) contentY = Math.max(0, contentHeight - height)
+        onMovementStarted: root.settingsFollowBottom = false
         ScrollBar.vertical: ThinScrollBar { id: panelBar; foreground: root.foreground }
 
         Column {
