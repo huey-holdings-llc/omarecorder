@@ -293,7 +293,11 @@ Config keys (`omarecorder config get --json`): `recordingsDir` (`~/Recordings`),
 `keepAwake` (`true`, a systemd idle/sleep inhibitor while recording),
 `autoTranscribe` (`false`; when `true`, stopping a recording starts a
 transcription with the default model, but only if that model is already
-downloaded), `threads` (`0` lets voxtype decide), `obsidianVault` (empty = the
+downloaded), `enhanceAudio` (`false`; when `true`, transcription runs an audio
+cleanup pass, a highpass filter, noise reduction and loudness normalization, on
+a temporary copy of the audio and transcribes that copy; `audio.wav` is never
+modified, and `transcribe <id> --enhance` / `--no-enhance` override the setting
+for one run), `threads` (`0` lets voxtype decide), `obsidianVault` (empty = the
 open vault), `exportDir` (empty = automatic). Environment: `OMARECORDER_DIR`
 overrides `recordingsDir`, `OMARECORDER_CHUNK_S` sets the piece length.
 
@@ -319,7 +323,7 @@ omarecorder copy <id> [--raw] [--print]                            transcript te
 omarecorder tidy <id>                                              rebuild transcript.tidy.md (paragraphs, loops removed)
 omarecorder export <id> [--vault P | --dir P] [--no-open] [--raw]   transcript to an Obsidian note
 omarecorder vaults [--json]                                        Obsidian vaults on this machine (* = open)
-omarecorder transcribe <id> [--model M] [--language L] [--from s --to s] [--download]
+omarecorder transcribe <id> [--model M] [--language L] [--from s --to s] [--enhance|--no-enhance] [--download]
 omarecorder cancel <id> | estimate <id> --model M
 omarecorder models [--json] | model download <name>
 omarecorder play <id> [--from s] | stop-play | open <id> | folder <id>
@@ -391,6 +395,12 @@ Pieces mean visible progress, a cancel that keeps what is already done, and
 small temporary files. whisper also drifts into repeating itself on long
 inputs; pieces help, but the reliable cure is the Tidy pass, which removes
 back-to-back repeats whatever their cause.
+
+**Does the audio cleanup pass change my recording?**
+No, never. With `enhanceAudio` on (or `transcribe <id> --enhance`), the cleanup
+runs on a temporary copy that only whisper hears and that is deleted
+afterwards; `audio.wav` stays exactly as recorded, and playback always plays
+what was actually recorded.
 
 **Can I bring in recordings from elsewhere?**
 Yes. `omarecorder import <file>` (or `i` in the popup) takes anything ffmpeg can

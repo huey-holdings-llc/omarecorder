@@ -3,6 +3,19 @@
 All notable changes to this project are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow SemVer.
 
+## [Unreleased]
+
+### Added
+- An optional audio cleanup pass at transcription time, off by default. With
+  the `enhanceAudio` config toggle on (popup settings, next to the transcribe
+  toggle) or `transcribe <id> --enhance`, the transcription pipeline copies
+  the audio to a temporary WAV, runs a highpass filter, noise reduction
+  (`afftdn`) and two-pass loudness normalization on the copy, transcribes the
+  copy and deletes it. The recording itself is never modified. When the pass
+  ran, the transcript header and `meta.json` say so; when it fails, the
+  original audio is transcribed instead and the fallback is logged.
+  `--no-enhance` overrides the config for one run. (#48)
+
 ## [1.3.1] - 2026-09-02
 
 ### Fixed

@@ -102,7 +102,7 @@ strip_header() { sed '1{/^<!--/d}' "$1"; }
 CONFIG_DEFAULTS=$(jq -cn --arg dir "${OMARECORDER_DIR:-$HOME/Recordings}" '{
   recordingsDir: $dir, defaultSource: "mic", defaultModel: "base.en",
   language: "en", keepAwake: true, threads: 0, autoTranscribe: false,
-  obsidianVault: "", exportDir: "" }')   # "" = automatic (see resolve_export_target)
+  enhanceAudio: false, obsidianVault: "", exportDir: "" }')   # "" = automatic (see resolve_export_target)
 
 load_config() {
   local file='{}'
@@ -123,7 +123,7 @@ _write_config() {
   [[ -f "$CONFIG_FILE" ]] && cur=$(jq -c . "$CONFIG_FILE")
   case "$key" in
     threads) j=$(jq -c --arg k "$key" --argjson v "$val" '.[$k]=$v' <<<"$cur") ;;
-    keepAwake|autoTranscribe) j=$(jq -c --arg k "$key" --argjson v "$val" '.[$k]=$v' <<<"$cur") ;;
+    keepAwake|autoTranscribe|enhanceAudio) j=$(jq -c --arg k "$key" --argjson v "$val" '.[$k]=$v' <<<"$cur") ;;
     *) j=$(jq -c --arg k "$key" --arg v "$val" '.[$k]=$v' <<<"$cur") ;;
   esac
   write_json "$CONFIG_FILE" "$j"
@@ -146,6 +146,7 @@ cmd_config() {
         defaultSource) [[ "$val" =~ ^(mic|system|both)$ ]] || die "defaultSource must be mic|system|both" ;;
         keepAwake) [[ "$val" =~ ^(true|false)$ ]] || die "keepAwake must be true|false" ;;
         autoTranscribe) [[ "$val" =~ ^(true|false)$ ]] || die "autoTranscribe must be true|false" ;;
+        enhanceAudio) [[ "$val" =~ ^(true|false)$ ]] || die "enhanceAudio must be true|false" ;;
         threads) [[ "$val" =~ ^[0-9]+$ ]] || die "threads must be an integer" ;;
         *) die "unknown config key: $key" ;;
       esac
@@ -1254,12 +1255,16 @@ _dl_worker() {
       tid=$(jq -r '.id // empty' <<<"$then_json"); tlang=$(jq -r '.language // empty' <<<"$then_json"); tthreads=$(jq -r '.threads // empty' <<<"$then_json")
       tfrom=$(jq -r '.from // empty' <<<"$then_json"); tto=$(jq -r '.to // empty' <<<"$then_json")
       local tchunk; tchunk=$(jq -r '.chunk_s // empty' <<<"$then_json")
+      local tenh; tenh=$(jq -r '.enhance // empty' <<<"$then_json")
       local -a targs=(transcribe "$tid" --model "$name")
       [[ -n "$tlang" ]] && targs+=(--language "$tlang")
       [[ -n "$tthreads" ]] && targs+=(--threads "$tthreads")
       [[ -n "$tfrom" ]] && targs+=(--from "$tfrom")
       [[ -n "$tto" ]] && targs+=(--to "$tto")
       [[ -n "$tchunk" ]] && targs+=(--chunk-s "$tchunk")
+      # The choice was resolved when the intent was parked; replay it as is.
+      [[ "$tenh" == "true" ]] && targs+=(--enhance)
+      [[ "$tenh" == "false" ]] && targs+=(--no-enhance)
       if err=$("$SELF" "${targs[@]}" 2>&1 >/dev/null); then
         local d ttl=""; d=$(rec_dir "$tid" 2>/dev/null) && ttl=$(jq -r '.title // empty' "$d/meta.json" 2>/dev/null); ttl="${ttl:-$tid}"
         notify "Model ready · $(model_label "$name")" "Transcribing $ttl now"; log "download chained transcribe $tid"
@@ -1289,15 +1294,19 @@ cmd_estimate() {
 
 # ----------------------------------------------------------- transcribe ----
 cmd_transcribe() {
-  local id="${1:-}"; [[ -n "$id" ]] || die "usage: transcribe <id> [--model M] [--language L] [--from s --to s] [--chunk-s N]"; shift
+  local id="${1:-}"; [[ -n "$id" ]] || die "usage: transcribe <id> [--model M] [--language L] [--from s --to s] [--chunk-s N] [--enhance|--no-enhance]"; shift
   local model; model=$(cfg defaultModel); local lang; lang=$(cfg language); local threads; threads=$(cfg threads); local from="" to="" dl=0 chunk_s=""
+  # The cleanup pass (#48): config default, overridden per run by the flags.
+  local enhance; enhance=$(cfg enhanceAudio)
   while [[ $# -gt 0 ]]; do
     case "$1" in
       --model) model="$2"; shift 2 ;; --language) lang="$2"; shift 2 ;; --threads) threads="$2"; shift 2 ;;
       --from) from="$2"; shift 2 ;; --to) to="$2"; shift 2 ;; --chunk-s) chunk_s="$2"; shift 2 ;;
+      --enhance) enhance=true; shift ;; --no-enhance) enhance=false; shift ;;
       --download) dl=1; shift ;; *) die "unknown option: $1" ;;
     esac
   done
+  [[ "$enhance" == "true" ]] || enhance=false   # a hand-edited config must not reach the worker as garbage
   [[ -z "$from" ]] || valid_seconds "$from" || die "--from must be a non-negative number of seconds"
   [[ -z "$to" ]] || valid_seconds "$to" || die "--to must be a non-negative number of seconds"
   [[ -z "$from" || -z "$to" ]] || awk -v a="$from" -v b="$to" 'BEGIN{exit !(b > a)}' || die "--to must be greater than --from"
@@ -1311,8 +1320,8 @@ cmd_transcribe() {
     if (( dl )); then
       # All the recording validations above already passed, so the intent is
       # sound; park it on the download job and let _dl_worker fire it.
-      local then_json; then_json=$(jq -cn --arg id "$id" --arg l "$lang" --arg th "$threads" --arg f "$from" --arg t "$to" --arg c "$chunk_s" \
-        '{id:$id, language:$l, threads:$th, from:$f, to:$t, chunk_s:$c}')
+      local then_json; then_json=$(jq -cn --arg id "$id" --arg l "$lang" --arg th "$threads" --arg f "$from" --arg t "$to" --arg c "$chunk_s" --arg e "$enhance" \
+        '{id:$id, language:$l, threads:$th, from:$f, to:$t, chunk_s:$c, enhance:$e}')
       start_download "$model" "$then_json"
       log "transcribe $id deferred until $model finishes downloading"
       echo "will transcribe $id when $model is ready"
@@ -1324,12 +1333,12 @@ cmd_transcribe() {
   with_lock _claim_tx "$id" --arg id "$id" --arg m "$model" --arg u "$unit" --argjson t "$(now_epoch)" \
     '.jobs += [{type:"transcribe", id:$id, model:$m, unit:$u, started_at:$t}]' \
     || die "transcription already running for $id"
-  log "transcribe $id model=$model lang=$lang range=${from:-0}-${to:-end}${chunk_s:+ chunk_s=$chunk_s}"
+  log "transcribe $id model=$model lang=$lang range=${from:-0}-${to:-end}${chunk_s:+ chunk_s=$chunk_s} enhance=$enhance"
   # A per-run chunk override rides the env var run_detached already forwards;
   # the direct CHUNK_S assignment covers the inline (OMARECORDER_SYNC=1) path,
   # where the global was evaluated at script load.
   if [[ -n "$chunk_s" ]]; then export OMARECORDER_CHUNK_S="$chunk_s"; CHUNK_S="$chunk_s"; fi
-  if ! run_detached "$unit" "OmaRecorder transcribe $id" "$SELF" _tx-worker "$id" "$model" "$lang" "$threads" "$from" "$to"; then
+  if ! run_detached "$unit" "OmaRecorder transcribe $id" "$SELF" _tx-worker "$id" "$model" "$lang" "$threads" "$from" "$to" "$enhance"; then
     state_set --arg id "$id" '.jobs |= map(select(.id != $id))'
     die "could not start transcription job"
   fi
@@ -1381,8 +1390,37 @@ _learn_rtf() {
   write_json "$BENCH_FILE" "$(jq -c --arg m "$model" --argjson r "$rtf" --arg t "$(now_iso)" '.[$m] = {rtf:$r, measured:$t}' <<<"$bench")"
 }
 
+# enhance_audio <in> <out> [errlog]: the cleanup pass (#48). highpass (~80 Hz
+# rumble and hum) -> afftdn (broadband noise) -> loudnorm (two-pass: measure,
+# then apply with the measured values) into <out>, at the whisper rate. The
+# input is only read; the caller falls back to it when any step fails. All
+# three filters ship in stock Omarchy ffmpeg.
+enhance_audio() {
+  local in="$1" out="$2" errlog="${3:-/dev/null}"
+  local chain="highpass=f=80,afftdn"
+  # Pass 1: measure. loudnorm prints its JSON block at the end of stderr.
+  local measured; measured=$(ffmpeg -nostdin -nostats -v info -i "$in" \
+    -af "$chain,loudnorm=I=-16:TP=-1.5:LRA=11:print_format=json" -f null - 2>&1 | sed -n '/^{/,/^}/p') || true
+  local mi mtp mlra mth moff v
+  mi=$(jq -r '.input_i // empty' <<<"$measured" 2>/dev/null)
+  mtp=$(jq -r '.input_tp // empty' <<<"$measured" 2>/dev/null)
+  mlra=$(jq -r '.input_lra // empty' <<<"$measured" 2>/dev/null)
+  mth=$(jq -r '.input_thresh // empty' <<<"$measured" 2>/dev/null)
+  moff=$(jq -r '.target_offset // empty' <<<"$measured" 2>/dev/null)
+  # Plain numbers only before they go into a filter string (silence measures
+  # as -inf, and a failed pass 1 leaves them empty).
+  for v in "$mi" "$mtp" "$mlra" "$mth" "$moff"; do
+    [[ "$v" =~ ^-?[0-9]+([.][0-9]+)?$ ]] || { log "enhance: measurement pass gave no usable values for $in"; return 1; }
+  done
+  # Pass 2: apply. The chain is identical, so the measurements still hold.
+  ffmpeg -nostdin -v error -y -i "$in" \
+    -af "$chain,loudnorm=I=-16:TP=-1.5:LRA=11:measured_I=$mi:measured_TP=$mtp:measured_LRA=$mlra:measured_thresh=$mth:offset=$moff:linear=true" \
+    -ar "$RATE" -ac 1 -c:a pcm_s16le "$out.tmp.$$.wav" 2>>"$errlog" || { rm -f "$out.tmp.$$.wav"; return 1; }
+  mv -f "$out.tmp.$$.wav" "$out"
+}
+
 _tx_worker() {
-  local id="$1" model="$2" lang="$3" threads="$4" from="$5" to="$6"
+  local id="$1" model="$2" lang="$3" threads="$4" from="$5" to="$6" enhance="${7:-false}"
   local dir; dir=$(require_dir "$id")
   local ttl; ttl=$(jq -r '.title // empty' "$dir/meta.json"); ttl="${ttl:-$id}"
   local acc="$dir/transcript.md.tmp" errlog="$RUN_DIR/tx-$id.err" child="" start done_audio=0
@@ -1407,6 +1445,20 @@ _tx_worker() {
       notify "Transcription failed · $ttl" "could not cut the requested range"; log "transcribe FAILED $id (range cut)"; return 0
     fi
     input="$tmpwav"; dur=$(audio_duration "$tmpwav"); dur=${dur:-0}
+  fi
+  # The cleanup pass runs on the whole tx input, before any chunking, and only
+  # on a temporary copy: audio.wav is never modified, and playback always plays
+  # what was recorded. A failed pass falls back to the original audio; the
+  # transcription itself must never die on a cosmetic step.
+  local enhanced=false
+  if [[ "$enhance" == "true" ]]; then
+    local enhwav="$dir/audio.tx.enh.wav"
+    if enhance_audio "$input" "$enhwav" "$errlog"; then
+      input="$enhwav"; enhanced=true
+      local edur; edur=$(audio_duration "$enhwav"); [[ -n "$edur" ]] && dur="$edur"
+    else
+      log "enhance failed for $id; transcribing the original audio"
+    fi
   fi
   local -a opts=(--model "$model" --language "$lang")
   [[ "$threads" =~ ^[1-9][0-9]*$ ]] && opts+=(--threads "$threads")
@@ -1433,10 +1485,10 @@ _tx_worker() {
     done_audio=$(awk -v a="$done_audio" -v s="$s" -v e="$e" 'BEGIN{print a + (e - s)}')
     if (( prev_kept == 0 )); then [[ -f "$dir/transcript.md" ]] && cp -f "$dir/transcript.md" "$dir/transcript.prev.md"; prev_kept=1; fi
     if (( i < n )); then   # publish what we have so far; the Library shows it growing
-      publish_transcript "$dir" "$acc" "$model" "$lang" "$from" "$to" "$n" true
+      publish_transcript "$dir" "$acc" "$model" "$lang" "$from" "$to" "$n" true "$enhanced"
       tidy_transcript "$dir"
-      update_meta "$dir" '.transcript = ((.transcript // {}) + {model:$m, language:$l, created:$c, partial:true, chunks:$N, chunks_done:$i, chunk_s:$k})' \
-        --arg m "$model" --arg l "$lang" --arg c "$(now_iso)" --argjson N "$n" --argjson i "$i" --argjson k "$CHUNK_S"
+      update_meta "$dir" '.transcript = ((.transcript // {}) + {model:$m, language:$l, created:$c, partial:true, chunks:$N, chunks_done:$i, chunk_s:$k, enhanced:$E})' \
+        --arg m "$model" --arg l "$lang" --arg c "$(now_iso)" --argjson N "$n" --argjson i "$i" --argjson k "$CHUNK_S" --argjson E "$enhanced"
     fi
   done
   rm -f "$dir"/audio.tx.* "$ctxt"
@@ -1445,7 +1497,7 @@ _tx_worker() {
     [[ -n "$why" ]] || why=$(grep -iE 'error|failed|cannot|not found' "$errlog" 2>/dev/null | tail -1 | cut -c1-120)
     mkdir -p "$STATE_DIR"; mv -f "$errlog" "$STATE_DIR/tx-$id.err" 2>/dev/null || true
     if (( i > 1 )) && [[ -s "$acc" ]]; then   # some pieces made it: keep them, say so
-      publish_transcript "$dir" "$acc" "$model" "$lang" "$from" "$to" "$n" true
+      publish_transcript "$dir" "$acc" "$model" "$lang" "$from" "$to" "$n" true "$enhanced"
       tidy_transcript "$dir"
       notify "Transcription stopped after $((i - 1))/$n pieces · $ttl" "${why:-voxtype failed}. The finished pieces are kept (details: $STATE_DIR/tx-$id.err)"
     else
@@ -1456,12 +1508,12 @@ _tx_worker() {
   rm -f "$errlog"
   local elapsed; elapsed=$(awk -v s="$start" -v e="$(date +%s.%N)" 'BEGIN{d=e-s; if(d<0.1)d=0.1; printf "%.1f", d}')
   grep -q '[^[:space:]]' "$acc" || printf '(no speech detected)\n' > "$acc"
-  publish_transcript "$dir" "$acc" "$model" "$lang" "$from" "$to" "$n" false
+  publish_transcript "$dir" "$acc" "$model" "$lang" "$from" "$to" "$n" false "$enhanced"
   rm -f "$acc"
   learn_rtf "$model" "$done_audio" "$elapsed"
   local rtf; rtf=$(jq -n --argjson d "$done_audio" --argjson e "$elapsed" '(($d / $e) * 100 | round) / 100')
-  update_meta "$dir" '.transcript = {model:$m, language:$l, created:$c, elapsed_s:$e, rtf:$r, chunks:$N, chunks_done:$N, partial:false, chunk_s:$k}' \
-    --arg m "$model" --arg l "$lang" --arg c "$(now_iso)" --argjson e "$elapsed" --argjson r "$rtf" --argjson N "$n" --argjson k "$CHUNK_S"
+  update_meta "$dir" '.transcript = {model:$m, language:$l, created:$c, elapsed_s:$e, rtf:$r, chunks:$N, chunks_done:$N, partial:false, chunk_s:$k, enhanced:$E}' \
+    --arg m "$model" --arg l "$lang" --arg c "$(now_iso)" --argjson e "$elapsed" --argjson r "$rtf" --argjson N "$n" --argjson k "$CHUNK_S" --argjson E "$enhanced"
   # After the final meta write: update_meta above replaces .transcript whole, and
   # tidy merges its stats into it, so tidy must come last.
   tidy_transcript "$dir"
@@ -1469,10 +1521,11 @@ _tx_worker() {
   log "transcribe ok $id model=$model pieces=$n elapsed=${elapsed}s rtf=$rtf"
   notify "Transcript ready · $ttl" "$(model_label "$model") took $(fmt_hms "${elapsed%.*}"). Click to open" -- "$SELF" open "$id"
 }
-# publish_transcript <dir> <body> <model> <lang> <from> <to> <chunks> <partial>: header + body → transcript.md (atomic)
+# publish_transcript <dir> <body> <model> <lang> <from> <to> <chunks> <partial> [enhanced]: header + body → transcript.md (atomic)
 publish_transcript() {
-  local dir="$1" body="$2" model="$3" lang="$4" from="$5" to="$6" chunks="$7" partial="$8" ptag=""
+  local dir="$1" body="$2" model="$3" lang="$4" from="$5" to="$6" chunks="$7" partial="$8" enhanced="${9:-false}" ptag=""
   [[ "$partial" == "true" ]] && ptag=" partial=true"
+  [[ "$enhanced" == "true" ]] && ptag="$ptag enhanced=true"
   { printf '<!-- omarecorder model=%s language=%s created=%s range=%s-%s chunks=%s%s -->\n' "$model" "$lang" "$(now_iso)" "${from:-0}" "${to:-end}" "$chunks" "$ptag"
     cat "$body"; } > "$dir/transcript.md.new"
   mv -f "$dir/transcript.md.new" "$dir/transcript.md"
@@ -1604,7 +1657,7 @@ omarecorder $VERSION: record, keep, transcribe locally (voxtype)
   tidy <id>                                              rebuild transcript.tidy.md (paragraphs, loops removed)
   export <id> [--vault P | --dir P] [--no-open] [--raw]           transcript → Obsidian note (frontmatter + text)
   vaults [--json]                                        Obsidian vaults on this machine (* = open)
-  transcribe <id> [--model M] [--language L] [--from s --to s] [--chunk-s N] [--download]
+  transcribe <id> [--model M] [--language L] [--from s --to s] [--chunk-s N] [--enhance|--no-enhance] [--download]
   cancel <id> | estimate <id> --model M
   models [--json] | model download <name> | model cancel <name>
   play <id> [--from s] | stop-play | open <id> | folder <id>

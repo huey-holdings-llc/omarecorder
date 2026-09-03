@@ -535,6 +535,57 @@ mkdir -p "$TMP/dlm4"; jq -cn '{recording:null,jobs:[],version:1}' > "$RUN/state.
 ( PATH="$STUB:$PATH" VOXTYPE_MODELS_DIR="$TMP/dlm4" "$CLI" transcribe "$IDD" --model small.en --chunk-s 1 --download >/dev/null 2>&1 )
 check "replayed chunk override splits in three" bash -c "head -1 \"$DD/transcript.md\" | grep -q 'chunks=3'"
 
+# The audio cleanup pass (#48): a temporary copy is enhanced (highpass,
+# afftdn, two-pass loudnorm) and transcribed; audio.wav is never modified.
+eq "enhanceAudio defaults to false" "$($CLI config get enhanceAudio)" "false"
+check "enhanceAudio accepts true" "$CLI" config set enhanceAudio true
+check "enhanceAudio stored as a real boolean" bash -c "\"$CLI\" config get --json | jq -e '.enhanceAudio == true' >/dev/null"
+fails "enhanceAudio rejects other values" "$CLI" config set enhanceAudio maybe
+"$CLI" config set enhanceAudio false >/dev/null
+cp "$DD/audio.wav" "$TMP/enh.before.wav"
+jq -cn '{recording:null,jobs:[],version:1}' > "$RUN/state.json"
+( PATH="$STUB:$PATH" VOXTYPE_MODELS_DIR="$DLM" "$CLI" transcribe "$IDD" --model small.en --enhance >/dev/null 2>&1; echo $? > "$TMP/rc" )
+eq "transcribe --enhance exits 0" "$(cat "$TMP/rc")" "0"
+check "header records the cleanup pass" bash -c "head -1 \"$DD/transcript.md\" | grep -q 'enhanced=true'"
+eq "meta records enhanced true" "$(jq -r .transcript.enhanced "$DD/meta.json")" "true"
+check "audio.wav untouched by the pass" cmp -s "$TMP/enh.before.wav" "$DD/audio.wav"
+check "no enhance temp left behind" bash -c "! ls \"$DD\"/audio.tx.* >/dev/null 2>&1"
+( PATH="$STUB:$PATH" VOXTYPE_MODELS_DIR="$DLM" "$CLI" transcribe "$IDD" --model small.en >/dev/null 2>&1 )
+check "off by default: header has no enhanced tag" bash -c "! head -1 \"$DD/transcript.md\" | grep -q enhanced"
+eq "meta records enhanced false" "$(jq -r .transcript.enhanced "$DD/meta.json")" "false"
+"$CLI" config set enhanceAudio true >/dev/null
+( PATH="$STUB:$PATH" VOXTYPE_MODELS_DIR="$DLM" "$CLI" transcribe "$IDD" --model small.en >/dev/null 2>&1 )
+check "config true turns the pass on" bash -c "head -1 \"$DD/transcript.md\" | grep -q 'enhanced=true'"
+( PATH="$STUB:$PATH" VOXTYPE_MODELS_DIR="$DLM" "$CLI" transcribe "$IDD" --model small.en --no-enhance >/dev/null 2>&1 )
+eq "--no-enhance overrides the config" "$(jq -r .transcript.enhanced "$DD/meta.json")" "false"
+"$CLI" config set enhanceAudio false >/dev/null
+# Chunked long take: the cleanup runs once on the tx input, before the split.
+( PATH="$STUB:$PATH" VOXTYPE_MODELS_DIR="$DLM" "$CLI" transcribe "$IDD" --model small.en --chunk-s 1 --enhance >/dev/null 2>&1; echo $? > "$TMP/rc" )
+eq "enhanced chunked run exits 0" "$(cat "$TMP/rc")" "0"
+check "still split into three pieces" bash -c "head -1 \"$DD/transcript.md\" | grep -q 'chunks=3'"
+check "and carries the enhanced tag" bash -c "head -1 \"$DD/transcript.md\" | grep -q 'enhanced=true'"
+# Parked on a download: the resolved choice rides the then intent and replays.
+mkdir -p "$TMP/dlm5"
+( PATH="$STUBSNAP:$PATH" VOXTYPE_MODELS_DIR="$TMP/dlm5" "$CLI" transcribe "$IDD" --model small.en --enhance --download >/dev/null 2>&1 )
+eq "then carries enhance" "$(jq -r '.jobs[0]."then".enhance' "$TMP/state.mid")" "true"
+mkdir -p "$TMP/dlm6"; jq -cn '{recording:null,jobs:[],version:1}' > "$RUN/state.json"
+( PATH="$STUB:$PATH" VOXTYPE_MODELS_DIR="$TMP/dlm6" "$CLI" transcribe "$IDD" --model small.en --enhance --download >/dev/null 2>&1 )
+check "replayed chain keeps the enhanced tag" bash -c "head -1 \"$DD/transcript.md\" | grep -q 'enhanced=true'"
+# A failing cleanup falls back to the original audio instead of failing the job.
+FFENH="$TMP/ffenh"; mkdir -p "$FFENH"
+REAL_FFMPEG=$(command -v ffmpeg)
+cat > "$FFENH/ffmpeg" <<FFEOF
+#!/bin/bash
+for a in "\$@"; do case "\$a" in *afftdn*) exit 1 ;; esac; done
+exec "$REAL_FFMPEG" "\$@"
+FFEOF
+chmod +x "$FFENH/ffmpeg"
+jq -cn '{recording:null,jobs:[],version:1}' > "$RUN/state.json"
+( PATH="$FFENH:$STUB:$PATH" VOXTYPE_MODELS_DIR="$DLM" "$CLI" transcribe "$IDD" --model small.en --enhance >/dev/null 2>&1; echo $? > "$TMP/rc" )
+eq "failed cleanup still transcribes" "$(cat "$TMP/rc")" "0"
+eq "and records enhanced false" "$(jq -r .transcript.enhanced "$DD/meta.json")" "false"
+check "fallback is logged" bash -c "grep -q 'enhance failed' \"$XDG_STATE_HOME/omarecorder/omarecorder.log\""
+
 # model cancel (#39): validated, idempotent, atomic job + chain removal.
 fails "cancel unknown model" "$CLI" model cancel bogus
 jq -cn '{recording:null,jobs:[],version:1}' > "$RUN/state.json"
@@ -638,6 +689,14 @@ if command -v voxtype >/dev/null && [[ -f "${VOXTYPE_MODELS_DIR:-$HOME/.local/sh
   check "previous transcript kept on re-run" bash -c "head -1 '$D3/transcript.prev.md' | grep -q 'range=0-end'"
   eq "has_prev true after a re-run" "$($CLI show "$ID3" --json | jq -r .has_prev)" "true"
   check "show --json has prev_path and prev_text" bash -c "\"$CLI\" show '$ID3' --json | jq -e '.prev_path and (.prev_text | length > 0)'"
+
+  echo "== transcribe (cleanup pass, real engine)"
+  cp "$D3/audio.wav" "$TMP/enh.real.before.wav"
+  check "enhanced transcribe (real) succeeds" "$CLI" transcribe "$ID3" --model base.en --enhance
+  check "real enhanced header tag" bash -c "head -1 '$D3/transcript.md' | grep -q 'enhanced=true'"
+  check "enhanced transcript still mentions 'right'" bash -c "grep -qi right '$D3/transcript.md'"
+  check "recording unchanged by the real pass" cmp -s "$TMP/enh.real.before.wav" "$D3/audio.wav"
+  check "no enhance temps after the real pass" bash -c "! ls '$D3'/audio.tx.* >/dev/null 2>&1"
 
   echo "== transcribe (bad OMARECORDER_CHUNK_S falls back)"
   check "non-numeric OMARECORDER_CHUNK_S still transcribes" env OMARECORDER_CHUNK_S=abc "$CLI" transcribe "$ID3" --model base.en
