@@ -194,25 +194,47 @@ _claim_recording() {
   [[ $(jq -r '.recording != null' <<<"$st") == "true" ]] && return 1
   save_state "$(jq -c "$@" <<<"$st")"
 }
-# The locked hand-over for record resume: print the offer and null it in one
-# step, but only while it still names this id, is still resumable and nothing
-# is recording. Holding the offer is what licenses touching the shared
-# segment files; an overlapping second resume finds it gone and stops at
-# "nothing to resume" before it can disturb the first caller's files.
+# The locked hand-over for record resume: null the offer AND reserve the
+# recording slot in one write, then print the offer. Only lands while the
+# offer still names this id, is still resumable and nothing is recording.
+# Holding the offer licenses touching the shared segment files, and the
+# reservation (pids = this process, starting = true) closes the window in
+# which a concurrent trim, rename, delete, transcribe or start could pass
+# require_idle and touch the take while its recorders are still spawning.
+# Reconcile sees the reservation as alive while this process lives, and
+# record stop refuses to take it (see _take_recording).
 _take_resume_offer() {
-  local id="$1" st ls; st=$(read_state)
+  local id="$1" source="$2" dir="$3" st ls; st=$(read_state)
   [[ $(jq -r '.recording != null' <<<"$st") == "true" ]] && return 1
   ls=$(jq -c --arg id "$id" '.last_stop | select(. != null and .id == $id and .resumable == true)' <<<"$st")
   [[ -n "$ls" ]] || return 1
-  save_state "$(jq -c '.last_stop = null' <<<"$st")"
+  save_state "$(jq -c --arg id "$id" --arg source "$source" --arg dir "$dir" --argjson t "$(now_epoch)" --argjson sp "$$" \
+    '.last_stop = null
+     | .recording = {id:$id, source:$source, dir:$dir, started_at:$t, pids:[$sp], files:[], meter_pid:null, resume:true, starting:true}' <<<"$st")"
   printf '%s\n' "$ls"
 }
-# Give a taken offer back after a failed spawn, unless the world moved on in
-# the meantime (a recording started, or a newer stop armed its own offer).
-_restore_resume_offer() {
+# The reservation becomes the real recording entry once the recorders run:
+# fill in the pids, files and meter. Only lands while the starting
+# reservation is still ours; anything else means the state was changed
+# underneath us and the caller cleans up instead of recording blind.
+_activate_resume() {
+  local id="$1"; shift
   local st; st=$(read_state)
-  [[ $(jq -r '.recording == null and .last_stop == null' <<<"$st") == "true" ]] || return 0
-  save_state "$(jq -c --argjson o "$1" '.last_stop = $o' <<<"$st")"
+  [[ $(jq -r --arg id "$id" '.recording != null and .recording.id == $id and .recording.starting == true' <<<"$st") == "true" ]] || return 1
+  save_state "$(jq -c "$@" <<<"$st")"
+}
+# Roll a failed resume start back in one locked write: drop the reservation
+# (only while it is still ours) and give the offer back, unless the world
+# moved on (a recording started, or a newer stop armed its own offer).
+_rollback_resume() {
+  local id="$1" st; st=$(read_state)
+  if [[ $(jq -r --arg id "$id" '.recording != null and .recording.id == $id and .recording.starting == true' <<<"$st") == "true" ]]; then
+    st=$(jq -c '.recording = null' <<<"$st")
+  fi
+  if [[ $(jq -r '.recording == null and .last_stop == null' <<<"$st") == "true" ]]; then
+    st=$(jq -c --argjson o "$2" '.last_stop = $o' <<<"$st")
+  fi
+  save_state "$st"
 }
 _claim_tx() {
   local id="$1"; shift
@@ -252,9 +274,14 @@ _take_dl_then() {
   save_state "$(jq -c --arg m "$m" '.jobs |= map(select(.type != "download" or .model != $m))' <<<"$st")"
 }
 # Print the recording entry and null it, atomically; fail if there is none.
+# A starting resume reservation (return 2) is never taken: it has no recorder
+# pids yet, and taking it would orphan the recorders being spawned. The
+# window is under a second, and a reservation whose process died is cleared
+# by reconcile instead.
 _take_recording() {
   local st rec; st=$(read_state); rec=$(jq -c '.recording' <<<"$st")
   [[ "$rec" == "null" ]] && return 1
+  [[ $(jq -r '.starting == true' <<<"$rec") == "true" ]] && return 2
   save_state "$(jq -c '.recording = null' <<<"$st")"
   printf '%s\n' "$rec"
 }
@@ -625,14 +652,17 @@ record_resume() {
       [[ -n "$mic" && -n "$sys" ]] || die "need both a microphone and an output sink"
       inputs+=("mic|$mic|$dir/mic.seg.wav" "sink|$sys|$dir/system.seg.wav") ;;
   esac
-  # Take the offer under the lock BEFORE touching the shared segment files: of
-  # two overlapping resumes only one gets it, and the other dies right here
-  # without ever creating or deleting a segment the winner is writing to.
-  local offer; offer=$(with_lock _take_resume_offer "$id") || die "could not resume $id (it is no longer offered)"
+  # Take the offer and reserve the recording slot in ONE locked write, BEFORE
+  # touching the shared segment files: of two overlapping resumes only one
+  # gets the offer, and the reservation makes require_idle refuse a trim,
+  # rename, delete or transcribe of this take (and _claim_recording a new
+  # start) for the moments the recorders need to come up.
+  local offer; offer=$(with_lock _take_resume_offer "$id" "$source" "$dir") \
+    || die "could not resume $id (the offer was withdrawn or a recording started)"
   rm -f "$dir/audio.seg.wav" "$dir/mic.seg.wav" "$dir/system.seg.wav"
   if ! spawn_recorders "${inputs[@]}"; then
     rm -f "$dir/audio.seg.wav" "$dir/mic.seg.wav" "$dir/system.seg.wav"
-    with_lock _restore_resume_offer "$offer" || true
+    with_lock _rollback_resume "$id" "$offer" || true
     notify "Resume failed" "pw-record could not open $SPAWN_FAIL"
     die "pw-record exited immediately for $SPAWN_FAIL"
   fi
@@ -640,15 +670,15 @@ record_resume() {
   start_keepawake "$(jq -r '.[0]' <<<"$pids")"
   start_take_meter "$source" "$mic" "$sys" "$(jq -r '.[0]' <<<"$pids")"
   local meter_pid="$METER_PID"
-  # The offer is already consumed; the claim only has to win the recording
-  # slot. Losing it means a new recording started while we spawned; its start
-  # cleared resumability on purpose, so the offer is not given back.
-  if ! with_lock _claim_recording --arg id "$id" --arg source "$source" --argjson pids "$pids" --argjson files "$files" --arg dir "$dir" --argjson t "$(now_epoch)" --argjson mp "$meter_pid" \
+  # The reservation becomes the real recording entry (recorder pids, meter).
+  # Failure means the state changed underneath us; stop our recorders and
+  # leave the world as it is rather than record blind.
+  if ! with_lock _activate_resume "$id" --arg id "$id" --arg source "$source" --argjson pids "$pids" --argjson files "$files" --arg dir "$dir" --argjson t "$(now_epoch)" --argjson mp "$meter_pid" \
     '.recording = {id:$id, source:$source, dir:$dir, started_at:$t, pids:$pids, files:$files, meter_pid:$mp, resume:true}'; then
     for p in $(jq -r '.[]' <<<"$pids"); do kill -INT "$p" 2>/dev/null || true; done
     stop_meter "${meter_pid/null/}"
     rm -f "$dir/audio.seg.wav" "$dir/mic.seg.wav" "$dir/system.seg.wav"
-    die "already recording"
+    die "could not resume $id (the recording state changed while it was starting)"
   fi
   log "record resume $id source=$source dir=$dir"
   local ttl; ttl=$(jq -r '.title // empty' "$dir/meta.json"); ttl="${ttl:-$id}"
@@ -680,7 +710,9 @@ record_stop() { # [--force]
   fi
   # Take the entry and null it in one locked step: from here on no concurrent
   # status/toggle can see a "dead" recording and run recovery while we finalize.
-  local rec; rec=$(with_lock _take_recording) || die "not recording"
+  local rec trc=0; rec=$(with_lock _take_recording) || trc=$?
+  (( trc == 2 )) && die "a resume is still starting; try again in a moment"
+  (( trc != 0 )) && die "not recording"
   # The stop moment, before the recorders wind down and the slow finalize
   # runs: arm_resume orders offers by it (see the guard there).
   local stopped_epoch; stopped_epoch=$(now_epoch)
@@ -955,8 +987,9 @@ cmd_status() {
   local out; out=$(jq -c --argjson now "$(now_epoch)" --arg mdir "$VOXTYPE_MODELS_DIR" '
     .recording |= (if . == null then null else . + {elapsed_s: ($now - .started_at)} end)
     | .jobs |= map(. + {elapsed_s: ($now - .started_at)})
-    | .resume = (if .recording == null and .last_stop != null and .last_stop.resumable == true and $now <= (.last_stop.resume_until // 0)
-        then (.last_stop + {stopped_ago_s: ($now - (.last_stop.stopped_at // $now))}) else null end)' <<<"$st")
+    | .resume = (.last_stop as $ls | if .recording == null and $ls != null and $ls.resumable == true and $now <= ($ls.resume_until // 0)
+          and (([.jobs[] | select(.type == "transcribe" and .id == $ls.id)] | length) == 0)
+        then ($ls + {stopped_ago_s: ($now - ($ls.stopped_at // $now))}) else null end)' <<<"$st")
   # Download progress (bytes_done) is written into the job by _dl_worker itself.
   if [[ "${1:-}" == "--json" ]]; then jq . <<<"$out"; return 0; fi
   if [[ $(jq -r '.recording != null' <<<"$out") == "true" ]]; then

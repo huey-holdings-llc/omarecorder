@@ -837,6 +837,38 @@ NOW=$(date +%s); armresume "2026-02-06_060606"
 "$CLI" config set resumeWindow 0 >/dev/null
 eq "setting the window to 0 withdraws the armed offer" "$(jq -r '.last_stop' "$RUN/state.json")" "null"
 "$CLI" config set resumeWindow 7200 >/dev/null
+
+# While a resume is still starting (its recorder held back), the take must
+# already be reserved in the state: a trim, rename, delete or stop in that
+# window would edit or move audio the continuation is about to append to.
+RSID=$(PATH="$FAKEPATH" "$CLI" record start --title "Reserve Take")
+RSD="$OMARECORDER_DIR/$RSID Reserve Take"
+( PATH="$FAKEPATH" "$CLI" record stop >/dev/null 2>&1 )
+( PATH="$FAKEPATH" PWREC_DELAY=2.5 "$CLI" record resume >/dev/null 2>&1 ) &
+RESUMER=$!
+sleep 1.2
+eq "the take is reserved while the resume starts" "$("$CLI" status --json | jq -r '.recording.id')" "$RSID"
+fails "trim is refused during the resume start" "$CLI" trim "$RSID" --from 0 --to 1
+fails "rename is refused during the resume start" "$CLI" rename "$RSID" "Nope"
+fails "delete is refused during the resume start" "$CLI" delete "$RSID" --yes
+fails "stop during the start window is refused, not orphaned" "$CLI" record stop
+wait "$RESUMER" 2>/dev/null
+( PATH="$FAKEPATH" "$CLI" record stop >/dev/null 2>&1; echo $? > "$TMP/rc" )
+eq "the reserved resume still lands cleanly" "$(cat "$TMP/rc")" "0"
+eq "reserved take joined to 6 s" "$(jq -r .duration_s "$RSD/meta.json")" "6"
+"$CLI" delete "$RSID" --yes >/dev/null
+
+# A take that is being transcribed cannot be resumed right now, so no offer
+# is made while its job runs; it comes back when the job ends.
+NOW=$(date +%s)
+jq -cn --argjson t "$NOW" '{recording:null,version:1,
+  jobs:[{type:"transcribe",id:"2026-02-07_070707",model:"base.en",started_at:$t}],
+  last_stop:{id:"2026-02-07_070707",title:"Busy",stopped_at:$t,resume_until:($t+7200),resumable:true}}' > "$RUN/state.json"
+eq "no offer while the take is transcribing" "$("$CLI" status --json | jq -r '.resume')" "null"
+fails "resume refused while the take transcribes" env PATH="$FAKEPATH" "$CLI" record resume
+jq -cn --argjson t "$NOW" '{recording:null,version:1,jobs:[],
+  last_stop:{id:"2026-02-07_070707",title:"Busy",stopped_at:$t,resume_until:($t+7200),resumable:true}}' > "$RUN/state.json"
+eq "the offer returns when the job ends" "$("$CLI" status --json | jq -r '.resume.id')" "2026-02-07_070707"
 jq -cn '{recording:null,jobs:[],version:1}' > "$RUN/state.json"
 
 echo "== transcribe"

@@ -62,10 +62,14 @@ QtObject {
   readonly property string defaultSource: config && config.defaultSource ? config.defaultSource : "mic"
 
   // Resume offer: the CLI arms state.last_stop on a clean stop and withdraws
-  // it on a new start, trim, delete or window expiry; this only re-checks the
-  // window against the ticking clock so the button disappears on time.
+  // it on a new start, trim, delete or window expiry; this re-checks only
+  // what moves without a state write of its own: the clock (so the button
+  // expires on time) and a transcribe job for the offered take (resuming is
+  // refused while one runs, so no button until it ends; jobs are mirrored
+  // from the same state.json).
   readonly property var lastStop: (state && state.last_stop) ? state.last_stop : null
-  readonly property bool resumable: !!(lastStop && lastStop.resumable === true && !recording && now <= (lastStop.resume_until || 0))
+  readonly property bool resumable: !!(lastStop && lastStop.resumable === true && !recording
+    && now <= (lastStop.resume_until || 0) && !jobFor(lastStop.id))
   readonly property string resumeTitle: {
     if (!lastStop) return ""
     var r = recordingById(lastStop.id)
