@@ -105,6 +105,9 @@ Column {
       anchors.margins: Style.spacing.sm
       spacing: Style.spacing.xxs
       Text {
+        width: parent.width
+        // Wraps rather than clipping at the card edge on narrow panels.
+        wrapMode: Text.Wrap
         text: "Dictionary (" + ((root.svc && root.svc.dictionary) ? root.svc.dictionary.count : 0) + " entries) · fixes words the transcriber keeps getting wrong"
         color: Qt.darker(root.foreground, 1.4); font.family: root.fontFamily; font.pixelSize: Style.font.caption
       }
