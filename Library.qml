@@ -553,8 +553,8 @@ Item {
                     + (root.svc.isClipped(root.selected) ? " · ⚠ clipped" : "")
                     + (root.svc.isPartial(root.selected) ? " · partial transcript" : "")
                     + (root.selected.trim ? " · trimmed" : "")
-                    + (root.selected.transcript && root.selected.transcript.tidy && root.selected.transcript.tidy.repeats_removed > 0 && !root.showRaw ? " · " + root.selected.transcript.tidy.repeats_removed + " repeats removed" : "")
-                    + (root.selected.transcript && root.selected.transcript.tidy && root.selected.transcript.tidy.dict_replacements > 0 && !root.showRaw ? " · " + root.selected.transcript.tidy.dict_replacements + " corrections" : "")
+                    + (root.selected.transcript && root.selected.transcript.tidy && root.selected.transcript.tidy.repeats_removed > 0 && !root.showRaw ? " · " + root.selected.transcript.tidy.repeats_removed + (root.selected.transcript.tidy.repeats_removed === 1 ? " repeat removed" : " repeats removed") : "")
+                    + (root.selected.transcript && root.selected.transcript.tidy && root.selected.transcript.tidy.dict_replacements > 0 && !root.showRaw ? " · " + root.selected.transcript.tidy.dict_replacements + (root.selected.transcript.tidy.dict_replacements === 1 ? " correction" : " corrections") : "")
                     + (root.playing ? " · ▶ playing" : ""))
                   : ""
                 textFormat: Text.PlainText
