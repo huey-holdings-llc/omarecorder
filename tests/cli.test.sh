@@ -622,6 +622,9 @@ exit 0
 STUBEOF
 cat > "$FAKEAUDIO/pw-record" <<STUBEOF
 #!/bin/bash
+# PWREC_DELAY holds the file back, standing in for a recorder that is slow to
+# open the device (the race tests park a caller in the file-wait watchdog).
+[ -n "\${PWREC_DELAY:-}" ] && sleep "\$PWREC_DELAY"
 for f in "\$@"; do :; done   # the output file is the last argument
 cp "$TMP/quiet.wav" "\$f"
 exec sleep 600
@@ -778,6 +781,62 @@ eq "both crash: the mix is 6 s" "$(jq -r .duration_s "$CD3/meta.json")" "6"
 eq "both crash: mic.wav joined" "$(ffprobe -v error -show_entries format=duration -of csv=p=0 "$CD3/mic.wav" | cut -d. -f1)" "6"
 eq "both crash: system.wav joined" "$(ffprobe -v error -show_entries format=duration -of csv=p=0 "$CD3/system.wav" | cut -d. -f1)" "6"
 "$CLI" delete "$CID3" --yes >/dev/null
+jq -cn '{recording:null,jobs:[],version:1}' > "$RUN/state.json"
+
+# Overlapping resumes: the offer must be consumed under the lock before any
+# shared segment file is touched, so the loser of a double-press can never
+# unlink the winner's live segment. The first caller's recorder is held back
+# so the second lands squarely in the old danger window between the unlocked
+# pre-checks and the claim.
+RVID=$(PATH="$FAKEPATH" "$CLI" record start --title "Race Take")
+RVD="$OMARECORDER_DIR/$RVID Race Take"
+( PATH="$FAKEPATH" "$CLI" record stop >/dev/null 2>&1 )
+( PATH="$FAKEPATH" PWREC_DELAY=2.5 "$CLI" record resume >/dev/null 2>&1; echo $? > "$TMP/rc.a" ) &
+RACER=$!
+sleep 1.2
+# The first caller is still parked waiting for its recorder's file here; the
+# offer must already be gone from the state, or a second caller could pass
+# its own checks and race for the same segment paths.
+eq "the offer is consumed before the recorder even starts" "$(jq -r '.last_stop' "$RUN/state.json")" "null"
+( PATH="$FAKEPATH" "$CLI" record resume >/dev/null 2>&1; echo $? > "$TMP/rc.b" )
+wait "$RACER" 2>/dev/null
+check "exactly one of two overlapping resumes wins" bash -c "A=\$(cat '$TMP/rc.a'); B=\$(cat '$TMP/rc.b'); { [ \"\$A\" = 0 ] && [ \"\$B\" != 0 ]; } || { [ \"\$A\" != 0 ] && [ \"\$B\" = 0 ]; }"
+eq "the winner is recording its segment" "$("$CLI" status --json | jq -r '.recording.resume')" "true"
+( PATH="$FAKEPATH" "$CLI" record stop >/dev/null 2>&1; echo $? > "$TMP/rc" )
+eq "stopping the winner still finds its segment" "$(cat "$TMP/rc")" "0"
+eq "race take joined to 6 s" "$(jq -r .duration_s "$RVD/meta.json")" "6"
+# A resume whose recorder cannot start gives the offer back (nothing else
+# moved, so the user can fix the device and try again).
+BROKEN="$TMP/brokenrec"; mkdir -p "$BROKEN"
+cp "$FAKEAUDIO/pactl" "$BROKEN/pactl"
+printf '#!/bin/bash\nexit 1\n' > "$BROKEN/pw-record"; chmod +x "$BROKEN/pw-record"
+NOW=$(date +%s); armresume "$RVID"
+fails "resume with a broken recorder fails" env PATH="$BROKEN:$PATH" "$CLI" record resume
+eq "and the offer is given back" "$(jq -r '.last_stop.id' "$RUN/state.json")" "$RVID"
+"$CLI" delete "$RVID" --yes >/dev/null
+
+# A stop that finishes late must not clobber a newer offer: finalizing can be
+# slow (mixing, waveform, levels), and a newer take can start and stop in the
+# meantime. The armed offer here carries a stopped_at later than this stop's,
+# standing in for that newer take; the late arm has to lose.
+NOW=$(date +%s)
+SID="2026-02-04_040404"; SD="$OMARECORDER_DIR/$SID Slow Stop"; mkdir -p "$SD"
+cp "$TMP/quiet.wav" "$SD/audio.wav"
+jq -cn --arg id "$SID" '{id:$id,title:"Slow Stop",source:"mic",created:"2026-02-04T04:04:04+0000",duration_s:null,size_bytes:0,sample_rate:16000,transcript:null,notes:""}' > "$SD/meta.json"
+sleep 60 >/dev/null 2>&1 & SPID=$!
+jq -cn --arg id "$SID" --arg dir "$SD" --argjson p "$SPID" --argjson t "$NOW" \
+  '{recording:{id:$id,dir:$dir,source:"mic",pids:[$p],started_at:$t},jobs:[],version:1,
+    last_stop:{id:"2026-02-05_050505",title:"Newer",stopped_at:($t+50),resume_until:($t+7250),resumable:true}}' > "$RUN/state.json"
+( PATH="$FAKEPATH" "$CLI" record stop >/dev/null 2>&1 )
+eq "a late arm never clobbers a newer offer" "$(jq -r '.last_stop.id' "$RUN/state.json")" "2026-02-05_050505"
+"$CLI" delete "$SID" --yes >/dev/null
+
+# Turning the window off withdraws an armed offer at once: the popup derives
+# its button from state.json alone and must never offer a dead resume.
+NOW=$(date +%s); armresume "2026-02-06_060606"
+"$CLI" config set resumeWindow 0 >/dev/null
+eq "setting the window to 0 withdraws the armed offer" "$(jq -r '.last_stop' "$RUN/state.json")" "null"
+"$CLI" config set resumeWindow 7200 >/dev/null
 jq -cn '{recording:null,jobs:[],version:1}' > "$RUN/state.json"
 
 echo "== transcribe"

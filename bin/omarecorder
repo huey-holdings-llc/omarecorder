@@ -154,7 +154,12 @@ cmd_config() {
         resumeWindow) [[ "$val" =~ ^[0-9]+$ ]] || die "resumeWindow must be a whole number of seconds (0 turns resume off)" ;;
         *) die "unknown config key: $key" ;;
       esac
-      with_lock _write_config "$key" "$val"; load_config; bump_state; echo "$key=$val" ;;
+      with_lock _write_config "$key" "$val"; load_config
+      # Turning the resume window off withdraws an armed offer right away:
+      # the popup derives its button from state.json alone and must not keep
+      # offering a resume that can only be refused.
+      if [[ "$key" == "resumeWindow" && "$val" == "0" ]]; then state_set '.last_stop = null'; else bump_state; fi
+      echo "$key=$val" ;;
     *) die "usage: config get [key|--json] | config set <key> <value>" ;;
   esac
 }
@@ -189,15 +194,25 @@ _claim_recording() {
   [[ $(jq -r '.recording != null' <<<"$st") == "true" ]] && return 1
   save_state "$(jq -c "$@" <<<"$st")"
 }
-# Like _claim_recording, but only while the resume offer still names this id
-# and is still resumable: a concurrent trim, delete or new start must not be
-# overtaken between record resume's checks and its claim.
-_claim_resume() {
-  local id="$1"; shift
-  local st; st=$(read_state)
+# The locked hand-over for record resume: print the offer and null it in one
+# step, but only while it still names this id, is still resumable and nothing
+# is recording. Holding the offer is what licenses touching the shared
+# segment files; an overlapping second resume finds it gone and stops at
+# "nothing to resume" before it can disturb the first caller's files.
+_take_resume_offer() {
+  local id="$1" st ls; st=$(read_state)
   [[ $(jq -r '.recording != null' <<<"$st") == "true" ]] && return 1
-  [[ $(jq -r --arg id "$id" '.last_stop != null and .last_stop.id == $id and .last_stop.resumable == true' <<<"$st") == "true" ]] || return 1
-  save_state "$(jq -c "$@" <<<"$st")"
+  ls=$(jq -c --arg id "$id" '.last_stop | select(. != null and .id == $id and .resumable == true)' <<<"$st")
+  [[ -n "$ls" ]] || return 1
+  save_state "$(jq -c '.last_stop = null' <<<"$st")"
+  printf '%s\n' "$ls"
+}
+# Give a taken offer back after a failed spawn, unless the world moved on in
+# the meantime (a recording started, or a newer stop armed its own offer).
+_restore_resume_offer() {
+  local st; st=$(read_state)
+  [[ $(jq -r '.recording == null and .last_stop == null' <<<"$st") == "true" ]] || return 0
+  save_state "$(jq -c --argjson o "$1" '.last_stop = $o' <<<"$st")"
 }
 _claim_tx() {
   local id="$1"; shift
@@ -598,7 +613,8 @@ record_resume() {
   [[ "$source" =~ ^(mic|system|both)$ ]] || die "$id cannot be resumed (source: ${source:-unknown})"
   have pw-record || die "pw-record not found (pipewire)"
   mkdir -p "$RUN_DIR"
-  rm -f "$dir/audio.seg.wav" "$dir/mic.seg.wav" "$dir/system.seg.wav"
+  # Resolve the capture targets first: read-only, and every failure from here
+  # to the offer take leaves the state untouched.
   local -a inputs=(); local mic="" sys=""
   case "$source" in
     mic) mic=$(resolve_mic); [[ -n "$mic" ]] || die "no microphone source found"; inputs+=("mic|$mic|$dir/audio.seg.wav") ;;
@@ -609,8 +625,14 @@ record_resume() {
       [[ -n "$mic" && -n "$sys" ]] || die "need both a microphone and an output sink"
       inputs+=("mic|$mic|$dir/mic.seg.wav" "sink|$sys|$dir/system.seg.wav") ;;
   esac
+  # Take the offer under the lock BEFORE touching the shared segment files: of
+  # two overlapping resumes only one gets it, and the other dies right here
+  # without ever creating or deleting a segment the winner is writing to.
+  local offer; offer=$(with_lock _take_resume_offer "$id") || die "could not resume $id (it is no longer offered)"
+  rm -f "$dir/audio.seg.wav" "$dir/mic.seg.wav" "$dir/system.seg.wav"
   if ! spawn_recorders "${inputs[@]}"; then
     rm -f "$dir/audio.seg.wav" "$dir/mic.seg.wav" "$dir/system.seg.wav"
+    with_lock _restore_resume_offer "$offer" || true
     notify "Resume failed" "pw-record could not open $SPAWN_FAIL"
     die "pw-record exited immediately for $SPAWN_FAIL"
   fi
@@ -618,14 +640,15 @@ record_resume() {
   start_keepawake "$(jq -r '.[0]' <<<"$pids")"
   start_take_meter "$source" "$mic" "$sys" "$(jq -r '.[0]' <<<"$pids")"
   local meter_pid="$METER_PID"
-  # The claim consumes the offer: it only lands while last_stop still names
-  # this id and is still resumable (see _claim_resume).
-  if ! with_lock _claim_resume "$id" --arg id "$id" --arg source "$source" --argjson pids "$pids" --argjson files "$files" --arg dir "$dir" --argjson t "$(now_epoch)" --argjson mp "$meter_pid" \
-    '.recording = {id:$id, source:$source, dir:$dir, started_at:$t, pids:$pids, files:$files, meter_pid:$mp, resume:true} | .last_stop = null'; then
+  # The offer is already consumed; the claim only has to win the recording
+  # slot. Losing it means a new recording started while we spawned; its start
+  # cleared resumability on purpose, so the offer is not given back.
+  if ! with_lock _claim_recording --arg id "$id" --arg source "$source" --argjson pids "$pids" --argjson files "$files" --arg dir "$dir" --argjson t "$(now_epoch)" --argjson mp "$meter_pid" \
+    '.recording = {id:$id, source:$source, dir:$dir, started_at:$t, pids:$pids, files:$files, meter_pid:$mp, resume:true}'; then
     for p in $(jq -r '.[]' <<<"$pids"); do kill -INT "$p" 2>/dev/null || true; done
     stop_meter "${meter_pid/null/}"
     rm -f "$dir/audio.seg.wav" "$dir/mic.seg.wav" "$dir/system.seg.wav"
-    die "could not resume $id (it is no longer the last stopped recording)"
+    die "already recording"
   fi
   log "record resume $id source=$source dir=$dir"
   local ttl; ttl=$(jq -r '.title // empty' "$dir/meta.json"); ttl="${ttl:-$id}"
@@ -658,6 +681,9 @@ record_stop() { # [--force]
   # Take the entry and null it in one locked step: from here on no concurrent
   # status/toggle can see a "dead" recording and run recovery while we finalize.
   local rec; rec=$(with_lock _take_recording) || die "not recording"
+  # The stop moment, before the recorders wind down and the slow finalize
+  # runs: arm_resume orders offers by it (see the guard there).
+  local stopped_epoch; stopped_epoch=$(now_epoch)
   local id dir source; id=$(jq -r '.id' <<<"$rec"); dir=$(jq -r '.dir' <<<"$rec"); source=$(jq -r '.source' <<<"$rec")
   local p
   for p in $(jq -r '.pids[]' <<<"$rec"); do kill -INT "$p" 2>/dev/null || true; done
@@ -688,7 +714,7 @@ record_stop() { # [--force]
   fi
   finalize_audio "$dir"
   analyze_levels "$dir"
-  arm_resume "$dir" "$id"   # duration/levels are in meta now; the write also lets the UI re-list
+  arm_resume "$dir" "$id" "$stopped_epoch"   # duration/levels are in meta now; the write also lets the UI re-list
   local dur; dur=$(jq -r '.duration_s // 0' "$dir/meta.json")
   log "record stop $id duration=${dur}s"
   local ttl; ttl=$(jq -r '.title // empty' "$dir/meta.json"); ttl="${ttl:-$id}"
@@ -792,17 +818,22 @@ recover_segments() {
   return 0
 }
 
-# arm_resume <dir> <id>: remember a clean stop so `record resume` can continue
-# this take within the configured window (resumeWindow seconds, 0 = off). The
-# stop of a resumed take lands here too: it becomes the last stop again.
+# arm_resume <dir> <id> <stopped_epoch>: remember a clean stop so `record
+# resume` can continue this take within the configured window (resumeWindow
+# seconds, 0 = off). The stop of a resumed take lands here too: it becomes
+# the last stop again. stopped_epoch is when the recorders were told to stop,
+# not when the slow finalize (mixing, waveform, levels) ended, and the write
+# is guarded: by arm time a newer take may have started (its start cleared
+# the offer on purpose) or stopped (its offer is newer), and an older stop
+# must never clobber either.
 arm_resume() {
-  local dir="$1" id="$2" win now ttl
+  local dir="$1" id="$2" stopped="$3" win ttl
   win=$(resume_window)
   if (( win == 0 )); then bump_state; return 0; fi
-  now=$(now_epoch)
   ttl=$(jq -r '.title // ""' "$dir/meta.json" 2>/dev/null || echo "")
-  state_set --arg id "$id" --arg t "$ttl" --argjson now "$now" --argjson until "$((now + win))" \
-    '.last_stop = {id:$id, title:$t, stopped_at:$now, resume_until:$until, resumable:true}'
+  state_set --arg id "$id" --arg t "$ttl" --argjson at "$stopped" --argjson until "$((stopped + win))" \
+    '.last_stop = (if .recording == null and ((.last_stop == null) or ((.last_stop.stopped_at // 0) <= $at))
+       then {id:$id, title:$t, stopped_at:$at, resume_until:$until, resumable:true} else .last_stop end)'
 }
 
 # finalize_audio <dir>: fill duration/size in meta.json from audio.wav, and
