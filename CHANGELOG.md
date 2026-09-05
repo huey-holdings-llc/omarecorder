@@ -12,6 +12,17 @@ All notable changes to this project are documented here. Format follows
   generated fixture instead. The `lint-and-test` check is now required
   before anything merges to `main`.
 
+### Development
+- The CLI test suite is split into sections that each start from a clean
+  state, so `OMARECORDER_TEST_ONLY=export,tidy` runs just those. Failures now
+  show the exit code and the command's last lines, skips are counted in the
+  summary, the sandbox (with the CLI log) is kept when anything fails and is
+  uploaded as a CI artifact, and the race and lock tests wait on the state
+  they need instead of sleeping a fixed time. The sandbox moved out of the
+  plugin tree to `~/.cache/omarecorder-tests/`. Two tests that reached past
+  the sandbox (one into the real runtime dir, one stopping a unit on the real
+  user manager) no longer do.
+
 ## [1.4.0] - 2026-09-02
 
 ### Changed

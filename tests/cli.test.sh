@@ -1,13 +1,24 @@
 #!/usr/bin/env bash
 # CLI tests for omarecorder. Runs against a throwaway XDG tree; uses the real
 # voxtype + base.en model if present (transcription tests are skipped otherwise).
-#   bash tests/cli.test.sh
+#   bash tests/cli.test.sh                                    # everything: about three minutes with a mic and voxtype
+#   OMARECORDER_TEST_ONLY=export,tidy bash tests/cli.test.sh  # just those sections (--list prints the names)
+#   OMARECORDER_TEST_ALLOW_SKIP=1 bash tests/cli.test.sh      # a missing mic/engine skips instead of failing (CI)
+#   OMARECORDER_TEST_KEEP=1 bash tests/cli.test.sh            # keep the sandbox afterwards (kept on failure anyway)
 set -uo pipefail
 HERE="$(cd "$(dirname "$0")" && pwd)"
 CLI="$HERE/../bin/omarecorder"
-# OMARECORDER_TEST_TMP: put the sandbox elsewhere (CI: under $HOME so `gio trash` has a trash can on the same filesystem)
-TMP="${OMARECORDER_TEST_TMP:-$HERE/tmp}/$$"; mkdir -p "$TMP"
-trap 'rm -rf "$TMP"' EXIT
+# OMARECORDER_TEST_TMP: where the sandbox goes. Not inside the plugin tree (the
+# marketplace validator walks it and rejects the symlink farm some tests build)
+# and not tmpfs (`gio trash` needs a trash can on the same filesystem as $HOME).
+TMP="${OMARECORDER_TEST_TMP:-${XDG_CACHE_HOME:-$HOME/.cache}/omarecorder-tests}/$$"; mkdir -p "$TMP"
+pass=0; fail=0; skipped=0
+cleanup() {
+  if [[ "${OMARECORDER_TEST_KEEP:-0}" == "1" || $fail -gt 0 ]]; then
+    echo "sandbox kept: $TMP   (CLI log: $TMP/state/omarecorder/omarecorder.log)"
+  else rm -rf "$TMP"; fi
+}
+trap cleanup EXIT
 
 # Keep PipeWire/Pulse reachable while XDG_RUNTIME_DIR points at the sandbox.
 REAL_RUNTIME="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"
@@ -18,19 +29,50 @@ export OMARECORDER_RUN_DIR="$TMP/run/omarecorder"; RUN="$OMARECORDER_RUN_DIR"
 export OMARECORDER_QUIET=1 OMARECORDER_SYNC=1
 mkdir -p "$XDG_CONFIG_HOME" "$XDG_STATE_HOME" "$TMP/run"
 
-pass=0; fail=0
+# ---------------------------------------------------------------- harness ---
 ok()   { pass=$((pass+1)); echo "  ✓ $1"; }
-bad()  { fail=$((fail+1)); echo "  ✗ $1"; [[ -n "${2:-}" ]] && echo "      $2"; }
-check() { # check <desc> <cmd...>  — passes when command exits 0
-  local d="$1"; shift; if "$@" >/dev/null 2>&1; then ok "$d"; else bad "$d" "cmd: $*"; fi
+bad()  { # bad <desc> [detail lines...]: every extra argument is printed indented under the cross
+  fail=$((fail+1)); echo "  ✗ $1"; shift
+  local l; for l in "$@"; do [[ -n "$l" ]] && sed 's/^/      /' <<<"$l"; done
+}
+_tail() { { cat "$TMP/.err"; cat "$TMP/.out"; } 2>/dev/null | grep -v '^$' | tail -n 4; }
+check() { # check <desc> <cmd...>: passes when the command exits 0; on failure shows rc and the last lines it printed
+  local d="$1"; shift
+  "$@" >"$TMP/.out" 2>"$TMP/.err"; local rc=$?
+  if (( rc == 0 )); then ok "$d"; else bad "$d" "rc=$rc  cmd: $*" "$(_tail)"; fi
 }
 eq() { [[ "$2" == "$3" ]] && ok "$1" || bad "$1" "got '$2' expected '$3'"; }
-fails() { # fails <desc> <cmd...> — passes when command exits non-zero
-  local d="$1"; shift; if "$@" >/dev/null 2>&1; then bad "$d" "unexpectedly succeeded: $*"; else ok "$d"; fi
+fails() { # fails <desc> <cmd...>: passes when the command exits non-zero
+  local d="$1"; shift
+  if "$@" >"$TMP/.out" 2>"$TMP/.err"; then bad "$d" "unexpectedly succeeded: $*" "$(_tail)"; else ok "$d"; fi
 }
 # A missing fixture/engine is a failure unless the caller opted into skipping
-# (CI has no voxtype/mic): OMARECORDER_TEST_ALLOW_SKIP=1.
-skip() { if [[ "${OMARECORDER_TEST_ALLOW_SKIP:-0}" == "1" ]]; then echo "  (skipped: $1)"; else bad "skipped: $1"; fi; }
+# (CI has no voxtype/mic): OMARECORDER_TEST_ALLOW_SKIP=1. Skips are counted either way.
+skip() { skipped=$((skipped+1)); if [[ "${OMARECORDER_TEST_ALLOW_SKIP:-0}" == "1" ]]; then echo "  (skipped: $1)"; else bad "skipped: $1"; fi; }
+# shellcheck disable=SC2034
+run_cli() { # run_cli <cmd...>: RC, OUT and ERR for assertions that need more than one of them
+  OUT=$("$@" 2>"$TMP/.err"); RC=$?; ERR=$(<"$TMP/.err")
+}
+wait_for() { # wait_for <whole seconds> <cmd...>: poll at 10 Hz until the command succeeds
+  local n=$(( $1 * 10 )); shift
+  while (( n-- > 0 )); do "$@" >/dev/null 2>&1 && return 0; sleep 0.1; done; return 1
+}
+# State fixtures. Reconcile keeps a job that has no unit (a sync worker), so a
+# hand-built job stands until a test cancels it or the next section resets.
+set_state() { # set_state [recording] [jobs] [last_stop]  (JSON; defaults null, [], none)
+  jq -cn --argjson r "${1:-null}" --argjson j "${2:-[]}" --argjson l "${3:-null}" \
+    '{recording:$r,jobs:$j,version:1} + (if $l == null then {} else {last_stop:$l} end)' > "$RUN/state.json"
+}
+tx_job() { jq -cn --arg id "$1" --arg m "${2:-base.en}" '{type:"transcribe",id:$id,model:$m,started_at:0}'; }
+# Every section starts idle, with default config and no dictionary, from the
+# sandbox root (a stray relative `touch` from a hostile string lands there).
+fresh_state() { install -d -m 700 "$RUN"; set_state; rm -rf "$XDG_CONFIG_HOME/omarecorder"; cd "$TMP" || exit 1; }
+# The shared "Tone Test" take (ID1) and the speech import (ID2) that several
+# sections read; imported on first use so any section can run on its own.
+ensure_base() {
+  { [[ -n "${ID1:-}" ]] && "$CLI" show "$ID1" >/dev/null 2>&1; } || { ID1=$($CLI import "$TMP/tone48.wav" --title "Tone Test"); D1="$OMARECORDER_DIR/$ID1 Tone Test"; }
+  { [[ -n "${ID2:-}" ]] && "$CLI" show "$ID2" >/dev/null 2>&1; } || ID2=$($CLI import "$TMP/speech.wav")
+}
 MANIFEST_VERSION=$(jq -r .version "$HERE/../manifest.json")
 
 # Fixtures: short speech clip (ships with alsa-utils) and a 12 s version of it
@@ -51,7 +93,72 @@ ffmpeg -v error -y -f lavfi -i "sine=frequency=440:duration=3" -ar 48000 -ac 2 "
 touch -d "2026-01-02 03:04:05" "$TMP/tone48.wav"
 touch -d "2026-01-03 03:04:05" "$TMP/speech.wav"
 
-echo "== basics"
+# ------------------------------------------------------------------ fakes ---
+# PATH shims stand in for the tools CI does not have. Prepend a fake dir to PATH
+# for one call; the CLI calls every external tool by bare name.
+# A fake audio stack: pactl reports one microphone and one sink, and pw-record
+# "records" by copying the 3 s quiet fixture into its target file and sleeping
+# until the stop signal arrives. That makes the whole start/stop/resume/join
+# pipeline testable with no hardware at all.
+FAKEAUDIO="$TMP/fakeaudio"; mkdir -p "$FAKEAUDIO"
+cat > "$FAKEAUDIO/pactl" <<'STUBEOF'
+#!/bin/bash
+case "$*" in
+  "get-default-source") echo fakemic ;;
+  "list short sources") printf '0\tfakemic\tPipeWire\ts16le 1ch 16000Hz\tRUNNING\n' ;;
+  "get-default-sink") echo fakesink ;;
+esac
+exit 0
+STUBEOF
+cat > "$FAKEAUDIO/pw-record" <<STUBEOF
+#!/bin/bash
+# PWREC_DELAY holds the file back, standing in for a recorder that is slow to
+# open the device (the race tests park a caller in the file-wait watchdog).
+[ -n "\${PWREC_DELAY:-}" ] && sleep "\$PWREC_DELAY"
+for f in "\$@"; do :; done   # the output file is the last argument
+cp "$TMP/quiet.wav" "\$f"
+exec sleep 600
+STUBEOF
+chmod +x "$FAKEAUDIO/pactl" "$FAKEAUDIO/pw-record"
+FAKEPATH="$FAKEAUDIO:$PATH"
+STUB="$TMP/voxstub"; mkdir -p "$STUB"          # success: writes the model file; transcribes to stub text
+cat > "$STUB/voxtype" <<STUBEOF
+#!/bin/bash
+# setup --download writes the model file; anything else is the transcribe
+# call (voxtype -q --model ... transcribe FILE), which emits text after a
+# blank line the way the real engine does.
+if [ "\$1" = setup ]; then
+  head -c 100 /dev/zero > "\$VOXTYPE_MODELS_DIR/ggml-small.en.bin"
+else
+  printf '\nchained stub text\n'
+fi
+exit 0
+STUBEOF
+STUBSNAP="$TMP/voxsnap"; mkdir -p "$STUBSNAP"  # snapshot: capture state mid-download, then fail
+cat > "$STUBSNAP/voxtype" <<STUBEOF
+#!/bin/bash
+[ "\$1" = setup ] && cp "$RUN/state.json" "$TMP/state.mid"
+exit 1
+STUBEOF
+STUBFAIL="$TMP/voxfail"; mkdir -p "$STUBFAIL"  # failure: download never produces the file
+printf '#!/bin/bash\nexit 1\n' > "$STUBFAIL/voxtype"
+chmod +x "$STUB/voxtype" "$STUBSNAP/voxtype" "$STUBFAIL/voxtype"
+mkstoprec() { # <id> <title>: hand-built live recording with a harmless pid
+  local dir="$OMARECORDER_DIR/$1 $2"
+  mkdir -p "$dir"; cp "$TMP/quiet.wav" "$dir/audio.wav"
+  jq -cn --arg id "$1" --arg ttl "$2" '{id:$id,title:$ttl,source:"mic",created:"2026-01-06T01:01:01+0000",duration_s:null,size_bytes:0,sample_rate:16000,transcript:null,notes:""}' > "$dir/meta.json"
+  # stdout redirected so the $(...) capture is not held open by the child
+  sleep 60 >/dev/null 2>&1 & local spid=$!
+  jq -cn --arg id "$1" --arg dir "$dir" --argjson p "$spid" --argjson t "$(date +%s)" \
+    '{recording:{id:$id,dir:$dir,source:"mic",pids:[$p],started_at:$t},jobs:[],version:1}' > "$RUN/state.json"
+  echo "$dir"
+}
+armresume() { # <id> [stopped_at]: an armed resume offer, by default from 100 s ago
+  set_state null '[]' "$(jq -cn --arg id "$1" --argjson t "${2:-$(( ${NOW:-$(date +%s)} - 100))}" '{id:$id,title:"Resume Take",stopped_at:$t,resumable:true}')"
+}
+
+
+t_basics() {
 eq "version" "$("$CLI" version)" "$MANIFEST_VERSION"
 check "help exits 0" "$CLI" help
 eq "config default source" "$($CLI config get defaultSource)" "mic"
@@ -62,7 +169,9 @@ $CLI config set defaultSource mic >/dev/null
 eq "status idle" "$($CLI status)" "idle"
 eq "status --json shape" "$($CLI status --json | jq -c '[.recording, (.jobs|length)]')" "[null,0]"
 
-echo "== import"
+}
+
+t_import() {
 ID1=$($CLI import "$TMP/tone48.wav" --title "Tone Test")
 eq "import id from mtime" "$ID1" "2026-01-02_030405"
 D1="$OMARECORDER_DIR/$ID1 Tone Test"
@@ -71,11 +180,12 @@ eq "audio converted to 16k mono s16" "$(ffprobe -v error -select_streams a:0 -sh
 eq "meta duration" "$(jq -r .duration_s "$D1/meta.json")" "3"
 eq "meta title" "$(jq -r .title "$D1/meta.json")" "Tone Test"
 eq "meta source" "$(jq -r .source "$D1/meta.json")" "import"
-V1=$(jq -r .version "$RUN/state.json")
 ID2=$($CLI import "$TMP/speech.wav"); eq "second import id" "$ID2" "2026-01-03_030405"
 eq "title defaults to filename" "$(jq -r .title "$OMARECORDER_DIR/$ID2 speech/meta.json")" "speech"
 
-echo "== levels"
+}
+
+t_levels() {
 IDQ=$($CLI import "$TMP/quiet.wav" --title Quiet); IDH=$($CLI import "$TMP/hot.wav" --title Hot)
 eq "quiet import not clipped" "$($CLI show "$IDQ" --json | jq -r '.levels.clipped')" "false"
 eq "hot import flagged clipped" "$($CLI show "$IDH" --json | jq -r '.levels.clipped')" "true"
@@ -85,13 +195,20 @@ check "list marks clipped rows" bash -c "$CLI list | grep -q 'clipped.*Hot'"
 check "list shows HH:MM:SS" bash -c "$CLI list | grep -q '00:00:03'"
 $CLI delete "$IDQ" --yes >/dev/null; $CLI delete "$IDH" --yes >/dev/null
 
-echo "== list / show"
-eq "list newest first" "$($CLI list --json | jq -r '.[0].id')" "${ID2:-$ID1}"
+}
+
+t_list() {
+ensure_base
+eq "list newest first" "$($CLI list --json | jq -r '.[0].id')" "$ID2"
 eq "list has_transcript false" "$($CLI list --json | jq -r '.[-1].has_transcript')" "false"
 eq "show --json dir" "$($CLI show "$ID1" --json | jq -r .dir)" "$D1"
 fails "show unknown id fails" "$CLI" show 2000-01-01_000000
 
-echo "== rename"
+}
+
+t_rename() {
+ensure_base
+V1=$(jq -r .version "$RUN/state.json")
 $CLI rename "$ID1" "Renamed / Title  here" >/dev/null
 D1B="$OMARECORDER_DIR/$ID1 Renamed - Title here"
 check "folder renamed (sanitized)" test -d "$D1B"
@@ -101,8 +218,11 @@ eq "meta title updated" "$(jq -r .title "$D1B/meta.json")" "Renamed - Title here
 V2=$(jq -r .version "$RUN/state.json")
 check "state version bumped by mutations" test "$V2" -gt "$V1"
 
-echo "== note"
-cd "$TMP" || exit 1   # a stray relative touch from a hostile note would land here
+}
+
+t_note() {
+ensure_base
+V2=$(jq -r .version "$RUN/state.json")
 $CLI note "$ID1" "remember to trim the intro" >/dev/null
 eq "note round-trips via show --json" "$($CLI show "$ID1" --json | jq -r .notes)" "remember to trim the intro"
 eq "note appears in list --json" "$($CLI list --json | jq -r --arg id "$ID1" '.[] | select(.id==$id) | .notes')" "remember to trim the intro"
@@ -125,10 +245,11 @@ $CLI rename "$IDN" "Note Keeper Renamed" >/dev/null
 eq "note survives a rename" "$($CLI show "$IDN" --json | jq -r .notes)" "sticks around"
 $CLI delete "$IDN" --yes >/dev/null
 
-echo "== security / robustness"
+}
+
+t_security() {
 # Titles are data: shell metacharacters must round-trip untouched and never execute.
 EVIL='notes $(touch pwned-marker) `touch pwned-marker2`; rm -rf x <b>bold'
-cd "$TMP" || exit 1   # a stray relative touch would land here
 IDE=$("$CLI" import "$TMP/quiet.wav" --title "$EVIL")
 check "hostile title imported" test -n "$IDE"
 eq "hostile title stored verbatim" "$("$CLI" show "$IDE" --json | jq -r .title)" "$EVIL"
@@ -172,13 +293,18 @@ eq "meta.json is 0600" "$(stat -c %a "$DP/meta.json")" "600"
 eq "recording folder is 0700" "$(stat -c %a "$DP")" "700"
 eq "runtime dir is 0700" "$(stat -c %a "$RUN")" "700"
 "$CLI" delete "$IDP" --yes >/dev/null
-# runtime state never falls back to /tmp
-( unset XDG_RUNTIME_DIR OMARECORDER_RUN_DIR; "$CLI" status >/dev/null 2>&1; echo $? > "$TMP/rc" )
-check "no XDG_RUNTIME_DIR: uses /run/user or fails, never /tmp" bash -c "! test -d /tmp/omarecorder"
+# runtime state lives under XDG_RUNTIME_DIR (never /tmp) when no test override points elsewhere
+( export XDG_RUNTIME_DIR="$TMP/xdgrt"; unset OMARECORDER_RUN_DIR; install -d -m 700 "$XDG_RUNTIME_DIR"; "$CLI" status >/dev/null 2>&1 )
+check "runtime state lands under XDG_RUNTIME_DIR" test -d "$TMP/xdgrt/omarecorder"   # status writes state.json only on a change; the dir and lock prove the path
+eq "and that runtime dir is private" "$(stat -c %a "$TMP/xdgrt/omarecorder")" "700"
+check "nothing under /tmp" bash -c "! test -d /tmp/omarecorder"
 # config validation
 fails "config get unknown key fails" "$CLI" config get bogus
 fails "config set recordingsDir rejects missing dir" "$CLI" config set recordingsDir "$TMP/does-not-exist"
 fails "import rejects unknown flag" "$CLI" import --bogus "$TMP/quiet.wav"
+}
+
+t_locking() {
 # concurrent state writers do not lose bumps
 V0=$(jq -r .version "$RUN/state.json")
 for i in $(seq 1 20); do "$CLI" config set threads "$i" >/dev/null & done; wait
@@ -187,17 +313,22 @@ check "20 parallel config sets → 20 version bumps" test $((V1 - V0)) -ge 20
 "$CLI" config set threads 0 >/dev/null
 # the state lock: a waiting writer gets its turn; one that cannot must fail, never write unlocked
 ( flock 9; sleep 3 ) 9>>"$RUN/state.lock" &
-LOCKER=$!; sleep 0.3
+LOCKER=$!
+check "the holder has the lock" wait_for 5 bash -c "! flock -n '$RUN/state.lock' true"
 check "state_set waits for a held lock" "$CLI" config set threads 7
 wait "$LOCKER" 2>/dev/null
 eq "and its write landed" "$("$CLI" config get threads)" "7"
 ( flock 9; sleep 4 ) 9>>"$RUN/state.lock" &
-LOCKER=$!; sleep 0.3
+LOCKER=$!
+wait_for 5 bash -c "! flock -n '$RUN/state.lock' true"
 V_BEFORE=$(jq -r .version "$RUN/state.json")
 fails "state_set refuses when the lock never frees (OMARECORDER_LOCK_WAIT=1)" env OMARECORDER_LOCK_WAIT=1 "$CLI" config set threads 8
 wait "$LOCKER" 2>/dev/null
 eq "state.json untouched by the refused write" "$(jq -r .version "$RUN/state.json")" "$V_BEFORE"
 "$CLI" config set threads 0 >/dev/null
+}
+
+t_recovery() {
 # crash recovery for a "both" take that died before the mix
 IDB="2026-01-05_010203"; DB="$OMARECORDER_DIR/$IDB Both crash"; mkdir -p "$DB"
 cp "$TMP/quiet.wav" "$DB/mic.wav"; cp "$TMP/quiet.wav" "$DB/system.wav"
@@ -243,13 +374,10 @@ check "and gets no meta.json written into it" bash -c "! test -e \"$DX/meta.json
 check "a header-only stub folder is removed" bash -c "! test -d \"$DH\""
 rm -rf "$DX"
 rm -rf "$DF"; "$CLI" delete "$IDS" --yes >/dev/null; "$CLI" delete "$IDM" --yes >/dev/null; "$CLI" delete "$IDT_SHORT" --yes >/dev/null
-# setup check reports what is missing, with the package to install
-check "setup check lists tools" bash -c "\"$CLI\" setup check --json | jq -e '.tools | length > 5'"
-mkdir -p "$TMP/nowl"; ln -s /usr/bin/* "$TMP/nowl/" 2>/dev/null; rm -f "$TMP/nowl/wl-copy"
-( PATH="$TMP/nowl" "$CLI" setup check --json > "$TMP/setup.json" 2>/dev/null || true )
-eq "missing wl-copy reported with package" "$(jq -r '.missing[] | select(.tool=="wl-copy") | .package' "$TMP/setup.json")" "wl-clipboard"
 
-echo "== export"
+}
+
+t_export() {
 # A fake Obsidian install: vault A is open and files new notes under inbox/,
 # vault B is closed and newer, vault C is listed but no longer exists.
 OBS="$XDG_CONFIG_HOME/obsidian"; mkdir -p "$OBS" "$TMP/vaults/a/.obsidian" "$TMP/vaults/b"
@@ -301,7 +429,9 @@ eq "exportDir used when no vault" "$("$CLI" export "$IDX" --no-open)" "$TMP/expo
 eq "vaults --json without obsidian.json" "$("$CLI" vaults --json | jq -c .)" "[]"
 "$CLI" delete "$IDX" --yes >/dev/null
 
-echo "== trim / waveform"
+}
+
+t_trim() {
 # Import ids come from the file mtime: give each fixture its own second.
 cp "$TMP/tone48.wav" "$TMP/trim.wav"; touch -d "2026-01-06 03:04:05" "$TMP/trim.wav"
 cp "$TMP/quiet.wav" "$TMP/trim2.wav"; touch -d "2026-01-07 03:04:05" "$TMP/trim2.wav"
@@ -339,7 +469,7 @@ fails "trim rejects to beyond duration+1" "$CLI" trim "$IDT2" --from 0 --to 5
 fails "trim needs both --from and --to" "$CLI" trim "$IDT2" --from 1
 fails "trim rejects unknown flag" "$CLI" trim "$IDT2" --from 0 --to 1 --bogus
 check "nothing changed after rejected trims" bash -c "! test -e '$DT2/audio.orig.wav' && [ \"\$(jq -r .duration_s '$DT2/meta.json')\" = 3 ]"
-jq -cn --arg id "$IDT2" '{recording:null,jobs:[{type:"transcribe",id:$id,model:"base.en",started_at:0}],version:1}' > "$RUN/state.json"
+set_state null "[$(tx_job "$IDT2")]"
 fails "trim refused while a transcription runs" "$CLI" trim "$IDT2" --from 0 --to 1
 "$CLI" cancel "$IDT2" >/dev/null
 eq "trim --replace (to may overshoot by ≤1 s)" "$($CLI trim "$IDT2" --from 1 --to 4 --replace)" "$IDT2 (00:00:02)"
@@ -366,7 +496,9 @@ else
 fi
 $CLI delete "$IDT" --yes >/dev/null; $CLI delete "$IDT2" --yes >/dev/null
 
-echo "== tidy"
+}
+
+t_tidy() {
 IDT=$("$CLI" import "$TMP/quiet.wav" --title "Tidy Test"); DT2=$("$CLI" show "$IDT" --json | jq -r .dir)
 # A raw transcript the way voxtype produces it: one run-on line per piece, a
 # whisper loop in the middle, pieces separated by a blank line.
@@ -423,7 +555,9 @@ check "a 55 word run trips the loop warning" bash -c "jq -e '.transcript.tidy.lo
 check "loopy marker counts six copies" grep -Fq 'try the door (repeated 6x).' "$DL/transcript.tidy.md"
 "$CLI" delete "$IDL" --yes >/dev/null
 
-echo "== dictionary"
+}
+
+t_dictionary() {
 DICT="$XDG_CONFIG_HOME/omarecorder/dictionary"
 # The first dictionary command seeds the starter file; an existing file is
 # never touched again, however it got there.
@@ -488,7 +622,8 @@ check "summary counts one conflict" grep -q '1 conflict' <<<"$IMPOUT"
 check "summary names the malformed line" grep -q 'line 4' <<<"$IMPOUT"
 fails "import with nothing usable fails" bash -c "printf 'junk\n' > '$TMP/dict.junk' && \"$CLI\" dictionary import '$TMP/dict.junk'"
 # self-heal: a dictionary newer than a tidy file rebuilds it on list
-check "list refreshes tidy when the dictionary is newer" bash -c "sleep 1; \"$CLI\" dictionary add 'the laptop' 'the ThinkPad' >/dev/null && \"$CLI\" list >/dev/null && grep -q 'ThinkPad' '$DD/transcript.tidy.md'"
+touch -d '-5 seconds' "$DD/transcript.tidy.md"
+check "list refreshes tidy when the dictionary is newer" bash -c "\"$CLI\" dictionary add 'the laptop' 'the ThinkPad' >/dev/null && \"$CLI\" list >/dev/null && grep -q 'ThinkPad' '$DD/transcript.tidy.md'"
 "$CLI" delete "$IDD" --yes >/dev/null
 # Upgrade path: tidy files are current but the dictionary does not exist yet.
 # A plain list must seed the starter and refresh the stale tidies in the same
@@ -496,13 +631,15 @@ check "list refreshes tidy when the dictionary is newer" bash -c "sleep 1; \"$CL
 IDU=$("$CLI" import "$TMP/quiet.wav" --title "Upgrade Test"); DU=$("$CLI" show "$IDU" --json | jq -r .dir)
 printf '<!-- omarecorder model=base.en language=en created=x range=0-end chunks=1 -->\nThe owl bear waited by the door.\n' > "$DU/transcript.md"
 "$CLI" tidy "$IDU" >/dev/null
-rm -f "$DICT"; sleep 1
+rm -f "$DICT"; touch -d '-5 seconds' "$DU/transcript.tidy.md"
 "$CLI" list >/dev/null
 check "list seeds the dictionary on upgrade" test -s "$DICT"
 check "and refreshes existing tidies with the starter" grep -q 'owlbear' "$DU/transcript.tidy.md"
 "$CLI" delete "$IDU" --yes >/dev/null
 
-echo "== ux polish"
+}
+
+t_polish() {
 eq "empty list is script-clean" "$(OMARECORDER_DIR="$TMP/EmptyRoot" "$CLI" list)" ""
 check "dictionary list --json is JSON too" bash -c "\"$CLI\" dictionary list --json | jq -e '.count >= 0' >/dev/null"
 printf 'alpha -> beta -> gamma\n' > "$TMP/dict.arrows"
@@ -519,9 +656,11 @@ check "bogus model hint does not suggest an impossible download" bash -c "OUT=\$
 "$CLI" delete "$IDX" --yes >/dev/null
 printf '# emptied by the test suite\n' > "$DICT"
 
-echo "== busy guards"
+}
+
+t_guards() {
 IDG=$("$CLI" import "$TMP/quiet.wav" --title "Guard Test")
-jq -cn --arg id "$IDG" '{recording:null,jobs:[{type:"transcribe",id:$id,model:"base.en",started_at:0}],version:1}' > "$RUN/state.json"
+set_state null "[$(tx_job "$IDG")]"
 fails "rename refused while transcribing" "$CLI" rename "$IDG" "New Name"
 fails "note refused while transcribing" "$CLI" note "$IDG" "not now"
 fails "delete refused while transcribing" "$CLI" delete "$IDG" --yes
@@ -535,40 +674,23 @@ fails "play rejects trailing garbage" "$CLI" play "$IDG" garbage
 mkdir -p "$TMP/novox"; printf '#!/bin/sh\nexit 1\n' > "$TMP/novox/voxtype"; chmod +x "$TMP/novox/voxtype"
 check "setup check survives a voxtype that fails" bash -c "PATH=\"$TMP/novox:\$PATH\" \"$CLI\" setup check --json | jq -e '.version' >/dev/null"
 
-echo "== models / estimate"
+}
+
+t_models() {
+ensure_base
 check "models --json lists base.en" bash -c "$CLI models --json | jq -e '.[] | select(.name==\"base.en\")'"
 eq "estimate uses default rtf" "$($CLI estimate "$ID1" --model base.en | jq -r '.rtf, .source' | paste -sd,)" "10,default"
 fails "estimate rejects unknown model" "$CLI" estimate "$ID1" --model nope
 
-echo "== transcribe --download (stubbed voxtype)"
+}
+
+t_download() {
 # A stub voxtype plus an empty scratch model dir gives full control of the
 # download worker's success predicate (child exit 0 AND the ggml file exists),
 # so the whole download-then-transcribe chain runs without the real engine.
 IDD=$("$CLI" import "$TMP/quiet.wav" --title "Chain Test")
 DD="$OMARECORDER_DIR/$IDD Chain Test"
 DLM="$TMP/dlmodels"; mkdir -p "$DLM"
-STUB="$TMP/voxstub"; mkdir -p "$STUB"          # success: writes the model file; transcribes to stub text
-cat > "$STUB/voxtype" <<STUBEOF
-#!/bin/bash
-# setup --download writes the model file; anything else is the transcribe
-# call (voxtype -q --model ... transcribe FILE), which emits text after a
-# blank line the way the real engine does.
-if [ "\$1" = setup ]; then
-  head -c 100 /dev/zero > "\$VOXTYPE_MODELS_DIR/ggml-small.en.bin"
-else
-  printf '\nchained stub text\n'
-fi
-exit 0
-STUBEOF
-STUBSNAP="$TMP/voxsnap"; mkdir -p "$STUBSNAP"  # snapshot: capture state mid-download, then fail
-cat > "$STUBSNAP/voxtype" <<STUBEOF
-#!/bin/bash
-[ "\$1" = setup ] && cp "$RUN/state.json" "$TMP/state.mid"
-exit 1
-STUBEOF
-STUBFAIL="$TMP/voxfail"; mkdir -p "$STUBFAIL"  # failure: download never produces the file
-printf '#!/bin/bash\nexit 1\n' > "$STUBFAIL/voxtype"
-chmod +x "$STUB/voxtype" "$STUBSNAP/voxtype" "$STUBFAIL/voxtype"
 
 # The intent lands on the download job, nested (never a top-level id).
 ( PATH="$STUBSNAP:$PATH" VOXTYPE_MODELS_DIR="$DLM" "$CLI" transcribe "$IDD" --model small.en --from 0 --to 2 --download >/dev/null 2>&1 )
@@ -587,7 +709,7 @@ eq "still exactly one download job" "$(jq -r '[.jobs[]|select(.type=="download")
 eq "chain re-aimed to the last press" "$(jq -r '[.jobs[]|select(.type=="download")][0]."then".id' "$RUN/state.json")" "$IDD"
 
 # Download failure: no transcribe job is ever created, the then dies with the job.
-jq -cn '{recording:null,jobs:[],version:1}' > "$RUN/state.json"
+set_state
 ( PATH="$STUBFAIL:$PATH" VOXTYPE_MODELS_DIR="$DLM" "$CLI" transcribe "$IDD" --model small.en --download >/dev/null 2>&1 )
 eq "failed chain leaves no jobs" "$(jq -r '.jobs|length' "$RUN/state.json")" "0"
 check "and no transcript" bash -c "! test -f \"$DD/transcript.md\""
@@ -612,7 +734,7 @@ check "refused chain is logged" bash -c "grep -q 'download chain FAILED' \"$XDG_
 
 # Plain model download now removes its own job with no reconcile call
 # (before, the job lingered and the UI said Downloading forever).
-jq -cn '{recording:null,jobs:[],version:1}' > "$RUN/state.json"
+set_state
 DLM2="$TMP/dlmodels2"; mkdir -p "$DLM2"
 ( PATH="$STUB:$PATH" VOXTYPE_MODELS_DIR="$DLM2" "$CLI" model download small.en >/dev/null 2>&1; echo $? > "$TMP/rc" )
 eq "plain download exits 0" "$(cat "$TMP/rc")" "0"
@@ -621,7 +743,7 @@ eq "and its job is gone from the raw state" "$(jq -r '.jobs|length' "$RUN/state.
 # The chunk override (#38): validated, recorded in meta, parked and replayed.
 fails "chunk-s rejects zero" bash -c "PATH=\"$STUB:\$PATH\" VOXTYPE_MODELS_DIR=\"$DLM\" \"$CLI\" transcribe \"$IDD\" --model small.en --chunk-s 0"
 fails "chunk-s rejects non-numeric" bash -c "PATH=\"$STUB:\$PATH\" VOXTYPE_MODELS_DIR=\"$DLM\" \"$CLI\" transcribe \"$IDD\" --model small.en --chunk-s abc"
-jq -cn '{recording:null,jobs:[],version:1}' > "$RUN/state.json"
+set_state
 ( PATH="$STUB:$PATH" VOXTYPE_MODELS_DIR="$DLM" "$CLI" transcribe "$IDD" --model small.en --chunk-s 1 >/dev/null 2>&1; echo $? > "$TMP/rc" )
 eq "chunk override run exits 0" "$(cat "$TMP/rc")" "0"
 check "1 s pieces split the 3 s clip in three" bash -c "head -1 \"$DD/transcript.md\" | grep -q 'chunks=3'"
@@ -629,7 +751,7 @@ eq "meta records the chunk length used" "$(jq -r .transcript.chunk_s "$DD/meta.j
 mkdir -p "$TMP/dlm3"
 ( PATH="$STUBSNAP:$PATH" VOXTYPE_MODELS_DIR="$TMP/dlm3" "$CLI" transcribe "$IDD" --model small.en --chunk-s 7 --download >/dev/null 2>&1 )
 eq "then carries chunk_s" "$(jq -r '.jobs[0]."then".chunk_s' "$TMP/state.mid")" "7"
-mkdir -p "$TMP/dlm4"; jq -cn '{recording:null,jobs:[],version:1}' > "$RUN/state.json"
+mkdir -p "$TMP/dlm4"; set_state
 ( PATH="$STUB:$PATH" VOXTYPE_MODELS_DIR="$TMP/dlm4" "$CLI" transcribe "$IDD" --model small.en --chunk-s 1 --download >/dev/null 2>&1 )
 check "replayed chunk override splits in three" bash -c "head -1 \"$DD/transcript.md\" | grep -q 'chunks=3'"
 
@@ -641,7 +763,7 @@ check "enhanceAudio stored as a real boolean" bash -c "\"$CLI\" config get --jso
 fails "enhanceAudio rejects other values" "$CLI" config set enhanceAudio maybe
 "$CLI" config set enhanceAudio false >/dev/null
 cp "$DD/audio.wav" "$TMP/enh.before.wav"
-jq -cn '{recording:null,jobs:[],version:1}' > "$RUN/state.json"
+set_state
 ( PATH="$STUB:$PATH" VOXTYPE_MODELS_DIR="$DLM" "$CLI" transcribe "$IDD" --model small.en --enhance >/dev/null 2>&1; echo $? > "$TMP/rc" )
 eq "transcribe --enhance exits 0" "$(cat "$TMP/rc")" "0"
 check "header records the cleanup pass" bash -c "head -1 \"$DD/transcript.md\" | grep -q 'enhanced=true'"
@@ -666,7 +788,7 @@ check "and carries the enhanced tag" bash -c "head -1 \"$DD/transcript.md\" | gr
 mkdir -p "$TMP/dlm5"
 ( PATH="$STUBSNAP:$PATH" VOXTYPE_MODELS_DIR="$TMP/dlm5" "$CLI" transcribe "$IDD" --model small.en --enhance --download >/dev/null 2>&1 )
 eq "then carries enhance" "$(jq -r '.jobs[0]."then".enhance' "$TMP/state.mid")" "true"
-mkdir -p "$TMP/dlm6"; jq -cn '{recording:null,jobs:[],version:1}' > "$RUN/state.json"
+mkdir -p "$TMP/dlm6"; set_state
 ( PATH="$STUB:$PATH" VOXTYPE_MODELS_DIR="$TMP/dlm6" "$CLI" transcribe "$IDD" --model small.en --enhance --download >/dev/null 2>&1 )
 check "replayed chain keeps the enhanced tag" bash -c "head -1 \"$DD/transcript.md\" | grep -q 'enhanced=true'"
 # A failing cleanup falls back to the original audio instead of failing the job.
@@ -678,7 +800,7 @@ for a in "\$@"; do case "\$a" in *afftdn*) exit 1 ;; esac; done
 exec "$REAL_FFMPEG" "\$@"
 FFEOF
 chmod +x "$FFENH/ffmpeg"
-jq -cn '{recording:null,jobs:[],version:1}' > "$RUN/state.json"
+set_state
 ( PATH="$FFENH:$STUB:$PATH" VOXTYPE_MODELS_DIR="$DLM" "$CLI" transcribe "$IDD" --model small.en --enhance >/dev/null 2>&1; echo $? > "$TMP/rc" )
 eq "failed cleanup still transcribes" "$(cat "$TMP/rc")" "0"
 eq "and records enhanced false" "$(jq -r .transcript.enhanced "$DD/meta.json")" "false"
@@ -686,12 +808,13 @@ check "fallback is logged" bash -c "grep -q 'enhance failed' \"$XDG_STATE_HOME/o
 
 # model cancel (#39): validated, idempotent, atomic job + chain removal.
 fails "cancel unknown model" "$CLI" model cancel bogus
-jq -cn '{recording:null,jobs:[],version:1}' > "$RUN/state.json"
+set_state
 check "cancel with nothing running exits 0" "$CLI" model cancel small.en
 jq -cn --argjson t "$(date +%s)" \
   '{recording:null,jobs:[{type:"download",model:"small.en",unit:"omarecorder-dl-small-en",started_at:$t,expected_bytes:1,"then":{id:"x",language:"en",threads:""}}],version:1}' > "$RUN/state.json"
 touch "$DLM/ggml-small.en.bin.part"
-check "cancel a chained download exits 0" bash -c "VOXTYPE_MODELS_DIR=\"$DLM\" \"$CLI\" model cancel small.en"
+mkdir -p "$TMP/nosysd"; printf '#!/bin/sh\nexit 0\n' > "$TMP/nosysd/systemctl"; chmod +x "$TMP/nosysd/systemctl"   # never stop a unit on the real user manager
+check "cancel a chained download exits 0" bash -c "PATH=\"$TMP/nosysd:\$PATH\" VOXTYPE_MODELS_DIR=\"$DLM\" \"$CLI\" model cancel small.en"
 eq "cancelled download job removed" "$(jq -r '.jobs|length' "$RUN/state.json")" "0"
 check "partial file left for voxtype to resume" test -f "$DLM/ggml-small.en.bin.part"
 check "cancel is logged" bash -c "grep -q 'download cancelled small.en' \"$XDG_STATE_HOME/omarecorder/omarecorder.log\""
@@ -703,16 +826,6 @@ check "autoTranscribe accepts true" "$CLI" config set autoTranscribe true
 check "stored as a real boolean" bash -c "\"$CLI\" config get --json | jq -e '.autoTranscribe == true' >/dev/null"
 fails "autoTranscribe rejects other values" "$CLI" config set autoTranscribe maybe
 head -c 100 /dev/zero > "$DLM/ggml-base.en.bin"   # default model "installed" for the stub
-mkstoprec() { # <id> <title>: hand-built live recording with a harmless pid
-  local dir="$OMARECORDER_DIR/$1 $2"
-  mkdir -p "$dir"; cp "$TMP/quiet.wav" "$dir/audio.wav"
-  jq -cn --arg id "$1" --arg ttl "$2" '{id:$id,title:$ttl,source:"mic",created:"2026-01-06T01:01:01+0000",duration_s:null,size_bytes:0,sample_rate:16000,transcript:null,notes:""}' > "$dir/meta.json"
-  # stdout redirected so the $(...) capture is not held open by the child
-  sleep 60 >/dev/null 2>&1 & local spid=$!
-  jq -cn --arg id "$1" --arg dir "$dir" --argjson p "$spid" --argjson t "$(date +%s)" \
-    '{recording:{id:$id,dir:$dir,source:"mic",pids:[$p],started_at:$t},jobs:[],version:1}' > "$RUN/state.json"
-  echo "$dir"
-}
 AD=$(mkstoprec 2026-01-06_010101 AutoOn)
 ( PATH="$STUB:$PATH" VOXTYPE_MODELS_DIR="$DLM" "$CLI" record stop >/dev/null 2>&1; echo $? > "$TMP/rc" )
 eq "stop with autoTranscribe on exits 0" "$(cat "$TMP/rc")" "0"
@@ -732,7 +845,9 @@ eq "without --download still exit 3" "$(cat "$TMP/rc")" "3"
 fails "unknown model refused even with --download" bash -c "PATH=\"$STUB:\$PATH\" VOXTYPE_MODELS_DIR=\"$TMP/nomodels\" \"$CLI\" transcribe \"$IDD\" --model bogus --download"
 "$CLI" delete "$IDD" --yes >/dev/null
 
-echo "== search"
+}
+
+t_search() {
 SA=$("$CLI" import "$TMP/quiet.wav" --title "Search A")
 SB=$("$CLI" import "$TMP/quiet.wav" --title "Search B")
 SAD="$OMARECORDER_DIR/$SA Search A"
@@ -754,33 +869,10 @@ eq "raw-only text no longer matches" "$("$CLI" search heron)" "[]"
 eq "early match in a large transcript still found" "$("$CLI" search needle)" "[\"$SA\"]"
 "$CLI" delete "$SA" --yes >/dev/null; "$CLI" delete "$SB" --yes >/dev/null
 
-echo "== record resume"
-# A fake audio stack: pactl reports one microphone and one sink, and pw-record
-# "records" by copying the 3 s quiet fixture into its target file and sleeping
-# until the stop signal arrives. That makes the whole start/stop/resume/join
-# pipeline testable with no hardware at all.
-FAKEAUDIO="$TMP/fakeaudio"; mkdir -p "$FAKEAUDIO"
-cat > "$FAKEAUDIO/pactl" <<'STUBEOF'
-#!/bin/bash
-case "$*" in
-  "get-default-source") echo fakemic ;;
-  "list short sources") printf '0\tfakemic\tPipeWire\ts16le 1ch 16000Hz\tRUNNING\n' ;;
-  "get-default-sink") echo fakesink ;;
-esac
-exit 0
-STUBEOF
-cat > "$FAKEAUDIO/pw-record" <<STUBEOF
-#!/bin/bash
-# PWREC_DELAY holds the file back, standing in for a recorder that is slow to
-# open the device (the race tests park a caller in the file-wait watchdog).
-[ -n "\${PWREC_DELAY:-}" ] && sleep "\$PWREC_DELAY"
-for f in "\$@"; do :; done   # the output file is the last argument
-cp "$TMP/quiet.wav" "\$f"
-exec sleep 600
-STUBEOF
-chmod +x "$FAKEAUDIO/pactl" "$FAKEAUDIO/pw-record"
-FAKEPATH="$FAKEAUDIO:$PATH"
-jq -cn '{recording:null,jobs:[],version:1}' > "$RUN/state.json"
+}
+
+t_resume() {
+set_state
 
 fails "the resumeWindow key is gone" "$CLI" config get resumeWindow
 fails "and cannot be set either" "$CLI" config set resumeWindow 60
@@ -843,10 +935,6 @@ eq "deleting the offered take clears the offer" "$(jq -r '.last_stop' "$RUN/stat
 # right-click always starts fresh, so the offer simply stands until it is
 # consumed, a new recording starts, or the take is trimmed or deleted.
 NOW=$(date +%s)
-armresume() { # <id> [stopped_at]
-  jq -cn --arg id "$1" --argjson t "${2:-$((NOW - 100))}" \
-    '{recording:null,jobs:[],version:1,last_stop:{id:$id,title:"Resume Take",stopped_at:$t,resumable:true}}' > "$RUN/state.json"
-}
 armresume "$RID" "$((NOW - 100000))"
 eq "an offer from yesterday still stands" "$("$CLI" status --json | jq -r '.resume.id')" "$RID"
 eq "and reconcile leaves it alone" "$(jq -r '.last_stop.id' "$RUN/state.json")" "$RID"
@@ -868,7 +956,7 @@ armresume "$RID"
 touch "$RD/audio.orig.wav"
 fails "a restore point on disk refuses the resume" env PATH="$FAKEPATH" "$CLI" record resume
 rm -f "$RD/audio.orig.wav"
-jq -cn '{recording:null,jobs:[],version:1}' > "$RUN/state.json"
+set_state
 "$CLI" delete "$RID" --yes >/dev/null
 
 # A "both" take: the segment pair is mixed and all three tracks are joined.
@@ -917,7 +1005,7 @@ eq "both crash: the mix is 6 s" "$(jq -r .duration_s "$CD3/meta.json")" "6"
 eq "both crash: mic.wav joined" "$(ffprobe -v error -show_entries format=duration -of csv=p=0 "$CD3/mic.wav" | cut -d. -f1)" "6"
 eq "both crash: system.wav joined" "$(ffprobe -v error -show_entries format=duration -of csv=p=0 "$CD3/system.wav" | cut -d. -f1)" "6"
 "$CLI" delete "$CID3" --yes >/dev/null
-jq -cn '{recording:null,jobs:[],version:1}' > "$RUN/state.json"
+set_state
 
 # Overlapping resumes: the offer must be consumed under the lock before any
 # shared segment file is touched, so the loser of a double-press can never
@@ -929,7 +1017,7 @@ RVD="$OMARECORDER_DIR/$RVID Race Take"
 ( PATH="$FAKEPATH" "$CLI" record stop >/dev/null 2>&1 )
 ( PATH="$FAKEPATH" PWREC_DELAY=2.5 "$CLI" record resume >/dev/null 2>&1; echo $? > "$TMP/rc.a" ) &
 RACER=$!
-sleep 1.2
+wait_for 2 bash -c "[ \"\$(jq -r '.last_stop' '$RUN/state.json')\" = null ]"
 # The first caller is still parked waiting for its recorder's file here; the
 # offer must already be gone from the state, or a second caller could pass
 # its own checks and race for the same segment paths.
@@ -975,7 +1063,7 @@ RSD="$OMARECORDER_DIR/$RSID Reserve Take"
 ( PATH="$FAKEPATH" "$CLI" record stop >/dev/null 2>&1 )
 ( PATH="$FAKEPATH" PWREC_DELAY=2.5 "$CLI" record resume >/dev/null 2>&1 ) &
 RESUMER=$!
-sleep 1.2
+wait_for 2 bash -c "[ \"\$(\"$CLI\" status --json | jq -r '.recording.id')\" = '$RSID' ]"
 eq "the take is reserved while the resume starts" "$("$CLI" status --json | jq -r '.recording.id')" "$RSID"
 fails "trim is refused during the resume start" "$CLI" trim "$RSID" --from 0 --to 1
 fails "rename is refused during the resume start" "$CLI" rename "$RSID" "Nope"
@@ -998,9 +1086,11 @@ fails "resume refused while the take transcribes" env PATH="$FAKEPATH" "$CLI" re
 jq -cn --argjson t "$NOW" '{recording:null,version:1,jobs:[],
   last_stop:{id:"2026-02-07_070707",title:"Busy",stopped_at:$t,resumable:true}}' > "$RUN/state.json"
 eq "the offer returns when the job ends" "$("$CLI" status --json | jq -r '.resume.id')" "2026-02-07_070707"
-jq -cn '{recording:null,jobs:[],version:1}' > "$RUN/state.json"
+set_state
 
-echo "== transcribe"
+}
+
+t_transcribe() {
 if command -v voxtype >/dev/null && [[ -f "${VOXTYPE_MODELS_DIR:-$HOME/.local/share/voxtype/models}/ggml-base.en.bin" && -f "$TMP/speech12.wav" ]]; then
   ID3=$($CLI import "$TMP/speech12.wav" --title "Speech 12s")
   D3="$OMARECORDER_DIR/$ID3 Speech 12s"
@@ -1060,7 +1150,7 @@ if command -v voxtype >/dev/null && [[ -f "${VOXTYPE_MODELS_DIR:-$HOME/.local/sh
   eq "50 s range → 2 pieces" "$(jq -r '.transcript.chunks' "$D6/meta.json")" "2"
   # cancel keeps the pieces that finished: run the worker directly, TERM it mid-chunk
   rm -f "$D6/transcript.md"
-  jq -cn --arg id "$ID6" '{recording:null,jobs:[{type:"transcribe",id:$id,model:"base.en",started_at:0}],version:1}' > "$RUN/state.json"
+  set_state null "[$(tx_job "$ID6")]"
   OMARECORDER_CHUNK_S=25 setsid "$CLI" _tx-worker "$ID6" base.en en 0 "" "" >/dev/null 2>&1 < /dev/null &
   WPID=$!
   # "transcript.md exists" is not enough: a fast machine can finish every piece
@@ -1099,7 +1189,9 @@ else
   skip "voxtype/base.en/fixture not available"
 fi
 
-echo "== level meter (parser)"
+}
+
+t_meter() {
 printf 'frame:0 pts:0 pts_time:0.2\nlavfi.astats.Overall.Peak_level=-0.1\nlavfi.astats.Overall.Peak_count=69\n' | "$CLI" _meter-loop "$TMP/level" ""
 check "start transient (t<1 s) writes nothing" bash -c "! test -e '$TMP/level'"
 printf 'frame:4 pts:16000 pts_time:1.0\nlavfi.astats.Overall.Peak_level=-12.5\nlavfi.astats.Overall.Peak_count=0\n' | "$CLI" _meter-loop "$TMP/level" "" --keep
@@ -1111,7 +1203,9 @@ printf 'frame:8 pts:32000 pts_time:2.0\nlavfi.astats.Overall.Peak_level=-inf\nla
 eq "silence (-inf) becomes -99" "$(jq -r .peak_db "$TMP/level")" "-99"
 rm -f "$TMP/level"
 
-echo "== record (real mic, 2 s)"
+}
+
+t_record() {
 if pactl list short sources 2>/dev/null | grep -qv '\.monitor'; then
   IDR=$($CLI record start --title "Mic check")
   check "record start returns id" test -n "$IDR"
@@ -1185,14 +1279,39 @@ else
   skip "no microphone source"
 fi
 
-echo "== delete"
+}
+
+t_delete() {
+ensure_base
+DDEL=$("$CLI" show "$ID1" --json | jq -r .dir)
 check "delete --yes" "$CLI" delete "$ID1" --yes
-check "folder gone" bash -c "! test -d '$D1B'"
+check "folder gone" bash -c "! test -d '$DDEL'"
 fails "delete unknown fails" "$CLI" delete 2000-01-01_000000 --yes
 
-echo "== setup"
+}
+
+t_setup() {
 check "setup check --json runs" bash -c "$CLI setup check --json | jq -e '.version'"
+# setup check reports what is missing, with the package to install
+check "setup check lists tools" bash -c "\"$CLI\" setup check --json | jq -e '.tools | length > 5'"
+mkdir -p "$TMP/nowl"; ln -s /usr/bin/* "$TMP/nowl/" 2>/dev/null; rm -f "$TMP/nowl/wl-copy"
+( PATH="$TMP/nowl" "$CLI" setup check --json > "$TMP/setup.json" 2>/dev/null || true )
+eq "missing wl-copy reported with package" "$(jq -r '.missing[] | select(.tool=="wl-copy") | .package' "$TMP/setup.json")" "wl-clipboard"
+}
+
+# -------------------------------------------------------------------- run ---
+SECTIONS=(basics import levels list rename note security locking recovery export trim tidy dictionary polish
+          guards models download search resume transcribe meter record delete setup)
+if [[ "${1:-}" == "--list" ]]; then printf '%s\n' "${SECTIONS[@]}"; exit 0; fi
+want() { [[ -z "${OMARECORDER_TEST_ONLY:-}" ]] || [[ ",${OMARECORDER_TEST_ONLY// /}," == *",$1,"* ]]; }
+for s in "${SECTIONS[@]}"; do
+  want "$s" || continue
+  echo "== $s"; t0=$SECONDS
+  fresh_state; "t_$s"
+  (( SECONDS - t0 >= 10 )) && echo "   ($((SECONDS - t0)) s)"
+done
 
 echo
-echo "passed: $pass  failed: $fail"
+echo "passed: $pass  failed: $fail  skipped: $skipped"
+[[ -n "${GITHUB_STEP_SUMMARY:-}" ]] && echo "CLI tests: passed $pass, failed $fail, skipped $skipped" >> "$GITHUB_STEP_SUMMARY"
 [[ $fail == 0 ]]

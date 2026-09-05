@@ -503,12 +503,17 @@ bash tests/lint.sh                # shellcheck, manifest schema, QML hygiene, RE
 
 The tests use the real microphone, ffmpeg and voxtype with `base.en`. A missing
 engine, model or microphone is a failure unless `OMARECORDER_TEST_ALLOW_SKIP=1`
-(CI runs `tests/lint.sh` and the CLI tests that way in an Arch container).
-`OMARECORDER_SYNC=1` runs jobs inline instead of under `systemd-run`.
-`OMARECORDER_RUN_DIR` (tests only) moves the runtime state out of
-`$XDG_RUNTIME_DIR` so the real user manager stays reachable. There is no QML
-test harness; review QML by reading it and restarting the shell. The
-screenshots in `docs/screenshots/` are the reference for how it should look.
+(CI runs `tests/lint.sh` and the CLI tests that way in an Arch container; the
+summary line counts what was skipped). The suite is made of independent
+sections: `OMARECORDER_TEST_ONLY=export,tidy` runs only those, and `--list`
+prints the names. The sandbox lives under `~/.cache/omarecorder-tests/` (or
+`OMARECORDER_TEST_TMP`) and is kept, with the CLI log, when a test fails or
+`OMARECORDER_TEST_KEEP=1` is set. `OMARECORDER_SYNC=1` runs jobs inline
+instead of under `systemd-run`. `OMARECORDER_RUN_DIR` (tests only) moves the
+runtime state out of `$XDG_RUNTIME_DIR` so the real user manager stays
+reachable. There is no QML test harness; review QML by reading it and
+restarting the shell. The screenshots in `docs/screenshots/` are the reference
+for how it should look.
 
 Design specs: `docs/superpowers/specs/2026-08-29-omarecorder-design.md` and
 `docs/superpowers/specs/2026-08-30-v1.0-design.md`. Contribution principles:
