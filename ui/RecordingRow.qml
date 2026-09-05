@@ -7,9 +7,9 @@ CursorSurface {
   id: root
   property var rec: ({})
   property var svc: null               // the Service singleton; every derived string comes from it
-  property color foreground: Color.foreground
+  // foreground and accent come from CursorSurface (redeclaring them here shadowed
+  // the base's copies, so its hover and selected fills ignored what callers set).
   property color dimColor: Qt.darker(foreground, 1.55)
-  property color accent: Color.accent
   property string fontFamily: Style.font.family
   property bool showActions: true
   property color urgent: Color.urgent

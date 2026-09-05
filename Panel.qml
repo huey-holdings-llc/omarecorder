@@ -1,6 +1,6 @@
+pragma ComponentBehavior: Bound
 import QtQuick
 import QtQuick.Controls
-import Quickshell
 import Quickshell.Io
 import qs.Commons
 import qs.Ui
@@ -202,7 +202,7 @@ Panel {
             visible: root.recording
             width: parent.width
             peakDb: root.ready ? root.svc.peakDb : -99
-            clip: root.ready && root.svc.clipping
+            clipping: root.ready && root.svc.clipping
             foreground: root.foreground
             urgent: root.urgent
             fontFamily: root.fontFamily

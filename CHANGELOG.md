@@ -11,6 +11,21 @@ All notable changes to this project are documented here. Format follows
   checks that silently never ran in CI (no alsa speech file there) use a
   generated fixture instead. The `lint-and-test` check is now required
   before anything merges to `main`.
+- A take whose recorder was killed mid-recording (power loss, a crashed
+  session) is now really repaired on recovery. The recorder never writes the
+  WAV sizes; ffprobe still guessed the right duration from the file size, so
+  the take looked fine in the Library while whisper read zero samples and
+  every transcription of it failed. Recovery now checks the header's own
+  data size and rewrites it when it does not fit the file.
+- `rename` refuses to move a folder whose `meta.json` it cannot read, instead
+  of moving it and then failing to write the title.
+- Three small QML fixes found by running qmllint against the shell's modules:
+  the recording row no longer shadows two properties of the shell's
+  `CursorSurface` (its hover and selected fills ignored the colours the popup
+  set), the level meter's `clip` property no longer shadows `Item.clip`, and
+  the model picker no longer receives `null` for the duration of a live take.
+  The dictionary status line renders as plain text like every other user
+  string.
 
 ### Development
 - The CLI test suite is split into sections that each start from a clean
@@ -22,6 +37,23 @@ All notable changes to this project are documented here. Format follows
   plugin tree to `~/.cache/omarecorder-tests/`. Two tests that reached past
   the sandbox (one into the real runtime dir, one stopping a unit on the real
   user manager) no longer do.
+- The failure paths are tested, without hardware, in CI: a transcription
+  whose engine dies (job removed, stderr kept, finished pieces published as
+  partial), a cancel that lands mid-piece, the detached path under a stand-in
+  `systemd-run`/`systemctl` (job carries its unit, reconcile drops a finished
+  unit, cancel and `model cancel` stop a live one, a manager that refuses to
+  start leaves no job), header repair of crash leftovers, a start with no
+  microphone or a dead recorder, a stop whose mix or join fails, a corrupt or
+  read-only `meta.json`, malformed ids against every command, the
+  notification click action's argv, and the player's pid handling. The
+  long-take stop confirmation and busy guards moved from the real-mic block
+  to the fake stack. A suite-end check fails on any temp file left behind.
+- `tests/lint.sh` runs qmllint for real (the binary lives off PATH on Arch, so
+  the old check never fired) with the shell's modules registered, unit-tests
+  `ui/format.js` under node, cross-checks the help text against the command
+  dispatcher and the JSON fields the QML reads against the CLI, and enforces
+  plain text, theme tokens and argv arrays in QML with grep. Checks that
+  cannot run on a machine say so instead of showing a tick.
 
 ## [1.4.0] - 2026-09-02
 

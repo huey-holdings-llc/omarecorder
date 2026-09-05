@@ -7,13 +7,13 @@ import qs.Commons
 Item {
   id: root
   property real peakDb: -99          // dBFS, ≤ 0
-  property bool clip: false
+  property bool clipping: false        // not "clip": that would shadow Item.clip
   property color foreground: Color.foreground
   property color urgent: Color.urgent
   property string fontFamily: Style.font.family
 
   readonly property real fill: Math.max(0, Math.min(1, (peakDb + 60) / 60))
-  readonly property bool hot: peakDb > -6 && !clip   // near the rails, not there yet
+  readonly property bool hot: peakDb > -6 && !clipping   // near the rails, not there yet
 
   implicitHeight: Style.space(14)
   implicitWidth: Style.space(200)
@@ -31,7 +31,7 @@ Item {
       height: parent.height
       radius: parent.radius
       width: parent.width * root.fill
-      color: root.clip ? root.urgent : (root.hot ? Qt.lighter(root.urgent, 1.4) : Color.accent)
+      color: root.clipping ? root.urgent : (root.hot ? Qt.lighter(root.urgent, 1.4) : Color.accent)
       Behavior on width { NumberAnimation { duration: 120 } }
     }
   }
@@ -41,11 +41,11 @@ Item {
     anchors.verticalCenter: parent.verticalCenter
     width: Style.space(44)
     horizontalAlignment: Text.AlignRight
-    text: root.clip ? "CLIP" : (root.peakDb <= -90 ? "" : Math.round(root.peakDb) + " dB")
-    color: root.clip ? root.urgent : Qt.darker(root.foreground, 1.4)
+    text: root.clipping ? "CLIP" : (root.peakDb <= -90 ? "" : Math.round(root.peakDb) + " dB")
+    color: root.clipping ? root.urgent : Qt.darker(root.foreground, 1.4)
     font.family: root.fontFamily
     font.pixelSize: Style.font.caption
-    font.bold: root.clip
+    font.bold: root.clipping
     textFormat: Text.PlainText
   }
 }

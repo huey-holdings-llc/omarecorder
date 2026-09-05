@@ -175,6 +175,7 @@ Column {
         visible: root.dictStatus.length > 0
         width: parent.width; wrapMode: Text.Wrap
         text: root.dictStatus
+        textFormat: Text.PlainText   // echoes the user's own dictionary words
         color: Qt.darker(root.foreground, 1.4); font.family: root.fontFamily; font.pixelSize: Style.font.caption
       }
       Timer { id: dictStatusClear; interval: 6000; onTriggered: root.dictStatus = "" }
