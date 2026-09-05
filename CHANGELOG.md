@@ -19,6 +19,13 @@ All notable changes to this project are documented here. Format follows
   data size and rewrites it when it does not fit the file.
 - `rename` refuses to move a folder whose `meta.json` it cannot read, instead
   of moving it and then failing to write the title.
+- Three small QML fixes found by running qmllint against the shell's modules:
+  the recording row no longer shadows two properties of the shell's
+  `CursorSurface` (its hover and selected fills ignored the colours the popup
+  set), the level meter's `clip` property no longer shadows `Item.clip`, and
+  the model picker no longer receives `null` for the duration of a live take.
+  The dictionary status line renders as plain text like every other user
+  string.
 
 ### Development
 - The CLI test suite is split into sections that each start from a clean
@@ -41,6 +48,12 @@ All notable changes to this project are documented here. Format follows
   notification click action's argv, and the player's pid handling. The
   long-take stop confirmation and busy guards moved from the real-mic block
   to the fake stack. A suite-end check fails on any temp file left behind.
+- `tests/lint.sh` runs qmllint for real (the binary lives off PATH on Arch, so
+  the old check never fired) with the shell's modules registered, unit-tests
+  `ui/format.js` under node, cross-checks the help text against the command
+  dispatcher and the JSON fields the QML reads against the CLI, and enforces
+  plain text, theme tokens and argv arrays in QML with grep. Checks that
+  cannot run on a machine say so instead of showing a tick.
 
 ## [1.4.0] - 2026-09-02
 
