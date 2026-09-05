@@ -157,6 +157,90 @@ mkstoprec() { # <id> <title>: hand-built live recording with a harmless pid
 armresume() { # <id> [stopped_at]: an armed resume offer, by default from 100 s ago
   set_state null '[]' "$(jq -cn --arg id "$1" --argjson t "${2:-$(( ${NOW:-$(date +%s)} - 100))}" '{id:$id,title:"Resume Take",stopped_at:$t,resumable:true}')"
 }
+BROKEN="$TMP/brokenrec"; mkdir -p "$BROKEN"
+cp "$FAKEAUDIO/pactl" "$BROKEN/pactl"
+printf '#!/bin/bash\nexit 1\n' > "$BROKEN/pw-record"; chmod +x "$BROKEN/pw-record"
+LOGF="$XDG_STATE_HOME/omarecorder/omarecorder.log"
+REAL_FFMPEG=$(command -v ffmpeg)
+# A models dir where base.en and small.en count as installed.
+MODELSOK="$TMP/modelsok"; mkdir -p "$MODELSOK"; head -c 100 /dev/zero > "$MODELSOK/ggml-base.en.bin"; head -c 100 /dev/zero > "$MODELSOK/ggml-small.en.bin"
+# A voxtype whose behaviour is chosen per call. VOXSTUB_MODE: ok (text) | fail
+# | fail2 (fails on the second transcribe call) | blank (no text) | hang |
+# hang2 (hangs on the second call) | dlhang (a download that never ends).
+# VOXSTUB_COUNT names a file that counts transcribe calls across one run.
+STUBMODE="$TMP/voxmode"; mkdir -p "$STUBMODE"
+cat > "$STUBMODE/voxtype" <<'STUBEOF'
+#!/bin/bash
+if [ "$1" = setup ]; then
+  [ "${VOXSTUB_MODE:-ok}" = dlhang ] && exec sleep 600
+  for a in "$@"; do case "$a" in --model) m=next ;; *) [ "${m:-}" = next ] && { m="$a"; break; } ;; esac; done
+  head -c 100 /dev/zero > "$VOXTYPE_MODELS_DIR/ggml-${m:-small.en}.bin"; exit 0
+fi
+n=0; [ -n "${VOXSTUB_COUNT:-}" ] && [ -f "$VOXSTUB_COUNT" ] && n=$(cat "$VOXSTUB_COUNT")
+n=$((n + 1)); [ -n "${VOXSTUB_COUNT:-}" ] && echo "$n" > "$VOXSTUB_COUNT"
+case "${VOXSTUB_MODE:-ok}" in
+  fail) echo "error: stub engine failure" >&2; exit 1 ;;
+  fail2) [ "$n" -ge 2 ] && { echo "error: stub engine failure on piece $n" >&2; exit 1; } ;;
+  blank) printf '\n\n'; exit 0 ;;
+  hang) exec sleep 600 ;;
+  hang2) [ "$n" -ge 2 ] && exec sleep 600 ;;
+esac
+printf '\nstub piece %s\n' "$n"
+exit 0
+STUBEOF
+# systemd-run and systemctl, enough for the CLI: the unit's command runs
+# detached in its own session and its pid is remembered per unit; ActiveState
+# follows that pid; stop signals its process group. SYSTEMD_RUN_FAIL=1 refuses.
+FAKESYSD="$TMP/fakesysd"; mkdir -p "$FAKESYSD"
+cat > "$FAKESYSD/systemd-run" <<STUBEOF
+#!/bin/bash
+[ "\${SYSTEMD_RUN_FAIL:-0}" = 1 ] && { echo "Failed to start transient service unit" >&2; exit 1; }
+unit=""; envs=()
+while [ \$# -gt 0 ]; do
+  case "\$1" in
+    -u) unit="\$2"; shift 2 ;;
+    --setenv=*) envs+=("\${1#--setenv=}"); shift ;;
+    --*) shift ;;
+    *) break ;;
+  esac
+done
+mkdir -p "$TMP/units"
+setsid env "\${envs[@]}" "\$@" >/dev/null 2>&1 < /dev/null &
+echo \$! > "$TMP/units/\$unit.pid"
+exit 0
+STUBEOF
+cat > "$FAKESYSD/systemctl" <<STUBEOF
+#!/bin/bash
+unit="\${!#}"; pidfile="$TMP/units/\$unit.pid"
+case "\$*" in
+  *"show -p Version"*) echo 257 ;;
+  *"show -p ActiveState"*) if [ -f "\$pidfile" ] && kill -0 "\$(cat "\$pidfile")" 2>/dev/null; then echo activating; else echo inactive; fi ;;
+  *" stop "*) [ -f "\$pidfile" ] && { p=\$(cat "\$pidfile"); kill -TERM -- "-\$p" 2>/dev/null || kill -TERM "\$p" 2>/dev/null; } ;;
+esac
+exit 0
+STUBEOF
+# An ffmpeg that fails when any argument contains $FFFAIL_MATCH, else the real one.
+FFFAIL="$TMP/fffail"; mkdir -p "$FFFAIL"
+cat > "$FFFAIL/ffmpeg" <<FFEOF
+#!/bin/bash
+for a in "\$@"; do case "\$a" in *"\${FFFAIL_MATCH:-never}"*) echo "ffmpeg stub: refusing \$a" >&2; exit 1 ;; esac; done
+exec "$REAL_FFMPEG" "\$@"
+FFEOF
+# A notification sender that records its argv, one file per call.
+NOTIFY="$TMP/notify"; mkdir -p "$NOTIFY/bin" "$NOTIFY/calls"
+cat > "$NOTIFY/bin/omarchy-notification-send" <<NEOF
+#!/bin/bash
+printf '%s\n' "\$@" > "$NOTIFY/calls/\$(date +%s%N)"
+NEOF
+# A player that records its argv and stays alive until signalled (comm stays "mpv").
+MPV="$TMP/mpvstub"; mkdir -p "$MPV"
+cat > "$MPV/mpv" <<MEOF
+#!/bin/bash
+printf '%s\n' "\$@" > "$TMP/mpv.args"
+trap 'kill \$c 2>/dev/null; exit 0' TERM INT
+sleep 300 & c=\$!; wait \$c
+MEOF
+chmod +x "$STUBMODE/voxtype" "$FAKESYSD/systemd-run" "$FAKESYSD/systemctl" "$FFFAIL/ffmpeg" "$NOTIFY/bin/omarchy-notification-send" "$MPV/mpv"
 
 
 t_basics() {
@@ -485,16 +569,13 @@ check "orig gone after restore" bash -c "! test -e '$DT/audio.orig.wav'"
 eq "meta.trim absent after restore" "$(jq -r 'has("trim")' "$DT/meta.json")" "false"
 eq "has_orig false after restore" "$($CLI show "$IDT" --json | jq -r .has_orig)" "false"
 check "mic.wav still untouched" cmp -s "$TMP/quiet.wav" "$DT/mic.wav"
-if command -v voxtype >/dev/null && [[ -f "${VOXTYPE_MODELS_DIR:-$HOME/.local/share/voxtype/models}/ggml-base.en.bin" ]]; then
-  jq -c '.transcript = {model:"base.en"}' "$DT/meta.json" > "$DT/meta.json.t" && mv -f "$DT/meta.json.t" "$DT/meta.json"
-  $CLI trim "$IDT" --from 0 --to 2 >/dev/null
-  eq "trim marks the transcript stale" "$(jq -r .transcript.stale "$DT/meta.json")" "true"
-  check "transcribe after trim" "$CLI" transcribe "$IDT" --model base.en
-  eq "new transcript clears stale" "$(jq -r '.transcript.stale // "absent"' "$DT/meta.json")" "absent"
-  eq "stale set again by --restore" "$($CLI trim "$IDT" --restore >/dev/null; jq -r .transcript.stale "$DT/meta.json")" "true"
-else
-  skip "voxtype/base.en not available"
-fi
+# a transcript that predates a cut no longer describes the audio (stub engine for the re-run)
+jq -c '.transcript = {model:"base.en"}' "$DT/meta.json" > "$DT/meta.json.t" && mv -f "$DT/meta.json.t" "$DT/meta.json"
+$CLI trim "$IDT" --from 0 --to 2 >/dev/null
+eq "trim marks the transcript stale" "$(jq -r .transcript.stale "$DT/meta.json")" "true"
+check "transcribe after trim" env PATH="$STUBMODE:$PATH" VOXTYPE_MODELS_DIR="$MODELSOK" "$CLI" transcribe "$IDT" --model base.en
+eq "new transcript clears stale" "$(jq -r '.transcript.stale // "absent"' "$DT/meta.json")" "absent"
+eq "stale set again by --restore" "$($CLI trim "$IDT" --restore >/dev/null; jq -r .transcript.stale "$DT/meta.json")" "true"
 $CLI delete "$IDT" --yes >/dev/null; $CLI delete "$IDT2" --yes >/dev/null
 
 }
@@ -1031,9 +1112,6 @@ eq "stopping the winner still finds its segment" "$(cat "$TMP/rc")" "0"
 eq "race take joined to 6 s" "$(jq -r .duration_s "$RVD/meta.json")" "6"
 # A resume whose recorder cannot start gives the offer back (nothing else
 # moved, so the user can fix the device and try again).
-BROKEN="$TMP/brokenrec"; mkdir -p "$BROKEN"
-cp "$FAKEAUDIO/pactl" "$BROKEN/pactl"
-printf '#!/bin/bash\nexit 1\n' > "$BROKEN/pw-record"; chmod +x "$BROKEN/pw-record"
 NOW=$(date +%s); armresume "$RVID"
 fails "resume with a broken recorder fails" env PATH="$BROKEN:$PATH" "$CLI" record resume
 eq "and the offer is given back" "$(jq -r '.last_stop.id' "$RUN/state.json")" "$RVID"
@@ -1210,8 +1288,6 @@ if pactl list short sources 2>/dev/null | grep -qv '\.monitor'; then
   IDR=$($CLI record start --title "Mic check")
   check "record start returns id" test -n "$IDR"
   eq "status shows recording" "$($CLI status --json | jq -r .recording.id)" "$IDR"
-  fails "start refused while recording" "$CLI" record start
-  fails "transcribe refused while recording" "$CLI" transcribe "$IDR" --model base.en
   MPID=$("$CLI" status --json | jq -r '.recording.meter_pid')
   check "state has meter_pid" test "$MPID" -gt 0
   for _ in $(seq 1 30); do jq -e '.t > 0' "$RUN/level" >/dev/null 2>&1 && break; sleep 0.2; done
@@ -1240,20 +1316,6 @@ if pactl list short sources 2>/dev/null | grep -qv '\.monitor'; then
   check "joined take runs past the seam" bash -c "jq -e '.duration_s >= .resume_seams[0]' '$DRR/meta.json'"
   eq "real resumed audio is one valid wav" "$(ffprobe -v error -select_streams a:0 -show_entries stream=codec_name,sample_rate,channels -of csv=p=0 "$DRR/audio.wav")" "pcm_s16le,16000,1"
   "$CLI" delete "$IDRR" --yes >/dev/null
-  # long-take stop confirmation: past the threshold the first stop only arms,
-  # a second inside 10 s goes through, and --force (the popup button) skips it
-  IDL=$(OMARECORDER_STOP_CONFIRM_S=1 "$CLI" record start --title "Long take")
-  sleep 2
-  eq "stop past the threshold asks to confirm" "$(OMARECORDER_STOP_CONFIRM_S=1 "$CLI" record stop)" "confirm"
-  eq "still recording after the first stop" "$("$CLI" status --json | jq -r .recording.id)" "$IDL"
-  check "second stop inside the window goes through" env OMARECORDER_STOP_CONFIRM_S=1 "$CLI" record stop
-  eq "state cleared after the confirmed stop" "$($CLI status)" "idle"
-  IDL2=$(OMARECORDER_STOP_CONFIRM_S=1 "$CLI" record start --title "Long take 2")
-  sleep 2
-  check "stop --force skips the confirmation" env OMARECORDER_STOP_CONFIRM_S=1 "$CLI" record stop --force
-  eq "state cleared after the forced stop" "$($CLI status)" "idle"
-  fails "stop rejects an unknown flag" "$CLI" record stop --bogus
-  "$CLI" delete "$IDL" --yes >/dev/null; "$CLI" delete "$IDL2" --yes >/dev/null
   if pactl get-default-sink >/dev/null 2>&1; then
     IDS=$("$CLI" record start --source system --title "System check"); sleep 1.5
     # The recorder must hang off the sink's monitor ports, not the microphone.
@@ -1299,9 +1361,322 @@ mkdir -p "$TMP/nowl"; ln -s /usr/bin/* "$TMP/nowl/" 2>/dev/null; rm -f "$TMP/now
 eq "missing wl-copy reported with package" "$(jq -r '.missing[] | select(.tool=="wl-copy") | .package' "$TMP/setup.json")" "wl-clipboard"
 }
 
+t_stopconfirm() {
+# Long-take stop confirmation on the fake stack: past the threshold the first
+# stop only arms, a second inside 10 s goes through, and --force (the popup
+# button) skips it. The busy guards ride along.
+IDL=$(OMARECORDER_STOP_CONFIRM_S=1 PATH="$FAKEPATH" "$CLI" record start --title "Long take")
+fails "start refused while recording" env PATH="$FAKEPATH" "$CLI" record start
+fails "transcribe refused while recording" env PATH="$STUBMODE:$PATH" VOXTYPE_MODELS_DIR="$MODELSOK" "$CLI" transcribe "$IDL" --model base.en
+sleep 2
+eq "stop past the threshold asks to confirm" "$(OMARECORDER_STOP_CONFIRM_S=1 PATH="$FAKEPATH" "$CLI" record stop)" "confirm"
+eq "still recording after the first stop" "$("$CLI" status --json | jq -r .recording.id)" "$IDL"
+check "second stop inside the window goes through" env OMARECORDER_STOP_CONFIRM_S=1 PATH="$FAKEPATH" "$CLI" record stop
+eq "state cleared after the confirmed stop" "$($CLI status)" "idle"
+IDL2=$(OMARECORDER_STOP_CONFIRM_S=1 PATH="$FAKEPATH" "$CLI" record start --title "Long take 2")
+sleep 2
+check "stop --force skips the confirmation" env OMARECORDER_STOP_CONFIRM_S=1 PATH="$FAKEPATH" "$CLI" record stop --force
+eq "state cleared after the forced stop" "$($CLI status)" "idle"
+fails "stop rejects an unknown flag" "$CLI" record stop --bogus
+fails "stop with nothing recording fails" "$CLI" record stop
+"$CLI" delete "$IDL" --yes >/dev/null; "$CLI" delete "$IDL2" --yes >/dev/null
+}
+
+t_startfail() {
+# record start must leave nothing behind when the audio stack is not there.
+NFOLDERS=$(ls -A "$OMARECORDER_DIR" 2>/dev/null | wc -l)
+NOSRC="$TMP/nosrc"; mkdir -p "$NOSRC"; printf '#!/bin/bash\nexit 0\n' > "$NOSRC/pactl"; chmod +x "$NOSRC/pactl"; cp "$FAKEAUDIO/pw-record" "$NOSRC/pw-record"
+fails "start with no microphone fails" env PATH="$NOSRC:$PATH" "$CLI" record start --title "No Mic"
+fails "start with no sink fails for --source system" env PATH="$NOSRC:$PATH" "$CLI" record start --source system --title "No Sink"
+fails "and for --source both" env PATH="$NOSRC:$PATH" "$CLI" record start --source both --title "No Both"
+check "no folder was left behind by any of them" bash -c "! ls -d '$OMARECORDER_DIR'/*'No '* >/dev/null 2>&1"
+eq "state stays idle" "$("$CLI" status)" "idle"
+fails "a recorder that dies at once fails the start" env PATH="$BROKEN:$PATH" "$CLI" record start --title "Dead Recorder"
+check "its folder was removed" bash -c "! ls -d '$OMARECORDER_DIR'/*'Dead Recorder' >/dev/null 2>&1"
+eq "state stays idle after the failed start" "$("$CLI" status)" "idle"
+fails "start rejects an unknown source" env PATH="$FAKEPATH" "$CLI" record start --source bogus
+fails "start rejects an unknown flag" env PATH="$FAKEPATH" "$CLI" record start --bogus
+eq "no failed start left a folder" "$(ls -A "$OMARECORDER_DIR" 2>/dev/null | wc -l)" "$NFOLDERS"
+# the system source through the fake stack
+SYSID=$(PATH="$FAKEPATH" "$CLI" record start --source system --title "Fake System")
+check "system source records on the fake stack" test -n "$SYSID"
+( PATH="$FAKEPATH" "$CLI" record stop >/dev/null 2>&1 )
+eq "system take stored with its source" "$(jq -r .source "$OMARECORDER_DIR/$SYSID Fake System/meta.json")" "system"
+eq "system take is 3 s" "$(jq -r .duration_s "$OMARECORDER_DIR/$SYSID Fake System/meta.json")" "3"
+"$CLI" delete "$SYSID" --yes >/dev/null
+}
+
+t_stopfail() {
+# Finalizing can fail (ffmpeg dies mixing or joining). The stop must keep every
+# raw file, say so, and leave the state idle rather than half-recorded.
+BID=$(PATH="$FAKEPATH" "$CLI" record start --source both --title "Mix Fail"); BD="$OMARECORDER_DIR/$BID Mix Fail"
+fails "stop fails when the mix fails" env PATH="$FFFAIL:$FAKEPATH" FFFAIL_MATCH=amix "$CLI" record stop
+check "mic.wav and system.wav are kept" test -s "$BD/mic.wav" -a -s "$BD/system.wav"
+check "no audio.wav was produced" bash -c "! test -e '$BD/audio.wav'"
+check "no mix temp left" bash -c "! ls '$BD'/*.tmp.* >/dev/null 2>&1"
+eq "the state is idle, not stuck recording" "$("$CLI" status)" "idle"
+check "the failure is logged" grep -q "amix failed" "$LOGF"
+"$CLI" delete "$BID" --yes >/dev/null
+RID2=$(PATH="$FAKEPATH" "$CLI" record start --title "Join Fail"); RD2="$OMARECORDER_DIR/$RID2 Join Fail"
+( PATH="$FAKEPATH" "$CLI" record stop >/dev/null 2>&1 )
+check "resume starts" bash -c "PATH=\"$FAKEPATH\" \"$CLI\" record resume >/dev/null"
+fails "stop fails when the join fails" env PATH="$FFFAIL:$FAKEPATH" FFFAIL_MATCH=concat "$CLI" record stop
+eq "the original take is untouched" "$(jq -r .duration_s "$RD2/meta.json")" "3"
+eq "audio.wav really is still 3 s" "$(ffprobe -v error -show_entries format=duration -of csv=p=0 "$RD2/audio.wav" | cut -d. -f1)" "3"
+check "the segment is kept next to it" test -s "$RD2/audio.seg.wav"
+check "no concat temps left" bash -c "! ls '$RD2'/*.cat.tmp.* >/dev/null 2>&1"
+eq "state idle after the failed join" "$("$CLI" status)" "idle"
+check "the join failure is logged" grep -q "could not join\|concat" "$LOGF"
+rm -f "$RD2/audio.seg.wav"; "$CLI" delete "$RID2" --yes >/dev/null
+}
+
+t_txfail() {
+# Transcription failure paths with the stub engine, inline worker. The job must
+# never stay behind: the UI would say "transcribing" forever.
+IDF=$("$CLI" import "$TMP/quiet.wav" --title "Fail Test"); DF=$("$CLI" show "$IDF" --json | jq -r .dir)
+( PATH="$STUBMODE:$PATH" VOXTYPE_MODELS_DIR="$MODELSOK" VOXSTUB_MODE=fail "$CLI" transcribe "$IDF" --model base.en >/dev/null 2>&1; echo $? > "$TMP/rc" )
+eq "engine failure: the command exits 0, the worker owns the outcome" "$(cat "$TMP/rc")" "0"
+eq "engine failure leaves no job behind" "$(jq -r '.jobs|length' "$RUN/state.json")" "0"
+check "no transcript written" bash -c "! test -e '$DF/transcript.md'"
+check "the engine's stderr is kept for the bug report" test -s "$XDG_STATE_HOME/omarecorder/tx-$IDF.err"
+check "and the failure is logged" grep -q "transcribe FAILED $IDF" "$LOGF"
+check "no worker temps left" bash -c "! ls '$DF'/transcript.md.tmp '$DF'/audio.tx.* '$RUN'/tx-* >/dev/null 2>&1"
+eq "meta has no transcript entry" "$(jq -r '.transcript' "$DF/meta.json")" "null"
+# A failure on the second of three pieces keeps the first.
+rm -f "$TMP/voxcount"
+( PATH="$STUBMODE:$PATH" VOXTYPE_MODELS_DIR="$MODELSOK" VOXSTUB_MODE=fail2 VOXSTUB_COUNT="$TMP/voxcount" "$CLI" transcribe "$IDF" --model base.en --chunk-s 1 >/dev/null 2>&1 )
+eq "mid-run failure leaves no job behind" "$(jq -r '.jobs|length' "$RUN/state.json")" "0"
+check "the finished piece is published" grep -q 'stub piece 1' "$DF/transcript.md"
+check "and marked partial in the header" bash -c "head -1 '$DF/transcript.md' | grep -q 'partial=true'"
+eq "meta says partial" "$(jq -r .transcript.partial "$DF/meta.json")" "true"
+eq "one of three pieces done" "$(jq -r '"\(.transcript.chunks_done)/\(.transcript.chunks)"' "$DF/meta.json")" "1/3"
+check "logged with the piece number" grep -q "transcribe FAILED $IDF after piece 2/3" "$LOGF"
+# An engine that prints nothing is a result, not a failure.
+rm -f "$DF/transcript.md"
+( PATH="$STUBMODE:$PATH" VOXTYPE_MODELS_DIR="$MODELSOK" VOXSTUB_MODE=blank "$CLI" transcribe "$IDF" --model base.en >/dev/null 2>&1 )
+check "silence gives a placeholder transcript" grep -q '(no speech detected)' "$DF/transcript.md"
+eq "silence is not partial" "$(jq -r .transcript.partial "$DF/meta.json")" "false"
+eq "and leaves no job" "$(jq -r '.jobs|length' "$RUN/state.json")" "0"
+# Cancel mid-run: the worker is TERMed while piece 2 hangs; piece 1 stays published.
+rm -f "$DF/transcript.md" "$TMP/voxcount"
+set_state null "[$(tx_job "$IDF")]"
+PATH="$STUBMODE:$PATH" VOXTYPE_MODELS_DIR="$MODELSOK" VOXSTUB_MODE=hang2 VOXSTUB_COUNT="$TMP/voxcount" OMARECORDER_CHUNK_S=1 \
+  setsid "$CLI" _tx-worker "$IDF" base.en en "" "" "" >/dev/null 2>&1 < /dev/null &
+WPID=$!
+check "worker parked on piece 2 with piece 1 published" wait_for 10 bash -c "[ \"\$(jq -r '.jobs[0].progress.chunk // 0' '$RUN/state.json')\" = 2 ] && test -s '$DF/transcript.md'"
+kill -TERM "$WPID" 2>/dev/null; wait "$WPID" 2>/dev/null; WRC=$?
+eq "TERMed worker exits 0" "$WRC" "0"
+check "piece 1 kept, header partial" bash -c "grep -q 'stub piece 1' '$DF/transcript.md' && head -1 '$DF/transcript.md' | grep -q 'partial=true'"
+check "no chunk temps left" bash -c "! ls '$RUN'/tx-* '$DF'/audio.tx.* >/dev/null 2>&1"
+"$CLI" cancel "$IDF" >/dev/null
+eq "cancel clears the job" "$(jq -r '.jobs|length' "$RUN/state.json")" "0"
+"$CLI" delete "$IDF" --yes >/dev/null
+}
+
+t_detached() {
+# The detached path with systemd-run and systemctl stood in for: a job carries
+# its unit, reconcile drops a job whose unit is gone, cancel stops a live unit.
+IDU=$("$CLI" import "$TMP/quiet.wav" --title "Unit Test"); DU=$("$CLI" show "$IDU" --json | jq -r .dir)
+rm -rf "$TMP/units"; mkdir -p "$TMP/units"
+detached() { ( export PATH="$FAKESYSD:$STUBMODE:$PATH" VOXTYPE_MODELS_DIR="$MODELSOK" OMARECORDER_SYNC=0; "$@" ); }
+check "detached transcribe starts" detached "$CLI" transcribe "$IDU" --model base.en
+eq "the job carries its unit" "$(jq -r '.jobs[0].unit' "$RUN/state.json")" "omarecorder-tx-$IDU"
+check "the worker ran under the fake manager" test -f "$TMP/units/omarecorder-tx-$IDU.pid"
+check "the transcript arrives" wait_for 10 test -s "$DU/transcript.md"
+check "and the worker removed its own job" wait_for 5 bash -c "[ \"\$(jq -r '.jobs|length' '$RUN/state.json')\" = 0 ]"
+# reconcile: a job whose unit is gone is dropped once the start grace has passed
+set_state null "[$(jq -cn --arg id "$IDU" --argjson t "$(( $(date +%s) - 60 ))" '{type:"transcribe",id:$id,model:"base.en",unit:"omarecorder-tx-gone",started_at:$t}')]"
+detached "$CLI" status >/dev/null
+eq "a finished unit's job is dropped by reconcile" "$(jq -r '.jobs|length' "$RUN/state.json")" "0"
+check "and logged" grep -q 'reconcile: dropped finished job omarecorder-tx-gone' "$LOGF"
+set_state null "[$(jq -cn --arg id "$IDU" --argjson t "$(date +%s)" '{type:"transcribe",id:$id,model:"base.en",unit:"omarecorder-tx-young",started_at:$t}')]"
+detached "$CLI" status >/dev/null
+eq "a job younger than the start grace is kept even with no unit yet" "$(jq -r '.jobs|length' "$RUN/state.json")" "1"
+sleep 600 >/dev/null 2>&1 & KEEP=$!; echo "$KEEP" > "$TMP/units/omarecorder-tx-live.pid"
+set_state null "[$(jq -cn --arg id "$IDU" --argjson t "$(( $(date +%s) - 60 ))" '{type:"transcribe",id:$id,model:"base.en",unit:"omarecorder-tx-live",started_at:$t}')]"
+detached "$CLI" status >/dev/null
+eq "a job whose unit is active is kept" "$(jq -r '.jobs|length' "$RUN/state.json")" "1"
+kill "$KEEP" 2>/dev/null; wait "$KEEP" 2>/dev/null
+# cancel on a live unit
+set_state; rm -f "$DU/transcript.md"
+export VOXSTUB_MODE=hang
+check "a hanging detached transcribe starts" detached "$CLI" transcribe "$IDU" --model base.en
+unset VOXSTUB_MODE
+WP=$(cat "$TMP/units/omarecorder-tx-$IDU.pid")
+check "its worker is alive" wait_for 5 kill -0 "$WP"
+eq "and the unit reads active" "$(PATH="$FAKESYSD:$PATH" systemctl --user show -p ActiveState --value "omarecorder-tx-$IDU")" "activating"
+check "cancel exits 0" detached "$CLI" cancel "$IDU"
+eq "cancel removed the job" "$(jq -r '.jobs|length' "$RUN/state.json")" "0"
+check "cancel stopped the worker" wait_for 5 bash -c "! kill -0 $WP 2>/dev/null"
+check "cancel of a live unit is logged" grep -q "transcribe cancelled $IDU" "$LOGF"
+check "no worker temps left after cancel" bash -c "! ls '$RUN'/tx-* '$DU'/audio.tx.* '$DU'/transcript.md.tmp >/dev/null 2>&1"
+# model cancel on a live download unit
+DLU="$TMP/dlunits"; mkdir -p "$DLU"
+export VOXSTUB_MODE=dlhang
+check "a detached download starts" bash -c "PATH=\"$FAKESYSD:$STUBMODE:\$PATH\" VOXTYPE_MODELS_DIR=\"$DLU\" OMARECORDER_SYNC=0 \"$CLI\" model download small.en"
+unset VOXSTUB_MODE
+eq "the download job carries its unit" "$(jq -r '[.jobs[]|select(.type=="download")][0].unit' "$RUN/state.json")" "omarecorder-dl-small-en"
+DP=$(cat "$TMP/units/omarecorder-dl-small-en.pid")
+check "cancel of a live download exits 0" bash -c "PATH=\"$FAKESYSD:\$PATH\" VOXTYPE_MODELS_DIR=\"$DLU\" \"$CLI\" model cancel small.en"
+eq "the download job is gone" "$(jq -r '.jobs|length' "$RUN/state.json")" "0"
+check "the download worker was stopped" wait_for 5 bash -c "! kill -0 $DP 2>/dev/null"
+check "logged as cancelled" grep -q 'download cancelled small.en' "$LOGF"
+# a manager that refuses to start the unit leaves nothing behind
+set_state
+fails "transcribe fails when the unit cannot start" bash -c "SYSTEMD_RUN_FAIL=1 PATH=\"$FAKESYSD:$STUBMODE:\$PATH\" VOXTYPE_MODELS_DIR=\"$MODELSOK\" OMARECORDER_SYNC=0 \"$CLI\" transcribe \"$IDU\" --model base.en"
+eq "and no job is left behind" "$(jq -r '.jobs|length' "$RUN/state.json")" "0"
+fails "model download fails when the unit cannot start" bash -c "SYSTEMD_RUN_FAIL=1 PATH=\"$FAKESYSD:$STUBMODE:\$PATH\" VOXTYPE_MODELS_DIR=\"$DLU\" OMARECORDER_SYNC=0 \"$CLI\" model download small.en"
+eq "and no download job either" "$(jq -r '.jobs|length' "$RUN/state.json")" "0"
+"$CLI" delete "$IDU" --yes >/dev/null
+}
+
+t_repair() {
+# A recorder killed mid-take (power loss, SIGKILL) never writes the RIFF and
+# data chunk sizes. ffprobe guesses a duration from the file size, so the take
+# looks fine, but whisper trusts the header and reads zero samples. Recovery
+# has to rewrite the header, for the take and for a crashed resume segment.
+mkbroken() { # <src> <dst> <fill>: a copy with the RIFF and data sizes overwritten by four <fill> bytes (printf escape)
+  cp "$1" "$2"
+  local off; off=$(grep -obUaP 'data' "$2" | head -1 | cut -d: -f1)
+  printf "$3$3$3$3" | dd of="$2" bs=1 seek=4 conv=notrunc status=none
+  printf "$3$3$3$3" | dd of="$2" bs=1 seek=$((off + 4)) conv=notrunc status=none
+}
+datasize() { od -An -tu4 -j $(( $(grep -obUaP 'data' "$1" | head -1 | cut -d: -f1) + 4 )) -N4 "$1" | tr -d ' '; }
+broken_take() { # <suffix> <fill>
+  local id="2026-03-01_0101$1" d="$OMARECORDER_DIR/2026-03-01_0101$1 Broken Header"; mkdir -p "$d"
+  mkbroken "$TMP/quiet.wav" "$d/audio.wav" "$2"
+  eq "fixture $2: ffprobe still guesses the duration (the trap this guards against)" "$(ffprobe -v error -show_entries format=duration -of csv=p=0 "$d/audio.wav" | cut -d. -f1)" "3"
+  jq -cn --arg id "$id" '{id:$id,title:"Broken Header",source:"mic",created:"2026-03-01T01:01:01+0000",duration_s:null,size_bytes:0,sample_rate:16000,transcript:null,notes:""}' > "$d/meta.json"
+  set_state "$(jq -cn --arg id "$id" --arg dir "$d" '{id:$id,source:"mic",dir:$dir,started_at:0,pids:[999999],files:[]}')"
+  eq "fixture $2: status clears the dead take" "$("$CLI" status)" "idle"
+  eq "fixture $2: duration measured" "$(jq -r .duration_s "$d/meta.json")" "3"
+  check "fixture $2: the header was rewritten" grep -q "repaired wav header: $d/audio.wav" "$LOGF"
+  eq "fixture $2: the data chunk size is real now" "$(datasize "$d/audio.wav")" "96000"
+  "$CLI" delete "$id" --yes >/dev/null
+}
+broken_take 01 '\0'      # sizes left at zero
+broken_take 02 '\377'    # sizes left at the 0xFFFFFFFF placeholder
+# a crashed resume: the segment's header is broken, the original is fine
+CID="2026-03-01_020202"; CD="$OMARECORDER_DIR/$CID Broken Segment"; mkdir -p "$CD"
+cp "$TMP/quiet.wav" "$CD/audio.wav"; mkbroken "$TMP/quiet.wav" "$CD/audio.seg.wav" '\0'
+jq -cn --arg id "$CID" '{id:$id,title:"Broken Segment",source:"mic",created:"2026-03-01T02:02:02+0000",duration_s:3,size_bytes:0,sample_rate:16000,transcript:null,notes:""}' > "$CD/meta.json"
+set_state "$(jq -cn --arg id "$CID" --arg dir "$CD" '{id:$id,source:"mic",dir:$dir,started_at:0,pids:[999999],files:[],resume:true}')"
+"$CLI" status >/dev/null
+eq "broken segment repaired and joined: 6 s" "$(jq -r .duration_s "$CD/meta.json")" "6"
+eq "the joined file's data size is real" "$(datasize "$CD/audio.wav")" "192000"
+check "the segment repair was logged" grep -q "repaired wav header: $CD/audio.seg.wav" "$LOGF"
+"$CLI" delete "$CID" --yes >/dev/null
+# an intact dead take is measured, not rewritten
+IID="2026-03-01_030303"; IDR="$OMARECORDER_DIR/$IID Intact"; mkdir -p "$IDR"; cp "$TMP/quiet.wav" "$IDR/audio.wav"
+jq -cn --arg id "$IID" '{id:$id,title:"Intact",source:"mic",created:"2026-03-01T03:03:03+0000",duration_s:null,size_bytes:0,sample_rate:16000,transcript:null,notes:""}' > "$IDR/meta.json"
+set_state "$(jq -cn --arg id "$IID" --arg dir "$IDR" '{id:$id,source:"mic",dir:$dir,started_at:0,pids:[999999],files:[]}')"
+"$CLI" status >/dev/null
+eq "intact take recovered" "$(jq -r .duration_s "$IDR/meta.json")" "3"
+check "and its header was left alone" bash -c "! grep -q 'repaired wav header: $IDR/audio.wav' '$LOGF'"
+"$CLI" delete "$IID" --yes >/dev/null
+}
+
+t_metafail() {
+# meta.json is written whole, atomically, or not at all.
+IDM=$("$CLI" import "$TMP/quiet.wav" --title "Meta Test"); DM=$("$CLI" show "$IDM" --json | jq -r .dir)
+cp "$DM/meta.json" "$TMP/meta.good"
+printf 'not json' > "$DM/meta.json"
+fails "note fails on a corrupt meta.json" "$CLI" note "$IDM" "hello"
+eq "the corrupt file is left exactly as it was" "$(cat "$DM/meta.json")" "not json"
+check "no temp file beside it" bash -c "! ls '$DM'/meta.json.tmp.* >/dev/null 2>&1"
+fails "rename fails on a corrupt meta.json too" "$CLI" rename "$IDM" "New"
+check "and does not move the folder" test -d "$DM"
+check "list survives one corrupt meta.json" "$CLI" list --json
+cp "$TMP/meta.good" "$DM/meta.json"
+check "meta restored, note works again" "$CLI" note "$IDM" "hello"
+if [[ $(id -u) != 0 ]]; then
+  chmod 500 "$DM"
+  fails "note fails when the folder is read-only" "$CLI" note "$IDM" "blocked"
+  chmod 700 "$DM"
+  eq "the previous note survives the refused write" "$("$CLI" show "$IDM" --json | jq -r .notes)" "hello"
+  check "no temp file left by the refused write" bash -c "! ls '$DM'/meta.json.tmp.* >/dev/null 2>&1"
+else
+  skip "read-only folder check (running as root)"
+fi
+"$CLI" delete "$IDM" --yes >/dev/null
+}
+
+t_ids() {
+# Every id-taking command validates the id before touching the disk: no
+# traversal, no expansion, nothing executed. And a symlink where a recording
+# folder should be is never followed into.
+IDS_OK=$("$CLI" import "$TMP/quiet.wav" --title "Id Test")
+rejects_bad_ids() { # <cmd> [args...]: every malformed id must be refused
+  local c="$1" b; shift
+  for b in "../x" "2026-01-01_000000/../../x" '$(touch id-pwn)' "" "2026-01-01_00000" "2026-01-01_000000;ls"; do
+    "$CLI" "$c" "$b" "$@" >/dev/null 2>&1 && return 1
+  done
+  return 0
+}
+for spec in "show" "analyze" "rename New" "note hi" "delete --yes" "copy --print" "tidy" "export --no-open" \
+            "transcribe --model base.en" "cancel" "estimate --model base.en" "play" "open" "folder" "trim --from 0 --to 1"; do
+  # shellcheck disable=SC2086
+  set -- $spec
+  check "$1 rejects malformed ids" rejects_bad_ids "$@"
+done
+check "nothing was executed from an id" bash -c "! test -e '$TMP/id-pwn'"
+check "the real take is untouched" bash -c "[ \"\$(\"$CLI\" show '$IDS_OK' --json | jq -r .title)\" = 'Id Test' ]"
+mkdir -p "$TMP/outside"; echo precious > "$TMP/outside/keep.txt"
+ln -s "$TMP/outside" "$OMARECORDER_DIR/2026-03-02_020202 Link"
+"$CLI" delete 2026-03-02_020202 --yes --permanent >/dev/null 2>&1 || true
+check "delete --permanent on a symlinked folder never reaches the target" test -s "$TMP/outside/keep.txt"
+check "and reconcile wrote nothing into the target" bash -c "! test -e '$TMP/outside/meta.json'"
+rm -f "$OMARECORDER_DIR/2026-03-02_020202 Link"
+"$CLI" delete "$IDS_OK" --yes >/dev/null
+}
+
+t_notify() {
+# Notifications carry user strings as arguments, never as shell text, and the
+# click action is an argv of the CLI itself.
+rm -rf "$NOTIFY/calls"; mkdir -p "$NOTIFY/calls"
+EVILT='Session $(touch notify-pwn) `touch notify-pwn2`; rm -rf x'
+NID=$(PATH="$NOTIFY/bin:$FAKEPATH" OMARECORDER_QUIET=0 "$CLI" record start --title "$EVILT")
+( PATH="$NOTIFY/bin:$FAKEPATH" OMARECORDER_QUIET=0 "$CLI" record stop >/dev/null 2>&1 )
+SAVED=$(grep -l '^Recording saved' "$NOTIFY"/calls/* 2>/dev/null | head -1)
+check "the saved notification was sent" test -n "$SAVED"
+check "the title rides inside one argument, verbatim" grep -qF -- "$EVILT" "$SAVED"
+eq "the click action is the CLI itself" "$(sed -n '/^--exec$/{n;p}' "$SAVED")" "$(readlink -f "$CLI")"
+eq "with the transcribe command, the id and --download" "$(sed -n '/^--exec$/{n;n;p;n;p;n;p}' "$SAVED" | paste -sd' ')" "transcribe $NID --download"
+check "nothing was executed from the title" bash -c "! test -e '$TMP/notify-pwn' && ! test -e '$TMP/notify-pwn2'"
+check "OMARECORDER_QUIET=1 sends nothing" bash -c "rm -rf '$NOTIFY/calls'; mkdir -p '$NOTIFY/calls'; PATH=\"$NOTIFY/bin:\$PATH\" \"$CLI\" note '$NID' quiet >/dev/null && [ \"\$(ls -A '$NOTIFY/calls' | wc -l)\" = 0 ]"
+"$CLI" delete "$NID" --yes >/dev/null
+}
+
+t_play() {
+# play launches the player detached and remembers its pid; stop-play only ever
+# signals a pid that still is a player.
+IDP=$("$CLI" import "$TMP/quiet.wav" --title "Play Test"); DP=$("$CLI" show "$IDP" --json | jq -r .dir)
+check "play starts" env PATH="$MPV:$PATH" "$CLI" play "$IDP"
+PP=$(cat "$RUN/play.pid")
+check "play.pid holds a live player" kill -0 "$PP"
+eq "and it really is the player" "$(cat "/proc/$PP/comm")" "mpv"
+check "the player got the audio file and the IPC socket" wait_for 5 bash -c "grep -qxF '$DP/audio.wav' '$TMP/mpv.args' && grep -q -- '--input-ipc-server=$RUN/mpv.sock' '$TMP/mpv.args'"
+check "stop-play stops it" "$CLI" stop-play
+check "the player is gone" wait_for 5 bash -c "! kill -0 $PP 2>/dev/null"
+check "play.pid removed" bash -c "! test -e '$RUN/play.pid'"
+eq "stop-play with nothing playing says so" "$("$CLI" stop-play)" "not playing"
+rm -f "$TMP/mpv.args"
+check "play --from passes the start position" bash -c "PATH=\"$MPV:\$PATH\" \"$CLI\" play '$IDP' --from 1.5 >/dev/null"
+check "and the player received it" wait_for 5 grep -qx -- '--start=1.5' "$TMP/mpv.args"
+check "a second play replaces the first" bash -c "P1=\$(cat '$RUN/play.pid'); PATH=\"$MPV:\$PATH\" \"$CLI\" play '$IDP' >/dev/null && ! kill -0 \$P1 2>/dev/null && kill -0 \$(cat '$RUN/play.pid')"
+"$CLI" stop-play >/dev/null
+# a recycled pid: the number in play.pid now belongs to something else
+sleep 300 >/dev/null 2>&1 & SP=$!
+echo "$SP" > "$RUN/play.pid"
+check "stop-play leaves a non-player pid alone" bash -c "\"$CLI\" stop-play >/dev/null && kill -0 $SP"
+kill "$SP" 2>/dev/null; wait "$SP" 2>/dev/null
+"$CLI" delete "$IDP" --yes >/dev/null
+}
+
 # -------------------------------------------------------------------- run ---
 SECTIONS=(basics import levels list rename note security locking recovery export trim tidy dictionary polish
-          guards models download search resume transcribe meter record delete setup)
+          guards models download search resume stopconfirm startfail stopfail txfail detached repair metafail ids notify play
+          transcribe meter record delete setup)
 if [[ "${1:-}" == "--list" ]]; then printf '%s\n' "${SECTIONS[@]}"; exit 0; fi
 # A misspelt filter must not pass as "passed: 0 failed: 0".
 if [[ -n "${OMARECORDER_TEST_ONLY:-}" ]]; then
@@ -1317,6 +1692,10 @@ for s in "${SECTIONS[@]}"; do
   fresh_state; "t_$s"
   (( SECONDS - t0 >= 10 )) && echo "   ($((SECONDS - t0)) s)"
 done
+# Nothing any section ran may leave a temp behind: half-written JSON, a
+# transcript being assembled, an audio scratch file, a worker's err log.
+echo "== leftovers"
+check "no temp files under the recordings or the runtime dir" bash -c "! find '$OMARECORDER_DIR' '$RUN' \( -name '*.tmp.*' -o -name '*.new' -o -name 'audio.tx.*' -o -name '*.cat.tmp.*' -o -name '*.repair.wav' -o -name 'tx-*' \) 2>/dev/null | grep -q ."
 
 echo
 echo "passed: $pass  failed: $fail  skipped: $skipped"
