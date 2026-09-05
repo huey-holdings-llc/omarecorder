@@ -74,6 +74,7 @@ ensure_base() {
   { [[ -n "${ID2:-}" ]] && "$CLI" show "$ID2" >/dev/null 2>&1; } || ID2=$($CLI import "$TMP/speech.wav")
 }
 MANIFEST_VERSION=$(jq -r .version "$HERE/../manifest.json")
+DICT="$XDG_CONFIG_HOME/omarecorder/dictionary"
 
 # Fixtures: short speech clip (ships with alsa-utils) and a 12 s version of it
 SPEECH=/usr/share/sounds/alsa/Front_Right.wav
@@ -558,7 +559,6 @@ check "loopy marker counts six copies" grep -Fq 'try the door (repeated 6x).' "$
 }
 
 t_dictionary() {
-DICT="$XDG_CONFIG_HOME/omarecorder/dictionary"
 # The first dictionary command seeds the starter file; an existing file is
 # never touched again, however it got there.
 check "dictionary seeds the starter file" bash -c "\"$CLI\" dictionary >/dev/null && test -s \"$DICT\""
@@ -1303,6 +1303,13 @@ eq "missing wl-copy reported with package" "$(jq -r '.missing[] | select(.tool==
 SECTIONS=(basics import levels list rename note security locking recovery export trim tidy dictionary polish
           guards models download search resume transcribe meter record delete setup)
 if [[ "${1:-}" == "--list" ]]; then printf '%s\n' "${SECTIONS[@]}"; exit 0; fi
+# A misspelt filter must not pass as "passed: 0 failed: 0".
+if [[ -n "${OMARECORDER_TEST_ONLY:-}" ]]; then
+  IFS=, read -ra _only <<<"${OMARECORDER_TEST_ONLY// /}"
+  for s in "${_only[@]}"; do
+    [[ " ${SECTIONS[*]} " == *" $s "* ]] || { echo "unknown section '$s' in OMARECORDER_TEST_ONLY (valid: ${SECTIONS[*]})" >&2; exit 2; }
+  done
+fi
 want() { [[ -z "${OMARECORDER_TEST_ONLY:-}" ]] || [[ ",${OMARECORDER_TEST_ONLY// /}," == *",$1,"* ]]; }
 for s in "${SECTIONS[@]}"; do
   want "$s" || continue
