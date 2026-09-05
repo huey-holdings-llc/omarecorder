@@ -884,13 +884,23 @@ png_width() {
   return 0
 }
 
-# repair_wav <file>: a recorder that died (crash, power loss) leaves a WAV with
-# a zero-length header. Re-muxing with ffmpeg rewrites the header from the data.
+# repair_wav <file>: a recorder that died (crash, power loss) never wrote the
+# RIFF and data chunk sizes. ffprobe still guesses a duration from the file
+# size, so the take looks fine in the Library, but whisper trusts the header
+# and reads zero samples (or refuses the file outright). A duration alone is
+# therefore not proof; the data chunk's declared size has to fit the file.
+# Re-muxing with ffmpeg rewrites the header from the data.
 repair_wav() {
   local f="$1"
   [[ -f "$f" ]] || return 1
   local d; d=$(audio_duration "$f")
-  [[ -n "$d" && "$d" != "0" ]] && return 0
+  if [[ -n "$d" && "$d" != "0" ]]; then
+    local off dsz fsz
+    off=$(head -c 4096 "$f" | grep -obUaP 'data' | head -1 | cut -d: -f1) || off=""
+    [[ "$off" =~ ^[0-9]+$ ]] || return 0   # no data chunk in the header: nothing a remux could fix
+    dsz=$(od -An -tu4 -j $((off + 4)) -N4 "$f" 2>/dev/null | tr -d ' '); fsz=$(file_size "$f")
+    [[ "$dsz" =~ ^[0-9]+$ ]] && (( dsz > 0 && dsz <= fsz - off - 8 )) && return 0
+  fi
   ffmpeg -v error -y -i "$f" -c copy "$f.repair.wav" 2>>"$LOG_FILE" && mv -f "$f.repair.wav" "$f" && log "repaired wav header: $f"
 }
 
@@ -1141,6 +1151,9 @@ cmd_rename() {
   local dir; dir=$(require_dir "$id")
   require_idle "$id"   # renaming the folder under a live recorder or worker loses the take
   title=$(sanitize_title "$title")
+  # Folder and meta.json are renamed as a unit: an unreadable meta.json would
+  # fail the title write after the move, leaving the two out of step.
+  jq -e 'type == "object"' "$dir/meta.json" >/dev/null 2>&1 || die "meta.json in $dir is unreadable; not renaming"
   local new="$ROOT/$id"; [[ -n "$title" ]] && new="$ROOT/$id $title"
   if [[ "$new" != "$dir" ]]; then mv "$dir" "$new"; fi
   update_meta "$new" '.title = $t' --arg t "$title"
