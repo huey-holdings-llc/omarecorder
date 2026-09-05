@@ -57,6 +57,9 @@ wait_for() { # wait_for <whole seconds> <cmd...>: poll at 10 Hz until the comman
   local n=$(( $1 * 10 )); shift
   while (( n-- > 0 )); do "$@" >/dev/null 2>&1 && return 0; sleep 0.1; done; return 1
 }
+# gone <pid>: the process has exited. Not `kill -0`: in a container whose PID 1
+# does not reap, an orphaned child stays a zombie and kill -0 keeps succeeding.
+gone() { [[ ! -d "/proc/$1" ]] || grep -q '^State:[[:space:]]*Z' "/proc/$1/status" 2>/dev/null; }
 # State fixtures. Reconcile keeps a job that has no unit (a sync worker), so a
 # hand-built job stands until a test cancels it or the next section resets.
 set_state() { # set_state [recording] [jobs] [last_stop]  (JSON; defaults null, [], none)
@@ -214,7 +217,8 @@ cat > "$FAKESYSD/systemctl" <<STUBEOF
 unit="\${!#}"; pidfile="$TMP/units/\$unit.pid"
 case "\$*" in
   *"show -p Version"*) echo 257 ;;
-  *"show -p ActiveState"*) if [ -f "\$pidfile" ] && kill -0 "\$(cat "\$pidfile")" 2>/dev/null; then echo activating; else echo inactive; fi ;;
+  *"show -p ActiveState"*)   # a zombie (unreaped in a container) counts as gone, as systemd would report
+    if [ -f "\$pidfile" ] && p=\$(cat "\$pidfile") && [ -d "/proc/\$p" ] && ! grep -q '^State:[[:space:]]*Z' "/proc/\$p/status" 2>/dev/null; then echo activating; else echo inactive; fi ;;
   *" stop "*) [ -f "\$pidfile" ] && { p=\$(cat "\$pidfile"); kill -TERM -- "-\$p" 2>/dev/null || kill -TERM "\$p" 2>/dev/null; } ;;
 esac
 exit 0
@@ -1507,7 +1511,7 @@ check "its worker is alive" wait_for 5 kill -0 "$WP"
 eq "and the unit reads active" "$(PATH="$FAKESYSD:$PATH" systemctl --user show -p ActiveState --value "omarecorder-tx-$IDU")" "activating"
 check "cancel exits 0" detached "$CLI" cancel "$IDU"
 eq "cancel removed the job" "$(jq -r '.jobs|length' "$RUN/state.json")" "0"
-check "cancel stopped the worker" wait_for 5 bash -c "! kill -0 $WP 2>/dev/null"
+check "cancel stopped the worker" wait_for 5 gone "$WP"
 check "cancel of a live unit is logged" grep -q "transcribe cancelled $IDU" "$LOGF"
 check "no worker temps left after cancel" bash -c "! ls '$RUN'/tx-* '$DU'/audio.tx.* '$DU'/transcript.md.tmp >/dev/null 2>&1"
 # model cancel on a live download unit
@@ -1519,7 +1523,7 @@ eq "the download job carries its unit" "$(jq -r '[.jobs[]|select(.type=="downloa
 DP=$(cat "$TMP/units/omarecorder-dl-small-en.pid")
 check "cancel of a live download exits 0" bash -c "PATH=\"$FAKESYSD:\$PATH\" VOXTYPE_MODELS_DIR=\"$DLU\" \"$CLI\" model cancel small.en"
 eq "the download job is gone" "$(jq -r '.jobs|length' "$RUN/state.json")" "0"
-check "the download worker was stopped" wait_for 5 bash -c "! kill -0 $DP 2>/dev/null"
+check "the download worker was stopped" wait_for 5 gone "$DP"
 check "logged as cancelled" grep -q 'download cancelled small.en' "$LOGF"
 # a manager that refuses to start the unit leaves nothing behind
 set_state
@@ -1661,13 +1665,16 @@ check "play.pid holds a live player" kill -0 "$PP"
 eq "and it really is the player" "$(cat "/proc/$PP/comm")" "mpv"
 check "the player got the audio file and the IPC socket" wait_for 5 bash -c "grep -qxF '$DP/audio.wav' '$TMP/mpv.args' && grep -q -- '--input-ipc-server=$RUN/mpv.sock' '$TMP/mpv.args'"
 check "stop-play stops it" "$CLI" stop-play
-check "the player is gone" wait_for 5 bash -c "! kill -0 $PP 2>/dev/null"
+check "the player is gone" wait_for 5 gone "$PP"
 check "play.pid removed" bash -c "! test -e '$RUN/play.pid'"
 eq "stop-play with nothing playing says so" "$("$CLI" stop-play)" "not playing"
 rm -f "$TMP/mpv.args"
 check "play --from passes the start position" bash -c "PATH=\"$MPV:\$PATH\" \"$CLI\" play '$IDP' --from 1.5 >/dev/null"
 check "and the player received it" wait_for 5 grep -qx -- '--start=1.5' "$TMP/mpv.args"
-check "a second play replaces the first" bash -c "P1=\$(cat '$RUN/play.pid'); PATH=\"$MPV:\$PATH\" \"$CLI\" play '$IDP' >/dev/null && ! kill -0 \$P1 2>/dev/null && kill -0 \$(cat '$RUN/play.pid')"
+P1=$(cat "$RUN/play.pid")
+check "a second play replaces the first" env PATH="$MPV:$PATH" "$CLI" play "$IDP"
+check "the first player is gone" wait_for 5 gone "$P1"
+check "and the new one is alive" kill -0 "$(cat "$RUN/play.pid")"
 "$CLI" stop-play >/dev/null
 # a recycled pid: the number in play.pid now belongs to something else
 sleep 300 >/dev/null 2>&1 & SP=$!
