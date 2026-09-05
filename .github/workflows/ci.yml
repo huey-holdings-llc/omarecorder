@@ -12,13 +12,14 @@ jobs:
   lint-and-test:
     runs-on: ubuntu-latest
     container: archlinux:latest
+    timeout-minutes: 20
     steps:
       - name: Install tools (what an Omarchy install already has)
         run: pacman -Syu --noconfirm --needed git jq ffmpeg shellcheck glib2 diffutils perl
       - uses: actions/checkout@v4
       - name: Static checks
         run: bash tests/lint.sh
-      - name: CLI tests (no microphone, no voxtype, no systemd here — those blocks skip)
+      - name: CLI tests (no microphone, no voxtype, no systemd here, so those blocks skip)
         env:
           OMARECORDER_TEST_ALLOW_SKIP: "1"
           XDG_RUNTIME_DIR: /tmp/xdg-runtime-ci
@@ -28,3 +29,11 @@ jobs:
           mkdir -m 700 -p "$XDG_RUNTIME_DIR"
           git config --global --add safe.directory "$PWD"
           bash tests/cli.test.sh
+      - name: Keep the sandbox when something failed (the CLI log and the recordings under test)
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-sandbox
+          path: /root/omarecorder-tests
+          if-no-files-found: ignore
+          retention-days: 7

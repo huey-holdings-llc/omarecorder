@@ -51,11 +51,15 @@ to them is easy to merge; one that breaks them will get a conversation first.
 
 * **Dev loop**: `scripts/dev-install.sh --enable`, then `omarchy-restart-shell`
   for QML changes. `bash tests/cli.test.sh` (about three minutes, uses the real
-  microphone and voxtype) and `bash tests/lint.sh` must both pass. CI runs the
-  lint script and the skip-tolerant subset of the tests in an Arch container.
+  microphone and voxtype) and `bash tests/lint.sh` must both pass. No mic or
+  voxtype on your machine? `OMARECORDER_TEST_ALLOW_SKIP=1` turns those blocks
+  into counted skips; that is how CI runs the suite in an Arch container.
 * **Tests first** for CLI changes. The harness is plain bash (`check`, `eq`,
-  `fails`); fixtures are generated with ffmpeg; the sandbox is a throwaway XDG
-  tree.
+  `fails`, `run_cli`, `wait_for`); fixtures are generated with ffmpeg; the
+  sandbox is a throwaway XDG tree that is kept when anything fails. The suite
+  is split into sections that each start from a clean state, so
+  `OMARECORDER_TEST_ONLY=export,tidy bash tests/cli.test.sh` runs just the
+  ones you are working on (`--list` prints the names).
 * **Small pull requests** with one change each merge faster than one big one.
 * **Second-model review**: larger pull requests get a review from OpenAI
   Codex, requested by the maintainer with a `@codex review` comment. Treat its
