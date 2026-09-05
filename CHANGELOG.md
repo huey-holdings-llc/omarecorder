@@ -3,6 +3,15 @@
 All notable changes to this project are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow SemVer.
 
+## [Unreleased]
+
+### Fixed
+- CI had been red since the 1.4.0 release on one test that assumed voxtype
+  was installed; it now runs against a stand-in engine, and the two import
+  checks that silently never ran in CI (no alsa speech file there) use a
+  generated fixture instead. The `lint-and-test` check is now required
+  before anything merges to `main`.
+
 ## [1.4.0] - 2026-09-02
 
 ### Changed
