@@ -1586,6 +1586,10 @@ eq "the corrupt file is left exactly as it was" "$(cat "$DM/meta.json")" "not js
 check "no temp file beside it" bash -c "! ls '$DM'/meta.json.tmp.* >/dev/null 2>&1"
 fails "rename fails on a corrupt meta.json too" "$CLI" rename "$IDM" "New"
 check "and does not move the folder" test -d "$DM"
+printf '[]' > "$DM/meta.json"   # valid JSON, wrong shape: still not a meta.json
+fails "rename fails on a meta.json that is not an object" "$CLI" rename "$IDM" "New"
+check "and does not move the folder either" test -d "$DM"
+eq "the odd file is left as it was" "$(cat "$DM/meta.json")" "[]"
 check "list survives one corrupt meta.json" "$CLI" list --json
 cp "$TMP/meta.good" "$DM/meta.json"
 check "meta restored, note works again" "$CLI" note "$IDM" "hello"

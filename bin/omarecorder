@@ -1153,7 +1153,7 @@ cmd_rename() {
   title=$(sanitize_title "$title")
   # Folder and meta.json are renamed as a unit: an unreadable meta.json would
   # fail the title write after the move, leaving the two out of step.
-  jq -e . "$dir/meta.json" >/dev/null 2>&1 || die "meta.json in $dir is unreadable; not renaming"
+  jq -e 'type == "object"' "$dir/meta.json" >/dev/null 2>&1 || die "meta.json in $dir is unreadable; not renaming"
   local new="$ROOT/$id"; [[ -n "$title" ]] && new="$ROOT/$id $title"
   if [[ "$new" != "$dir" ]]; then mv "$dir" "$new"; fi
   update_meta "$new" '.title = $t' --arg t "$title"
