@@ -33,9 +33,9 @@ else skipped "omarchy-plugin-validate (not installed)"; fi
 
 step "CLI"
 # Every command the dispatcher knows is in the help text, so the README/help table cannot drift.
-missing=""
+missing=""; usage_text=$(sed -n '/^usage()/,/^}/p' bin/omarecorder)
 for c in $(sed -n '/^main()/,/^}/p' bin/omarecorder | grep -oE '^\s+[a-z][a-z-]*\)' | tr -d ' )'); do
-  bin/omarecorder help | grep -qwF -- "$c" || missing="$missing $c"
+  grep -qwF -- "$c" <<<"$usage_text" || missing="$missing $c"
 done
 [[ -z "$missing" ]] && ok "every dispatcher command appears in help" || bad "commands missing from help:$missing"
 
