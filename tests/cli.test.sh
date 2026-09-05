@@ -39,13 +39,17 @@ if [[ -f "$SPEECH" ]]; then
   ffmpeg -v error -y -i "$SPEECH" -ar 16000 -ac 1 -c:a pcm_s16le "$TMP/speech.wav"
   ffmpeg -v error -y -stream_loop 7 -i "$TMP/speech.wav" -c copy "$TMP/speech12.wav"
   ffmpeg -v error -y -stream_loop 4 -i "$TMP/speech12.wav" -c copy "$TMP/speech60.wav"
+else
+  # No alsa-utils (CI): a tone stands in so the import assertions still run.
+  # The transcription tests need real speech and keep their own gate (no speech12.wav).
+  ffmpeg -v error -y -f lavfi -i "sine=frequency=220:duration=3" -ar 16000 -ac 1 "$TMP/speech.wav"
 fi
 # Level fixtures: a quiet tone and the same tone driven 20 dB into the rails.
 ffmpeg -v error -y -f lavfi -i "sine=frequency=440:duration=3" -af volume=-12dB -ar 16000 -ac 1 "$TMP/quiet.wav"
 ffmpeg -v error -y -f lavfi -i "sine=frequency=440:duration=3" -af volume=20dB -ar 16000 -ac 1 "$TMP/hot.wav"
 ffmpeg -v error -y -f lavfi -i "sine=frequency=440:duration=3" -ar 48000 -ac 2 "$TMP/tone48.wav"
 touch -d "2026-01-02 03:04:05" "$TMP/tone48.wav"
-[[ -f "$TMP/speech.wav" ]] && touch -d "2026-01-03 03:04:05" "$TMP/speech.wav"
+touch -d "2026-01-03 03:04:05" "$TMP/speech.wav"
 
 echo "== basics"
 eq "version" "$("$CLI" version)" "$MANIFEST_VERSION"
@@ -68,10 +72,8 @@ eq "meta duration" "$(jq -r .duration_s "$D1/meta.json")" "3"
 eq "meta title" "$(jq -r .title "$D1/meta.json")" "Tone Test"
 eq "meta source" "$(jq -r .source "$D1/meta.json")" "import"
 V1=$(jq -r .version "$RUN/state.json")
-if [[ -f "$TMP/speech.wav" ]]; then
-  ID2=$($CLI import "$TMP/speech.wav"); eq "second import id" "$ID2" "2026-01-03_030405"
-  eq "title defaults to filename" "$(jq -r .title "$OMARECORDER_DIR/$ID2 speech/meta.json")" "speech"
-fi
+ID2=$($CLI import "$TMP/speech.wav"); eq "second import id" "$ID2" "2026-01-03_030405"
+eq "title defaults to filename" "$(jq -r .title "$OMARECORDER_DIR/$ID2 speech/meta.json")" "speech"
 
 echo "== levels"
 IDQ=$($CLI import "$TMP/quiet.wav" --title Quiet); IDH=$($CLI import "$TMP/hot.wav" --title Hot)
@@ -511,7 +513,9 @@ printf 'junk one\njunk two\nreal -> entry\n' > "$TMP/dict.bad2"
 check "import names multiple malformed lines grammatically" bash -c "\"$CLI\" dictionary import '$TMP/dict.bad2' | grep -q 'lines 1, 2'"
 check "prompt defuses its own placeholder" bash -c "\"$CLI\" dictionary prompt | grep -Fq 'ask me what I talk about'"
 IDX=$("$CLI" import "$TMP/quiet.wav" --title "Hint Test")
-check "bogus model hint does not suggest an impossible download" bash -c "OUT=\$(\"$CLI\" transcribe '$IDX' --model bogus 2>&1); ! grep -q 'model download bogus' <<<\"\$OUT\" && grep -q 'not in the catalog' <<<\"\$OUT\""
+# The hint comes after the engine check, so a stand-in voxtype keeps this honest where the real one is absent (CI).
+mkdir -p "$TMP/voxok"; printf '#!/bin/sh\nexit 0\n' > "$TMP/voxok/voxtype"; chmod +x "$TMP/voxok/voxtype"
+check "bogus model hint does not suggest an impossible download" bash -c "OUT=\$(PATH=\"$TMP/voxok:\$PATH\" VOXTYPE_MODELS_DIR=\"$TMP/nomodels\" \"$CLI\" transcribe '$IDX' --model bogus 2>&1); ! grep -q 'model download bogus' <<<\"\$OUT\" && grep -q 'not in the catalog' <<<\"\$OUT\""
 "$CLI" delete "$IDX" --yes >/dev/null
 printf '# emptied by the test suite\n' > "$DICT"
 
