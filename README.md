@@ -511,9 +511,13 @@ prints the names. The sandbox lives under `~/.cache/omarecorder-tests/` (or
 `OMARECORDER_TEST_KEEP=1` is set. `OMARECORDER_SYNC=1` runs jobs inline
 instead of under `systemd-run`. `OMARECORDER_RUN_DIR` (tests only) moves the
 runtime state out of `$XDG_RUNTIME_DIR` so the real user manager stays
-reachable. There is no QML test harness; review QML by reading it and
-restarting the shell. The screenshots in `docs/screenshots/` are the reference
-for how it should look.
+reachable. The QML side has no runtime harness: `tests/lint.sh` runs `qmllint`
+against the shell's own modules (on a machine with Omarchy installed) and the
+pure helpers in `ui/format.js` under node (`tests/format.test.js`), and greps
+for the things the hardening passes settled (plain text for user strings,
+theme tokens only, argv arrays for commands). The views themselves are
+verified by reading them and restarting the shell; the screenshots in
+`docs/screenshots/` are the reference for how it should look.
 
 Design specs: `docs/superpowers/specs/2026-08-29-omarecorder-design.md` and
 `docs/superpowers/specs/2026-08-30-v1.0-design.md`. Contribution principles:

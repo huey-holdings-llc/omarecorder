@@ -1,3 +1,4 @@
+pragma ComponentBehavior: Bound
 import Quickshell
 import Quickshell.Io
 import Quickshell.Wayland
@@ -586,7 +587,7 @@ Item {
                 visible: root.selectedLive
                 width: parent.width
                 peakDb: root.svc ? root.svc.peakDb : -99
-                clip: !!(root.svc && root.svc.clipping)
+                clipping: !!(root.svc && root.svc.clipping)
                 foreground: root.foreground
                 urgent: root.urgent
                 fontFamily: root.fontFamily
@@ -608,7 +609,7 @@ Item {
                   width: Math.min(picker.implicitWidth, rowAvail)
                   anchors.verticalCenter: parent.verticalCenter
                   svc: root.svc
-                  durationS: root.selected ? root.selected.duration_s : 0
+                  durationS: (root.selected && root.selected.duration_s) || 0   // null for a live or unrepaired take
                   foreground: root.foreground
                   fontFamily: root.fontFamily
                   visible: !root.selectedJob && !root.selectedLive

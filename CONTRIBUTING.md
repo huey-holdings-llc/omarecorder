@@ -59,7 +59,9 @@ to them is easy to merge; one that breaks them will get a conversation first.
   sandbox is a throwaway XDG tree that is kept when anything fails. The suite
   is split into sections that each start from a clean state, so
   `OMARECORDER_TEST_ONLY=export,tidy bash tests/cli.test.sh` runs just the
-  ones you are working on (`--list` prints the names).
+  ones you are working on (`--list` prints the names). Pure JS in `ui/format.js`
+  has node tests in `tests/format.test.js`; `tests/lint.sh` runs them, and
+  qmllint, when node and the shell's QML modules are on the machine.
 * **Small pull requests** with one change each merge faster than one big one.
 * **Second-model review**: larger pull requests get a review from OpenAI
   Codex, requested by the maintainer with a `@codex review` comment. Treat its
