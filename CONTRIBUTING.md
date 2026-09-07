@@ -60,8 +60,11 @@ to them is easy to merge; one that breaks them will get a conversation first.
   is split into sections that each start from a clean state, so
   `OMARECORDER_TEST_ONLY=export,tidy bash tests/cli.test.sh` runs just the
   ones you are working on (`--list` prints the names). Pure JS in `ui/format.js`
-  has node tests in `tests/format.test.js`; `tests/lint.sh` runs them, and
-  qmllint, when node and the shell's QML modules are on the machine.
+  (labels) and `ui/state.js` (re-list, filter and selection decisions) has node
+  tests in `tests/format.test.js` and `tests/state.test.js`; `tests/lint.sh`
+  runs them, and qmllint, when node and the shell's QML modules are on the
+  machine. Logic that can be a pure function belongs in those files, not in
+  QML, so it can be tested.
 * **Small pull requests** with one change each merge faster than one big one.
 * **Second-model review**: larger pull requests get a review from OpenAI
   Codex, requested by the maintainer with a `@codex review` comment. Treat its

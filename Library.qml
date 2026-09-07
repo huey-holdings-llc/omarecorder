@@ -6,6 +6,7 @@ import QtQuick
 import QtQuick.Controls
 import qs.Commons
 import "ui/format.js" as Fmt
+import "ui/state.js" as State
 import qs.Ui
 import "ui"
 
@@ -86,7 +87,7 @@ Item {
     var requested = ""
     try { var p = JSON.parse(payloadJson || "{}"); if (p && p.id) requested = String(p.id) } catch (e) {}
     // Newest recording is selected unless the caller asked for a specific one.
-    root.selectedId = requested || (rows.length > 0 ? rows[0].id : "")
+    root.selectedId = State.initialSelection(requested, rows)
     if (svc) svc.refresh()
     Qt.callLater(function() { keyCatcher.forceActiveFocus() })
   }
@@ -98,31 +99,19 @@ Item {
   // against a stale answer landing after further typing.
   property var transcriptMatchIds: []
   property string transcriptMatchQuery: ""
-  function filteredRows() {
-    var all = svc ? svc.recordings : []
-    var q = filterText.trim().toLowerCase()
-    if (!q) return all
-    var inText = (transcriptMatchQuery === filterText.trim()) ? transcriptMatchIds : []
-    var out = []
-    for (var i = 0; i < all.length; i++) {
-      var r = all[i]
-      var hay = ((r.title || "") + " " + (r.id || "") + " " + (r.created || "")).toLowerCase()
-      if (hay.indexOf(q) !== -1 || inText.indexOf(r.id) !== -1) out.push(r)
-    }
-    return out
-  }
-  function indexOfId(id) { for (var i = 0; i < rows.length; i++) if (rows[i].id === id) return i; return -1 }
+  function filteredRows() { return State.filterRows(svc ? svc.recordings : [], filterText, transcriptMatchIds, transcriptMatchQuery) }
+  function indexOfId(id) { return State.indexOfId(rows, id) }
   function ensureSelection() { if (selectedIndex < 0 && rows.length > 0) selectedId = rows[0].id }
   readonly property string hintsText: root.trimMode
     ? "Space play   ←→ seek   [ ] mark start / end   Enter trim   Esc leave trim mode"
     : "↑↓ select   Enter open / transcribe   Ctrl+M model   Space play   Ctrl+S speed   ←→ seek   F2 rename   F3 trim   F4 raw   Del delete   Esc close"
-  function select(delta) {
-    if (rows.length === 0) return
-    var i = selectedIndex < 0 ? (delta < 0 ? rows.length - 1 : 0) : (selectedIndex + delta + rows.length) % rows.length
+  function select(delta) { selectAbsolute(State.stepIndex(selectedIndex, delta, rows.length)) }
+  function selectAbsolute(i) {
+    i = State.clampIndex(i, rows.length)
+    if (i < 0) return
     selectedId = rows[i].id
     list.positionViewAtIndex(i, ListView.Contain)
   }
-  function selectAbsolute(i) { if (rows.length === 0) return; i = Math.max(0, Math.min(i, rows.length - 1)); selectedId = rows[i].id; list.positionViewAtIndex(i, ListView.Contain) }
   function setFilter(t) { filterText = t; searchDebounce.restart(); Qt.callLater(ensureSelection) }
   // Transcripts change under a live query (a re-transcription finishing, a
   // trim): re-ask when the list refreshes so the match set cannot go stale.

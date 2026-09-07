@@ -513,7 +513,8 @@ instead of under `systemd-run`. `OMARECORDER_RUN_DIR` (tests only) moves the
 runtime state out of `$XDG_RUNTIME_DIR` so the real user manager stays
 reachable. The QML side has no runtime harness: `tests/lint.sh` runs `qmllint`
 against the shell's own modules (on a machine with Omarchy installed) and the
-pure helpers in `ui/format.js` under node (`tests/format.test.js`), and greps
+pure helpers in `ui/format.js` and `ui/state.js` under node
+(`tests/format.test.js`, `tests/state.test.js`), and greps
 for the things the hardening passes settled (plain text for user strings,
 theme tokens only, argv arrays for commands). The views themselves are
 verified by reading them and restarting the shell; the screenshots in

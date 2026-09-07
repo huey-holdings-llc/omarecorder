@@ -48,6 +48,15 @@ All notable changes to this project are documented here. Format follows
   notification click action's argv, and the player's pid handling. The
   long-take stop confirmation and busy guards moved from the real-mic block
   to the fake stack. A suite-end check fails on any temp file left behind.
+- The decisions the shell used to make inline in QML now live in `ui/state.js`
+  as pure functions with node tests: which state changes are worth a re-list
+  (and when an unchanged signature still is), which download finished, which
+  rows a Library filter keeps (instant title/id/date matches plus the
+  transcript hits, only when they answer the current query), and where the
+  selection lands on arrow keys, on open and after a delete. `Service.qml`
+  and `Library.qml` call them; nothing user-visible changed. The lint field
+  contract check now reads `ui/*.js` too, so a CLI key rename cannot hide
+  behind the move.
 - `tests/lint.sh` runs qmllint for real (the binary lives off PATH on Arch, so
   the old check never fired) with the shell's modules registered, unit-tests
   `ui/format.js` under node, cross-checks the help text against the command
