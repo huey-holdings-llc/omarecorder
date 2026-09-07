@@ -54,7 +54,7 @@ if grep -nE 'console\.' -- "${QML[@]}" ui/*.js; then bad "console.* left in"; el
 # Field contract: every JSON key the QML reads off a recording, job, model or
 # transcript exists in the CLI, so a rename there cannot silently blank a label.
 missing=""
-for k in $(grep -ohE '\b(rec|r|selected|modelData|j|m)\.[a-z_]+(\.[a-z_]+){0,2}' -- "${QML[@]}" | cut -d. -f2- | tr '.' '\n' | sort -u); do
+for k in $(grep -ohE '\b(rec|r|selected|modelData|j|m)\.[a-z_]+(\.[a-z_]+){0,2}' -- "${QML[@]}" ui/*.js | cut -d. -f2- | tr '.' '\n' | sort -u); do
   case "$k" in length|indexOf|map|filter|some|find|push|join|toString|trim|replace|slice|split|toLowerCase|concat) continue ;; esac
   grep -qE "(^|[^A-Za-z_])$k([^A-Za-z_]|$)" bin/omarecorder || missing="$missing $k"
 done
@@ -77,6 +77,12 @@ if command -v node >/dev/null; then
   QT_STUB='var Qt = { formatDateTime: function(d, f) { var M = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"]; function p(n) { return (n < 10 ? "0" : "") + n } return M[d.getMonth()] + " " + d.getDate() + ", " + p(d.getHours()) + ":" + p(d.getMinutes()) } }'
   if out=$({ printf '%s\n' "$QT_STUB"; sed '/^\.pragma/d' ui/format.js; cat tests/format.test.js; } | TZ=UTC node - 2>&1); then ok "$out"; else printf '%s\n' "$out"; bad "format.js tests"; fi
 else skipped "format.js tests (need node)"; fi
+
+step "state.js"
+# No Qt in state.js at all: the pure list/selection/re-list decisions run under node as they are.
+if command -v node >/dev/null; then
+  if out=$({ sed '/^\.pragma/d' ui/state.js; cat tests/state.test.js; } | node - 2>&1); then ok "$out"; else printf '%s\n' "$out"; bad "state.js tests"; fi
+else skipped "state.js tests (need node)"; fi
 
 step "docs"
 grep -q '## Remove' README.md && ok "README has a Remove section" || bad "README lacks Remove"

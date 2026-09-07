@@ -3,6 +3,7 @@ import QtQuick
 import Quickshell
 import Quickshell.Io
 import "ui/format.js" as Fmt
+import "ui/state.js" as State
 
 // OmaRecorder service — the single source of truth for the plugin's UI.
 // Mounted once by the shell (kind "service", keepLoaded); Panel/Library
@@ -116,19 +117,15 @@ QtObject {
   function refreshConfig() { if (!configProc.running) configProc.running = true }
   function refreshSetup() { if (!setupProc.running) setupProc.running = true }
 
-  // Which state changes actually need a re-list or a setup re-check: not the
-  // bytes_done ticks a download writes every 2 s. jobs shape + per-piece
-  // progress + the recording id cover everything the list renders.
+  // The signature of the last state that caused a re-list (State.stateSig:
+  // job shape, per-piece progress and the live recording id, not the
+  // bytes_done ticks a download writes every 2 s).
   property string _listSig: ""
   // Download-job models seen in the last state, so a download that finishes
   // (its job vanishes) triggers refreshModels(): nothing else re-reads
   // `installed`, and the picker and settings would show it stale until the
   // Library was reopened.
   property var _dlModels: []
-  function _stateSig(s) {
-    var jobs = (s.jobs || []).map(function(j) { return [j.type, j.id || j.model, j.unit, j.progress ? j.progress.chunk : 0].join(":") })
-    return jobs.join("|") + "//" + (s.recording ? s.recording.id : "")
-  }
   function applyState(text) {
     try {
       var s = JSON.parse(text)
@@ -136,16 +133,13 @@ QtObject {
       state = s
       updateElapsed()
       if (s.version !== prevVersion) {
-        var dl = (s.jobs || []).filter(function(j) { return j.type === "download" }).map(function(j) { return j.model })
-        for (var i = 0; i < _dlModels.length; i++) if (dl.indexOf(_dlModels[i]) < 0) { refreshModels(); break }
+        var dl = State.downloadModels(s)
+        if (State.downloadFinished(_dlModels, dl)) refreshModels()
         _dlModels = dl
-        var sig = _stateSig(s)
-        if (sig !== _listSig) {
+        var sig = State.stateSig(s)
+        if (State.relistNeeded(_listSig, sig, s.jobs)) {
           _listSig = sig
           refreshList()
-          if (!setup || setup.ok !== true) refreshSetup()
-        } else if (!s.jobs || s.jobs.length === 0) {
-          refreshList()   // a bump with no jobs: a mutation such as rename or delete
           if (!setup || setup.ok !== true) refreshSetup()
         }
       }
