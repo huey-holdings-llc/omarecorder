@@ -127,8 +127,10 @@ of them ship with Omarchy 4 except voxtype, which one command adds.
 | `omarchy-notification-send` (`notify-send` fallback), `omarchy-launch-editor`, `omarchy-shell` | Omarchy | notifications, open transcript, Library toggle | yes |
 | Obsidian | `obsidian` | Send to Obsidian (optional; without it the note lands next to the recording) | yes |
 
-Only voxtype, pw-record, pactl, ffmpeg/ffprobe and jq are required. Each of the
-others switches off one feature when missing.
+Only voxtype, pw-record, pactl, ffmpeg/ffprobe, jq, flock and setsid are
+required. Each of the others switches off one feature when missing:
+without `mpv`, for instance, playback falls back to `pw-play`, which plays
+the take but cannot be scrubbed, paused or re-sped from the Library.
 
 ## Install
 
@@ -204,6 +206,15 @@ playback speed (1x, 1.25x, 1.5x, 2x) for the rest of the session.
   `[` and `]` mark start and end at the playhead), `Del` moves to the trash
   (confirmed, defaults to Cancel). `Esc` leaves trim mode, then clears the
   search, then closes.
+* **Notes**: every recording has a free-text note, shown as an "Add a note" box
+  under the transcript in the Library and set from the CLI with `omarecorder
+  note <id> <text>` (empty text clears it). It is stored in the take's
+  `meta.json` and travels into the Obsidian note on export. The box is
+  click-to-edit; there is no key for it yet.
+* **When something fails**: the popup and the Library show the error in red
+  above the content, with a × to dismiss it. A read that fails (the recordings
+  list, the model catalogue) names itself there rather than leaving a surface
+  looking merely empty.
 * **Notifications**: "Recording saved" is clickable and transcribes with your
   default model. "Transcript ready" is clickable and opens the text. A take
   whose recorder died (power loss, shell killed) is repaired and reported as
@@ -299,7 +310,7 @@ stay in the folder, so a bad mix can be redone by hand with ffmpeg.
     ├── audio.wav                       16 kHz mono s16 (whisper-native, about 115 MB per hour)
     ├── audio.orig.wav                  only after a trim (unless --replace)
     ├── waveform.png                    2400x128 strip, redrawn on stop, import, trim and analyze
-    ├── meta.json                       title, source, duration, levels, transcript, trim, resume_seams, exported_to
+    ├── meta.json                       title, note, source, duration, levels, transcript, trim, resume_seams, exported_to
     ├── transcript.md                   header line + plain text, exactly as whisper wrote it
     ├── transcript.tidy.md              paragraphs, repeated passages removed (what the Library shows)
     ├── transcript.prev.md              the previous transcript, kept when you transcribe again
@@ -330,8 +341,17 @@ normalization, on a temporary copy of the audio and transcribes that copy;
 `audio.wav` is never modified, and `transcribe <id> --enhance` /
 `--no-enhance` override the setting for one run), `threads` (`0` lets voxtype
 decide), `obsidianVault` (empty = the open vault), `exportDir` (empty =
-automatic). Environment: `OMARECORDER_DIR` overrides `recordingsDir`,
-`OMARECORDER_CHUNK_S` sets the piece length.
+automatic). `defaultModel` has to name one of the three presets, `language` has
+to be `auto` or a two-letter code, and `exportDir` has to not be an existing
+file; the directory itself is created on the first export.
+
+`export` picks its destination in this order: `--dir`, then `--vault` or a
+configured `obsidianVault`, then a configured `exportDir`, then the first
+Obsidian vault found on the machine, then the recording's own folder. A setting
+you made beats a vault the plugin guessed at.
+
+Environment: `OMARECORDER_DIR` overrides `recordingsDir`, `OMARECORDER_CHUNK_S`
+sets the piece length.
 
 ### Models
 
@@ -346,11 +366,12 @@ time each model transcribes a take of 60 seconds or more.
 ```
 omarecorder record start [--source mic|system|both] [--title T]   start a recording
 omarecorder record resume                                          continue the last stopped recording
-omarecorder record stop | toggle | status [--json]                 control / inspect
+omarecorder record stop [--force] | toggle | status [--json]        control / inspect
 omarecorder import <file> [--move] [--title T]                     bring an existing audio file in
 omarecorder list [--json] | show <id> [--json] | analyze <id>      browse / measure levels
 omarecorder search <text>                                          ids whose transcript contains the text
-omarecorder rename <id> <title> | delete <id> [--yes] [--permanent] manage (delete moves to the trash)
+omarecorder rename <id> <title>                                    retitle (empty title clears it)
+omarecorder delete <id> [--yes] [--permanent]                      remove (trash unless --permanent)
 omarecorder note <id> <text>                                       set a note on a recording (empty text clears it)
 omarecorder trim <id> --from s --to s [--replace] | trim <id> --restore  cut the audio (first original kept)
 omarecorder copy <id> [--raw] [--print]                            transcript text to the clipboard
@@ -359,7 +380,8 @@ omarecorder dictionary [--json] | dictionary add <heard> <written> corrections t
 omarecorder dictionary edit | prompt [--copy] | export [path] | import <file|--clipboard>
 omarecorder export <id> [--vault P | --dir P] [--no-open] [--raw]   transcript to an Obsidian note
 omarecorder vaults [--json]                                        Obsidian vaults on this machine (* = open)
-omarecorder transcribe <id> [--model M] [--language L] [--from s --to s] [--chunk-s N] [--enhance|--no-enhance] [--download]
+omarecorder transcribe <id> [--model M] [--language L] [--threads N] [--from s --to s]
+                            [--chunk-s N] [--enhance|--no-enhance] [--download]
 omarecorder cancel <id> | estimate <id> --model M
 omarecorder models [--json] | model download <name> | model cancel <name>
 omarecorder play <id> [--from s] | stop-play | open <id> | folder <id>
@@ -367,11 +389,16 @@ omarecorder config get [key|--json] | config set <key> <value>
 omarecorder setup check [--json] | library | status [--json] | version
 ```
 
-`delete` moves the folder to the trash with `gio` and refuses if it cannot;
-`--permanent` is the only path to `rm -rf`. Without a terminal it needs
-`--yes`. `setup check --json` returns `tools[]` and `missing[]` with the package
-for each tool, and exits non-zero until everything needed is there. `version`
-is read from `manifest.json`.
+`delete` moves the folder to the trash with `gio` and refuses if it cannot, and
+says `trashed <id>` when it did; `--permanent` is the only path to `rm -rf`, and
+says `deleted <id>`. Without a terminal it needs `--yes`. `setup check --json`
+returns `tools[]` and `missing[]` with the package for each tool, and exits
+non-zero until everything needed is there. `version` is read from
+`manifest.json`.
+
+Every flag that takes a value has to be given one, and every command that
+accepts `--json` rejects anything else in that position rather than quietly
+printing the human output instead.
 
 ### Keybinding and menu (optional)
 
@@ -520,8 +547,13 @@ theme tokens only, argv arrays for commands). The views themselves are
 verified by reading them and restarting the shell; the screenshots in
 `docs/screenshots/` are the reference for how it should look.
 
-Design specs: `docs/superpowers/specs/2026-08-29-omarecorder-design.md` and
-`docs/superpowers/specs/2026-08-30-v1.0-design.md`. Contribution principles:
+Design history (superseded, kept for the record):
+`docs/superpowers/specs/2026-08-29-omarecorder-design.md` is the approved v0.1
+design and `docs/superpowers/specs/2026-08-30-v1.0-design.md` is the v1.0
+implementation plan. Both describe a roadmap this project has since decided
+against, whisper-cpp and sherpa-onnx and Ollama summaries among it; the README
+and the [issue tracker](https://github.com/huey-holdings-llc/omarecorder/issues)
+are the current word on any of that. Contribution principles:
 [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## Roadmap

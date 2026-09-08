@@ -65,6 +65,18 @@ to them is easy to merge; one that breaks them will get a conversation first.
   runs them, and qmllint, when node and the shell's QML modules are on the
   machine. Logic that can be a pure function belongs in those files, not in
   QML, so it can be tested.
+* **The knobs the tests use.** `OMARECORDER_SYNC=1` runs jobs inline instead of
+  under `systemd-run`, `OMARECORDER_RUN_DIR` moves the runtime state out of
+  `$XDG_RUNTIME_DIR` so the real user manager stays reachable, and
+  `OMARECORDER_LOCK_WAIT`, `OMARECORDER_LOOP_WARN_WORDS` and
+  `OMARECORDER_QUIET` shorten the state-lock timeout, lower the repetition-loop
+  threshold and silence notifications. They are internal, undocumented in the
+  README on purpose, and not part of the CLI's contract.
+* **A skipped check is not a passing one.** `tests/lint.sh` counts what it
+  could not run, and `LINT_EXPECT_SKIPS` fails the run when that count moves.
+  CI sets it to 2 (qmllint and omarchy-plugin-validate, neither of which exists
+  in the container). If you add a check that can skip, adjust the number in
+  `.github/workflows/ci.yml` in the same pull request.
 * **Coverage is a local, occasional check, never a gate.** `pacman -S kcov`,
   then `kcov --include-path=$PWD/bin coverage/ tests/cli.test.sh` writes an
   HTML report under `coverage/` (the suite takes its usual seven minutes;
