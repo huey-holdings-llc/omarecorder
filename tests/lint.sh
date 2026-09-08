@@ -1,15 +1,21 @@
 #!/usr/bin/env bash
 # Static checks that need no audio, no voxtype and no shell: run in CI and before a release.
 #   bash tests/lint.sh
-# Two checks need what only a dev machine has and say so when they cannot run:
-# qmllint needs the omarchy shell's QML modules, the format.js tests need node.
+# Checks that need what only a dev machine has say so instead of passing quietly:
+# qmllint needs the omarchy shell's QML modules and omarchy-plugin-validate needs
+# Omarchy itself. Set LINT_EXPECT_SKIPS to pin how many are allowed to go quiet.
 set -uo pipefail
 HERE="$(cd "$(dirname "$0")/.." && pwd)"; cd "$HERE" || exit 1
 fail=0
+skips=0; skip_names=""
 step() { printf '== %s\n' "$1"; }
 bad() { echo "  ✗ $1"; fail=1; }
 ok() { echo "  ✓ $1"; }
-skipped() { echo "  - skipped: $1"; }
+# A skip is not a pass. Set LINT_EXPECT_SKIPS to the number this environment is
+# allowed to skip and the run fails when the count moves: that is the only thing
+# that would have caught qmllint sitting dead for weeks because its binary was
+# off PATH, or the node suites never running in CI.
+skipped() { echo "  - skipped: $1"; skips=$((skips + 1)); skip_names="$skip_names\n    - $1"; }
 
 step "shellcheck"
 if shellcheck -S warning bin/omarecorder scripts/*.sh tests/*.sh; then ok "clean"; else bad "shellcheck findings"; fi
@@ -90,4 +96,11 @@ grep -q '## Update' README.md && ok "README has an Update section" || bad "READM
 grep -q 'omarchy plugin add' README.md && ok "README has the install command" || bad "README lacks install command"
 [[ -f LICENSE && -f preview.png ]] && ok "LICENSE and preview.png present" || bad "LICENSE/preview.png"
 
-echo; [[ $fail == 0 ]] && echo "lint: ok" || { echo "lint: FAILED"; exit 1; }
+echo
+if [[ -n "${LINT_EXPECT_SKIPS:-}" && "$skips" != "$LINT_EXPECT_SKIPS" ]]; then
+  echo "✗ expected $LINT_EXPECT_SKIPS skipped check(s), got $skips:"
+  printf '%b\n' "${skip_names:-    (none)}"
+  fail=1
+fi
+[[ $skips == 0 ]] || echo "lint: $skips check(s) skipped"
+[[ $fail == 0 ]] && echo "lint: ok" || { echo "lint: FAILED"; exit 1; }

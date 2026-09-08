@@ -6,6 +6,50 @@ All notable changes to this project are documented here. Format follows
 ## [Unreleased]
 
 ### Fixed
+- Playing a take on a machine without `mpv` stopped after five seconds with no
+  explanation. The CLI falls back to `pw-play`, which has no IPC socket, and
+  the Library read the missing socket as a dead player and killed a perfectly
+  good playback. It leaves it alone now; there is nothing to scrub, pause or
+  re-speed without the socket, so the readout says "playing", the speed chip
+  hides, and a second `Space` stops. There is no end-of-file event without the
+  socket either, so the take's own length decides when playback is over.
+- The popup's Transcribe and the Library's Transcribe were not the same
+  button. The Library asked the CLI to fetch a missing model and chain the
+  transcription onto it; the popup asked for neither and failed with "model is
+  not downloaded", which is what a new user would meet first. Both download now.
+- An error message stayed on screen forever. It was cleared only by the next
+  successful action, and a refresh is not an action, so one failure survived
+  selection changes, closing and reopening. Both surfaces have a dismiss
+  button, and a failed read (the recordings list, the model catalogue) now
+  names itself instead of leaving a surface looking merely empty.
+- Flags that take a value now say so. `record start --source` with nothing
+  after it died with bash's "unbound variable" rather than an OmaRecorder
+  message, as did `--title`, `import --title` and every `transcribe` flag.
+- `estimate` had no option parsing at all: `estimate <id> --mdoel small.en`
+  exited 0 having quietly estimated the default model.
+- A mistyped `--json` printed the human output and exited 0, so a script
+  parsing `list --jsonn` got prose. Every command that takes `--json` rejects
+  anything else in that position.
+- `config set` accepted any value for `defaultModel`, `language` and
+  `exportDir`. A misspelt model surfaced much later as a failed transcription.
+- A configured `exportDir` could never take effect on a machine with Obsidian
+  installed: an autodetected vault outranked it. A setting you made now beats a
+  vault the plugin guessed at, and the README writes the order down.
+- `setup check` promised the README every tool with its package and listed
+  eleven of twenty-one, and its human output printed two of its fields as
+  compact JSON on one line. It lists them all, `notify-send` included, as a
+  table.
+- `folder` had no usage line, and it and `dictionary edit` reported success on
+  a machine with no `xdg-open` to hand the path to.
+- `delete` said "deleted" for a move to the trash. It says "trashed" for that
+  and keeps "deleted" for `--permanent`.
+- The recording row, which is the main list item in both the popup and the
+  Library, had no accessible role or name, so a screen reader announced
+  nothing for any recording. The popup's key legend never mentioned `u`, which
+  it implements, and the Library's dim text was a slightly different colour
+  from everywhere else.
+- Two overlapping trims of one take shared a fixed temp filename; it carries
+  the pid now, like every other temp in the script.
 - CI had been red since the 1.4.0 release on one test that assumed voxtype
   was installed; it now runs against a stand-in engine, and the two import
   checks that silently never ran in CI (no alsa speech file there) use a
@@ -28,6 +72,27 @@ All notable changes to this project are documented here. Format follows
   string.
 
 ### Development
+- CI never ran the two node test suites. The workflow did not install `nodejs`
+  and `tests/lint.sh` guards both steps on having it, so 95 assertions covering
+  `ui/format.js` and `ui/state.js` printed "skipped" on every pull request and
+  had never once run. They are the safety net for the QML-to-JS extraction,
+  which is the change that most needed one. The reason nobody noticed is the
+  reason qmllint sat dead for weeks: a skipped check let the run pass. Skips
+  are counted now and `LINT_EXPECT_SKIPS` fails the run when the count moves.
+- A new `argcheck` test section covers the option and value handling above, and
+  the export and delete sections cover the destination order and the two
+  delete verbs: 718 CLI tests, up from 676.
+- `scripts/dev-install.sh` no longer mirrors `AGENTS.md` or `.claude/` into the
+  plugin directory. A real install is a plain clone and has neither, and
+  `AGENTS.md` is the file the marketplace asked to be kept out of a distributed
+  plugin in the first place.
+- Both design specs under `docs/superpowers/specs/` carry a Superseded banner,
+  and the README calls them design history. Their roadmaps promise whisper-cpp,
+  sherpa-onnx speaker attribution and Ollama summaries, all of which this
+  project has ruled out; linking them as current design contradicted the
+  README's central promise.
+- `SECURITY.md` says which versions get fixes. The two confirm dialogs share
+  one declaration of their theme properties instead of two copies.
 - The CLI test suite is split into sections that each start from a clean
   state, so `OMARECORDER_TEST_ONLY=export,tidy` runs just those. Failures now
   show the exit code and the command's last lines, skips are counted in the

@@ -208,15 +208,28 @@ Panel {
             fontFamily: root.fontFamily
           }
 
-          Text {
+          Row {
             visible: root.ready && root.svc.lastError.length > 0
             width: parent.width
-            text: root.ready ? root.svc.lastError : ""
-            textFormat: Text.PlainText
-            color: root.urgent
-            font.family: root.fontFamily
-            font.pixelSize: Style.font.caption
-            wrapMode: Text.Wrap
+            spacing: Style.spacing.sm
+            Text {
+              width: parent.width - dismissError.width - parent.spacing
+              text: root.ready ? root.svc.lastError : ""
+              textFormat: Text.PlainText
+              color: root.urgent
+              font.family: root.fontFamily
+              font.pixelSize: Style.font.caption
+              wrapMode: Text.Wrap
+            }
+            AccessibleActionButton {
+              id: dismissError
+              anchors.verticalCenter: parent.verticalCenter
+              iconText: "󰅖"
+              tooltipText: "Dismiss this message"
+              foreground: root.dim
+              fontFamily: root.fontFamily
+              onClicked: if (root.ready) root.svc.clearError()
+            }
           }
 
           SetupCard {
@@ -403,7 +416,8 @@ Panel {
         // non-breaking spaces keep each key with its word, so a wrap can
         // only happen at a separator, never between "d" and "dictionary".
         wrapMode: Text.Wrap
-        text: "r record · l library · i import · s settings · d dictionary · Esc close"
+        text: "r record · " + (root.ready && root.svc.resumable && !root.recording ? "u resume · " : "")
+              + "l library · i import · s settings · d dictionary · Esc close"
         color: root.dim
         font.family: root.fontFamily
         font.pixelSize: Style.font.caption

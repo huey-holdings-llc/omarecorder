@@ -3,6 +3,13 @@
 OmaRecorder records audio and stores transcripts, so security reports get
 priority over everything else.
 
+## Supported versions
+
+The latest tagged release is the only one that gets fixes. There are no
+maintenance branches: a security fix goes out as the next patch release, and
+`omarchy plugin update io.github.huey-holdings-llc.omarecorder` is how you get
+it. Older tags are kept for reference and are not patched.
+
 ## Reporting a vulnerability
 
 Please use GitHub's private vulnerability reporting on this repository

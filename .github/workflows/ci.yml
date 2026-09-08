@@ -15,9 +15,14 @@ jobs:
     timeout-minutes: 20
     steps:
       - name: Install tools (what an Omarchy install already has)
-        run: pacman -Syu --noconfirm --needed git jq ffmpeg shellcheck glib2 diffutils perl
+        run: pacman -Syu --noconfirm --needed git jq ffmpeg shellcheck glib2 diffutils perl nodejs
       - uses: actions/checkout@v4
       - name: Static checks
+        env:
+          # qmllint (no omarchy shell modules here) and omarchy-plugin-validate
+          # (not packaged) are the only checks that may skip in this container.
+          # Anything else going quiet is a bug, so lint fails on a different count.
+          LINT_EXPECT_SKIPS: "2"
         run: bash tests/lint.sh
       - name: CLI tests (no microphone, no voxtype, no systemd here, so those blocks skip)
         env:

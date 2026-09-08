@@ -44,6 +44,12 @@ CursorSurface {
   height: Math.max(Style.space(40), col.implicitHeight + Style.spacing.rowPaddingX)
   fill: Style.hoverFillFor(foreground, accent)
 
+  // The action buttons inside the row were annotated; the row itself was not,
+  // so a screen reader had nothing to say for any recording in either list.
+  Accessible.role: Accessible.ListItem
+  Accessible.name: root.titleText
+  Accessible.description: root.subtitleText
+
   MouseArea {
     anchors.fill: parent
     hoverEnabled: true

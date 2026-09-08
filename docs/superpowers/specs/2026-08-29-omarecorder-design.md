@@ -1,5 +1,13 @@
 # OmaRecorder — design spec (2026-08-29)
 
+> **Superseded.** This is a historical design document, kept because the
+> decisions in it explain how the plugin got its shape. It is not the current
+> roadmap and parts of it were explicitly reversed: whisper-cpp, sherpa-onnx
+> speaker attribution and Ollama summaries are all ruled out, permanently, and
+> the "Local only, by design" section of the README says why. The
+> [issue tracker](https://github.com/huey-holdings-llc/omarecorder/issues) is
+> the roadmap.
+
 Approved design for v0.1. Source of truth for behaviour; see README for usage.
 
 ## Context
