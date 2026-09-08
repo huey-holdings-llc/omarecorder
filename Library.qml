@@ -50,6 +50,7 @@ Item {
   // perfectly good playback five seconds in. This says what is actually true:
   // sound is coming out, but there is nothing to scrub, pause or speed up.
   property bool socketlessPlayback: false
+  property double playStartedAt: 0
   readonly property bool playing: playingId !== "" && !mpvPaused
   // A listening preference, kept for the session: never reset per recording.
   property real speedX: 1.0
@@ -181,10 +182,11 @@ Item {
   function stopPlayback() {
     if (playingId !== "" && svc) svc.stopPlay()
     playingId = ""; mpvPaused = false; positionS = 0; previewing = false; socketlessPlayback = false
+    socketlessEnd.stop()
   }
   function startPlayback(seconds) {
     if (!svc || !selected) return
-    playingId = selected.id; mpvPaused = false; positionS = seconds
+    playingId = selected.id; mpvPaused = false; positionS = seconds; playStartedAt = Date.now()
     if (seconds > 0) svc.playFrom(selected.id, seconds.toFixed(2)); else svc.play(selected.id)
     mpvRetry.tries = 0; mpvRetry.restart()
   }
@@ -259,10 +261,29 @@ Item {
       if (root.playingId === "") { stop(); return }
       if (mpvSock.connected) { stop(); return }
       tries++
-      if (tries > 20) { stop(); root.socketlessPlayback = true; return }   // no socket: pw-play is playing, leave it be
+      // No socket: pw-play is playing. Leave it be, but there is no end-of-file
+      // event either, so time it. The take's own length from where playback
+      // started, less the seconds spent retrying, at 1x because the speed
+      // control is hidden in this mode. Without it the UI would read "playing"
+      // forever and the next Space would clear stale state instead of replaying.
+      if (tries > 20) {
+        stop()
+        root.socketlessPlayback = true
+        var total = root.selected && root.selected.duration_s ? root.selected.duration_s : 0
+        var left = total - root.positionS - (Date.now() - root.playStartedAt) / 1000
+        // An unknown duration is no reason to cut a take that is playing.
+        if (total > 0) { socketlessEnd.interval = Math.max(1, Math.ceil(left * 1000)); socketlessEnd.restart() }
+        return
+      }
       mpvSock.connected = false
       mpvSock.connected = true
     }
+  }
+  // The end of a socketless playback, by the clock (see mpvRetry above).
+  Timer {
+    id: socketlessEnd
+    repeat: false
+    onTriggered: if (root.socketlessPlayback) root.stopPlayback()
   }
   Socket {
     id: mpvSock

@@ -11,7 +11,8 @@ All notable changes to this project are documented here. Format follows
   the Library read the missing socket as a dead player and killed a perfectly
   good playback. It leaves it alone now; there is nothing to scrub, pause or
   re-speed without the socket, so the readout says "playing", the speed chip
-  hides, and a second `Space` stops.
+  hides, and a second `Space` stops. There is no end-of-file event without the
+  socket either, so the take's own length decides when playback is over.
 - The popup's Transcribe and the Library's Transcribe were not the same
   button. The Library asked the CLI to fetch a missing model and chain the
   transcription onto it; the popup asked for neither and failed with "model is
