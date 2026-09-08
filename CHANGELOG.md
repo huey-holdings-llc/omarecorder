@@ -3,7 +3,7 @@
 All notable changes to this project are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow SemVer.
 
-## [Unreleased]
+## [1.4.1] - 2026-09-08
 
 ### Fixed
 - Playing a take on a machine without `mpv` stopped after five seconds with no
