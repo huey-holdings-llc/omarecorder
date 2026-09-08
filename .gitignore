@@ -6,3 +6,4 @@ tests/tmp/
 .claude/
 !docs/screenshots/*.png
 AGENTS.md
+coverage/

@@ -415,10 +415,10 @@ require_idle() {
 }
 
 sanitize_title() { # strip slashes/control chars, collapse spaces, ≤80 chars
-  local t="$1"; t="${t//\//-}"; t=$(printf '%s' "$t" | tr '\000-\037' ' ' | sed -E 's/[[:space:]]+/ /g; s/^ //; s/ $//'); printf '%s' "${t:0:80}"
+  local t="$1"; t="${t//\//-}"; t=$(printf '%s' "$t" | tr '[:cntrl:]' ' ' | sed -E 's/[[:space:]]+/ /g; s/^ //; s/ $//'); printf '%s' "${t:0:80}"
 }
 sanitize_note() { # control chars/newlines to spaces, collapse runs, ≤500 chars; slashes kept (a note is never a filename)
-  local t="$1"; t=$(printf '%s' "$t" | tr '\000-\037' ' ' | sed -E 's/[[:space:]]+/ /g; s/^ //; s/ $//'); printf '%s' "${t:0:500}"
+  local t="$1"; t=$(printf '%s' "$t" | tr '[:cntrl:]' ' ' | sed -E 's/[[:space:]]+/ /g; s/^ //; s/ $//'); printf '%s' "${t:0:500}"
 }
 
 read_meta() { jq -c . "$1/meta.json"; }
@@ -1568,12 +1568,12 @@ P2
 }
 
 read -r -d '' TIDY_AWK <<'AWK' || true
-function norm(w) { w = tolower(w); gsub(/[^a-z0-9]/, "", w); return (w == "" ? "\001" : w) }
+function norm(w) { w = tolower(w); gsub(/[^a-z0-9]/, "", w); return (w == "" ? "-" : w) }
 function block_eq(a, b, N,   k) { for (k = 0; k < N; k++) if (nt[a+k] != nt[b+k]) return 0; return 1 }
 function endpara() { if (cur != "") { out = out (out == "" ? "" : "\n\n") cur; paras++ } cur = ""; cnt = 0 }
 function emit(w) {
   cur = (cur == "" ? w : cur " " w); cnt++
-  if (cnt >= para_words && w ~ /[.!?]["')\]]*$/) endpara()
+  if (cnt >= para_words && w ~ endre) endpara()
   else if (cnt >= hard_words) endpara()
 }
 function flush_piece(   n, m, i, j, k, N, matched, t, reps, run, last, punct) {
@@ -1598,7 +1598,7 @@ function flush_piece(   n, m, i, j, k, N, matched, t, reps, run, last, punct) {
         loops++
         for (k = i; k < i + N - 1; k++) emit(tt[k])
         last = tt[i+N-1]; punct = ""
-        if (match(last, /[.!?]["')\]]*$/)) { punct = substr(last, RSTART); last = substr(last, 1, RSTART - 1) }
+        if (match(last, endre)) { punct = substr(last, RSTART); last = substr(last, 1, RSTART - 1) }
         if (last != "") emit(last " (repeated " reps "x)" punct)
         else emit("(repeated " reps "x)" punct)
         i = j; matched = 1; break
@@ -1610,7 +1610,10 @@ function flush_piece(   n, m, i, j, k, N, matched, t, reps, run, last, punct) {
 }
 # Loops of phrases under minN (4) normalized words are invisible to tidy and
 # can never be marked or flagged.
-BEGIN { minN = 4; maxN = 14; para_words = 90; hard_words = 220 }
+# endre: a sentence-ending word (end punctuation, then any closing quotes or
+# brackets). The single quote arrives in sq (-v) so the program text has none:
+# kcov cannot trace a bash word that holds both a newline and a single quote.
+BEGIN { minN = 4; maxN = 14; para_words = 90; hard_words = 220; endre = "[.!?][\"" sq ")\\]]*$" }
 /^[[:space:]]*$/ { flush_piece(); next }
 { piece = piece " " $0 }
 END { flush_piece(); printf "%s\n", out; print paras + 0, removed + 0, loops + 0, longest + 0 > statsfile }
@@ -1624,13 +1627,13 @@ tidy_transcript() {
   seed_dictionary
   if (( $(dict_count) > 0 )); then
     if ! strip_header "$src" | awk -v dictfile="$DICT_FILE" -v statsfile="$dstats" "$DICT_AWK" \
-        | awk -v statsfile="$stats" "$TIDY_AWK" > "$out.tmp.$$"; then
+        | awk -v sq="'" -v statsfile="$stats" "$TIDY_AWK" > "$out.tmp.$$"; then
       rm -f "$out.tmp.$$" "$stats" "$dstats"; log "tidy failed in $dir"; return 0
     fi
     read -r dreps < "$dstats" 2>/dev/null || dreps=0; rm -f "$dstats"
     [[ "$dreps" =~ ^[0-9]+$ ]] || dreps=0
   else
-    if ! strip_header "$src" | awk -v statsfile="$stats" "$TIDY_AWK" > "$out.tmp.$$"; then rm -f "$out.tmp.$$" "$stats"; log "tidy failed in $dir"; return 0; fi
+    if ! strip_header "$src" | awk -v sq="'" -v statsfile="$stats" "$TIDY_AWK" > "$out.tmp.$$"; then rm -f "$out.tmp.$$" "$stats"; log "tidy failed in $dir"; return 0; fi
   fi
   read -r paras removed loops longest < "$stats"; rm -f "$stats"
   # loop_warning: one single collapse removed at least this many words. maxN is

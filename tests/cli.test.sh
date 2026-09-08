@@ -1655,6 +1655,71 @@ check "OMARECORDER_QUIET=1 sends nothing" bash -c "rm -rf '$NOTIFY/calls'; mkdir
 "$CLI" delete "$NID" --yes >/dev/null
 }
 
+t_surface() {
+# The lines a kcov pass found unreached by every other section (#63): the
+# usage errors each dispatcher prints, the human-readable output a terminal
+# gets where the popup reads --json, the wl-clipboard, editor and shell
+# hand-offs, the notify-send fallback and the runtime-dir fallback.
+IDS=$("$CLI" import "$TMP/quiet.wav" --title "Surface Test"); DS=$("$CLI" show "$IDS" --json | jq -r .dir)
+eq "an unknown command exits 2" "$("$CLI" frob >/dev/null 2>&1; echo $?)" "2"
+check "and prints the usage text" bash -c "\"$CLI\" frob 2>&1 | grep -q '^omarecorder .*: record, keep, transcribe'"
+fails "record rejects an unknown subcommand" "$CLI" record frob
+fails "config rejects an unknown subcommand" "$CLI" config frob
+fails "config set keepAwake wants true or false" "$CLI" config set keepAwake maybe
+fails "export rejects an unknown option" "$CLI" export "$IDS" --frob
+fails "model rejects an unknown subcommand" "$CLI" model frob
+fails "dictionary rejects an unknown subcommand" "$CLI" dictionary frob
+fails "open refuses without a transcript" "$CLI" open "$IDS"
+eq "record status is idle" "$("$CLI" record status)" "idle"
+check "models lists the catalog for a terminal" bash -c "\"$CLI\" models | grep -q 'base.en'"
+check "setup check prints key: value lines" bash -c "\"$CLI\" setup check 2>/dev/null | grep -q '^version: '"
+SID=$(PATH="$FAKEPATH" "$CLI" record start --title "Status Take")
+check "status names the live recording" bash -c "PATH=\"$FAKEPATH\" \"$CLI\" status | grep -q '^recording $SID '"
+( PATH="$FAKEPATH" "$CLI" record stop >/dev/null 2>&1 )
+"$CLI" delete "$SID" --yes >/dev/null
+# wl-clipboard on shims that keep what they were given
+WL="$TMP/wl"; mkdir -p "$WL"
+printf '#!/bin/bash\ncat > "%s/wl-copy.in"\n' "$WL" > "$WL/wl-copy"
+printf '#!/bin/bash\ncat "%s/wl-paste.out"\n' "$WL" > "$WL/wl-paste"
+chmod +x "$WL/wl-copy" "$WL/wl-paste"
+printf '<!-- omarecorder model=base.en language=en created=x range=0-end chunks=1 -->\nHello from the transcript.\n' > "$DS/transcript.md"
+check "copy sends the transcript to wl-copy" env PATH="$WL:$PATH" "$CLI" copy "$IDS"
+eq "copy strips the header" "$(cat "$WL/wl-copy.in")" "Hello from the transcript."
+check "dictionary prompt --copy" env PATH="$WL:$PATH" "$CLI" dictionary prompt --copy
+check "the prompt landed on the clipboard" grep -q 'new entries only' "$WL/wl-copy.in"
+printf 'clipbored -> clipboard\n' > "$WL/wl-paste.out"
+check "dictionary import --clipboard" env PATH="$WL:$PATH" "$CLI" dictionary import --clipboard
+check "the clipboard entry was added" grep -qx 'clipbored -> clipboard' "$XDG_CONFIG_HOME/omarecorder/dictionary"
+printf 'no arrow here\njust words\n' > "$TMP/bad.dict"
+fails "import of a file with no usable line" "$CLI" dictionary import "$TMP/bad.dict"
+fails "export to an unwritable path" "$CLI" dictionary export "$TMP/no/such/dir/dict"
+# editor and shell hand-offs record their argv
+EX="$TMP/ext"; mkdir -p "$EX"
+for tool in xdg-open omarchy-launch-editor omarchy-shell; do
+  printf '#!/bin/bash\nprintf "%%s\\n" "$@" > "%s/%s.args"\n' "$EX" "$tool" > "$EX/$tool"; chmod +x "$EX/$tool"
+done
+eq "dictionary edit prints the file" "$(PATH="$EX:$PATH" "$CLI" dictionary edit)" "$XDG_CONFIG_HOME/omarecorder/dictionary"
+check "and hands it to xdg-open" wait_for 3 grep -qx "$XDG_CONFIG_HOME/omarecorder/dictionary" "$EX/xdg-open.args"
+check "open hands the transcript to the editor" env PATH="$EX:$PATH" "$CLI" open "$IDS"
+eq "with the transcript path" "$(cat "$EX/omarchy-launch-editor.args")" "$DS/transcript.md"
+check "library toggles the overlay through omarchy-shell" env PATH="$EX:$PATH" "$CLI" library
+eq "with the plugin id" "$(paste -sd' ' "$EX/omarchy-shell.args")" "shell toggle $(jq -r .id "$HERE/../manifest.json")"
+# notify-send is the sender when omarchy-notification-send is absent
+NN="$TMP/nonotify"; mkdir -p "$NN"; ln -s /usr/bin/* "$NN/" 2>/dev/null; rm -f "$NN/omarchy-notification-send" "$NN/notify-send"
+printf '#!/bin/bash\nprintf "%%s\\n" "$@" > "%s/notify-send.args"\n' "$EX" > "$NN/notify-send"; chmod +x "$NN/notify-send"
+NID2=$(PATH="$FAKEAUDIO:$NN" OMARECORDER_QUIET=0 "$CLI" record start --title "Fallback Take")
+( PATH="$FAKEAUDIO:$NN" OMARECORDER_QUIET=0 "$CLI" record stop >/dev/null 2>&1 )
+check "notify-send is the fallback sender" grep -q '^Recording saved' "$EX/notify-send.args"
+"$CLI" delete "$NID2" --yes >/dev/null
+# XDG_RUNTIME_DIR unset: the CLI falls back to /run/user/<uid> when it exists
+if [[ -d "/run/user/$(id -u)" ]]; then
+  check "XDG_RUNTIME_DIR unset falls back to /run/user" env -u XDG_RUNTIME_DIR "$CLI" status
+fi
+# rename moves the folder, so this goes last
+eq "control characters and DEL in a title become spaces" "$("$CLI" rename "$IDS" $'a\001b\177c' >/dev/null; "$CLI" show "$IDS" --json | jq -r .title)" "a b c"
+"$CLI" delete "$IDS" --yes >/dev/null
+}
+
 t_play() {
 # play launches the player detached and remembers its pid; stop-play only ever
 # signals a pid that still is a player.
@@ -1686,7 +1751,7 @@ kill "$SP" 2>/dev/null; wait "$SP" 2>/dev/null
 
 # -------------------------------------------------------------------- run ---
 SECTIONS=(basics import levels list rename note security locking recovery export trim tidy dictionary polish
-          guards models download search resume stopconfirm startfail stopfail txfail detached repair metafail ids notify play
+          guards models download search resume stopconfirm startfail stopfail txfail detached repair metafail ids notify surface play
           transcribe meter record delete setup)
 if [[ "${1:-}" == "--list" ]]; then printf '%s\n' "${SECTIONS[@]}"; exit 0; fi
 # A misspelt filter must not pass as "passed: 0 failed: 0".
