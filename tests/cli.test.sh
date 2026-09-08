@@ -1703,7 +1703,7 @@ for c in "list" "status" "models" "vaults"; do
 done
 fails "show rejects --jsonn" "$CLI" show "$IDA" --jsonn
 fails "setup check rejects --jsonn" "$CLI" setup check --jsonn
-check "setup check --json still parses" bash -c "$CLI setup check --json | jq -e .ok >/dev/null"
+check "setup check --json still parses" bash -c "$CLI setup check --json | jq -e 'has(\"ok\")' >/dev/null"
 
 # config set validated six of ten keys; these three took anything.
 fails "config set defaultModel rejects an unknown model" "$CLI" config set defaultModel gibberish
@@ -1726,7 +1726,7 @@ check "and prints a usage line" grep -q '^omarecorder: usage: folder <id>$' <<<"
 eq "setup check covers every tool the README names" \
   "$("$CLI" setup check --json | jq -r '[.tools[].tool] as $t
      | (["voxtype","pw-record","pw-play","pactl","ffmpeg","ffprobe","jq","flock","setsid","systemd-run","systemctl","systemd-inhibit","wl-copy","gio","xdg-open","mpv","omarchy-notification-send","omarchy-launch-editor","omarchy-shell","obsidian"] - $t) | length')" "0"
-check "human setup check prints a tools table, not raw JSON" bash -c "$CLI setup check 2>/dev/null | grep -q '^tools:$' || $CLI setup check --json >/dev/null"
+check "human setup check prints a tools table, not raw JSON" bash -c "$CLI setup check 2>/dev/null | grep -q '^tools:$'"
 check "and no line of it is compact JSON" bash -c "! $CLI setup check 2>/dev/null | grep -q '{\"tool\"'"
 
 "$CLI" delete "$IDA" --yes >/dev/null
