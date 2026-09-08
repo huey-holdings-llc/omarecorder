@@ -9,8 +9,12 @@ ID=$(jq -r .id "$HERE/manifest.json")
 DEST="$HOME/.config/omarchy/plugins/$ID"
 
 mkdir -p "$DEST"
+# A real install is a plain clone, so the mirror must not carry anything git
+# ignores. AGENTS.md especially: the marketplace does not allow agent-instruction
+# files in a distributed plugin, which is why it is untracked in the first place.
 rsync -a --delete \
   --exclude .git --exclude 'tests/tmp' --exclude 'docs' --exclude '.spike' \
+  --exclude '.claude' --exclude 'AGENTS.md' --exclude 'coverage' \
   "$HERE/" "$DEST/"
 chmod +x "$DEST/bin/omarecorder" "$DEST/scripts/"*.sh
 

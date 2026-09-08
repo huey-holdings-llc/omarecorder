@@ -45,6 +45,11 @@ Item {
   property string playingId: ""
   property bool mpvPaused: false
   property real positionS: 0
+  // mpv is optional: the CLI falls back to pw-play, which has no IPC socket.
+  // The retry below used to read "no socket" as "the player died" and stop a
+  // perfectly good playback five seconds in. This says what is actually true:
+  // sound is coming out, but there is nothing to scrub, pause or speed up.
+  property bool socketlessPlayback: false
   readonly property bool playing: playingId !== "" && !mpvPaused
   // A listening preference, kept for the session: never reset per recording.
   property real speedX: 1.0
@@ -62,11 +67,25 @@ Item {
   property color scrim: Color.menu.scrim
   property color selectedBackground: Color.menu.selectedBackground
   property color selectedText: Color.menu.selectedText
-  readonly property color dim: Qt.darker(foreground, 1.5)
+  readonly property color dim: Qt.darker(foreground, 1.55)
   readonly property color urgent: Color.urgent
   readonly property int cornerRadius: Style.cornerRadius
   property string fontFamily: Style.font.family
   property int contentMargin: Style.spacing.panelPadding
+
+  // Both confirm dialogs took the same eight theme properties verbatim. One
+  // shape means a token added here cannot reach only one of them.
+  component ThemedConfirm: ConfirmDialog {
+    anchors.fill: parent
+    z: 10
+    background: root.background
+    foreground: root.foreground
+    scrim: root.scrim
+    selectedBackground: root.selectedBackground
+    selectedText: root.selectedText
+    fontFamily: root.fontFamily
+    cornerRadius: root.cornerRadius
+  }
   property int cardWidth: Math.min(Style.space(1000), panel.width - Style.gapsOut * 2)
   property int cardHeight: Math.min(Style.space(660), panel.height - Style.gapsOut * 2)
   // A share of the card with a floor: long titles get room when the card is
@@ -161,7 +180,7 @@ Item {
   function mpvSend(cmd) { if (mpvSock.connected) mpvSock.write(JSON.stringify({ command: cmd }) + "\n") }
   function stopPlayback() {
     if (playingId !== "" && svc) svc.stopPlay()
-    playingId = ""; mpvPaused = false; positionS = 0; previewing = false
+    playingId = ""; mpvPaused = false; positionS = 0; previewing = false; socketlessPlayback = false
   }
   function startPlayback(seconds) {
     if (!svc || !selected) return
@@ -171,6 +190,8 @@ Item {
   }
   function togglePlay() {
     if (!svc || !selected || selectedLive) return
+    // Without the socket there is no pause to send, so the second press stops.
+    if (playingId === selected.id && socketlessPlayback) { stopPlayback(); return }
     if (playingId === selected.id) { mpvSend(["set_property", "pause", !mpvPaused]); previewing = false }
     else startPlayback(0)
   }
@@ -238,7 +259,7 @@ Item {
       if (root.playingId === "") { stop(); return }
       if (mpvSock.connected) { stop(); return }
       tries++
-      if (tries > 20) { stop(); root.stopPlayback(); return }   // mpv never came up
+      if (tries > 20) { stop(); root.socketlessPlayback = true; return }   // no socket: pw-play is playing, leave it be
       mpvSock.connected = false
       mpvSock.connected = true
     }
@@ -254,7 +275,7 @@ Item {
         // mpv respawns on every play; re-sending here is what makes the
         // chosen speed a session preference rather than a per-play one.
         if (root.speedX !== 1) write(JSON.stringify({ command: ["set_property", "speed", root.speedX] }) + "\n")
-      } else if (root.playingId !== "" && !mpvRetry.running) {
+      } else if (root.playingId !== "" && !mpvRetry.running && !root.socketlessPlayback) {
         root.stopPlayback()   // mpv exited (end of file, or stop-play)
       }
     }
@@ -371,39 +392,21 @@ Item {
           }
         }
 
-        ConfirmDialog {
+        ThemedConfirm {
           id: deleteConfirm
-          anchors.fill: parent
-          opened: root.deleteConfirmOpen
-          z: 10
           // The kit dialog renders AutoText: keep markup-looking characters out of the title.
           message: root.selected && root.svc ? "Move \"" + root.svc.displayTitle(root.selected).replace(/[<>]/g, "") + "\" to the trash?" : ""
           confirmText: "Move to trash"
-          background: root.background
-          foreground: root.foreground
-          scrim: root.scrim
-          selectedBackground: root.selectedBackground
-          selectedText: root.selectedText
-          fontFamily: root.fontFamily
-          cornerRadius: root.cornerRadius
+          opened: root.deleteConfirmOpen
           onCanceled: root.cancelDelete()
           onConfirmed: root.confirmDelete()
         }
 
-        ConfirmDialog {
+        ThemedConfirm {
           id: trimConfirm
-          anchors.fill: parent
           opened: root.trimConfirmOpen
-          z: 10
           message: "Keep " + wave.fmt(root.trimFrom) + " to " + wave.fmt(root.trimTo) + " and cut the rest? The original is kept and can be restored."
           confirmText: "Trim"
-          background: root.background
-          foreground: root.foreground
-          scrim: root.scrim
-          selectedBackground: root.selectedBackground
-          selectedText: root.selectedText
-          fontFamily: root.fontFamily
-          cornerRadius: root.cornerRadius
           onCanceled: root.cancelTrimConfirm()
           onConfirmed: root.confirmTrim()
         }
@@ -704,7 +707,9 @@ Item {
                   visible: !!(root.selected && !root.selectedLive)
                   width: Math.ceil(posMetrics.width)
                   horizontalAlignment: Text.AlignRight
-                  text: root.selected ? Fmt.fmtClock(root.positionS) + " / " + Fmt.fmtClock(root.selected.duration_s) : ""
+                  text: !root.selected ? ""
+                    : root.socketlessPlayback ? "playing"
+                    : Fmt.fmtClock(root.positionS) + " / " + Fmt.fmtClock(root.selected.duration_s)
                   textFormat: Text.PlainText
                   color: root.playing ? root.foreground : root.dim
                   font.family: root.fontFamily
@@ -717,7 +722,7 @@ Item {
                   // Fixed width (sized to the widest label) so switching
                   // 1x/1.25x/1.5x/2x moves nothing.
                   anchors.verticalCenter: parent.verticalCenter
-                  visible: posReadout.visible
+                  visible: posReadout.visible && !root.socketlessPlayback
                   bordered: true
                   text: root.speedX + "x"
                   tooltipText: "Playback speed (Ctrl+S)"
@@ -798,15 +803,28 @@ Item {
                 font.pixelSize: Style.font.caption
               }
 
-              Text {
+              Row {
                 visible: !!(root.svc && root.svc.lastError.length > 0)
                 width: parent.width
-                text: root.svc ? root.svc.lastError : ""
-                textFormat: Text.PlainText
-                color: root.urgent
-                wrapMode: Text.Wrap
-                font.family: root.fontFamily
-                font.pixelSize: Style.font.caption
+                spacing: Style.spacing.sm
+                Text {
+                  width: parent.width - dismissError.width - parent.spacing
+                  text: root.svc ? root.svc.lastError : ""
+                  textFormat: Text.PlainText
+                  color: root.urgent
+                  wrapMode: Text.Wrap
+                  font.family: root.fontFamily
+                  font.pixelSize: Style.font.caption
+                }
+                AccessibleActionButton {
+                  id: dismissError
+                  anchors.verticalCenter: parent.verticalCenter
+                  iconText: "󰅖"
+                  tooltipText: "Dismiss this message"
+                  foreground: root.dim
+                  fontFamily: root.fontFamily
+                  onClicked: if (root.svc) root.svc.clearError()
+                }
               }
 
               PanelSeparator { width: parent.width; foreground: root.foreground }

@@ -36,6 +36,10 @@ QtObject {
   property var dictionary: ({ count: 0, entries: [] })
   property var setup: ({ ok: true })
   property string lastError: ""
+  // The banner used to clear only on the next successful action, and refresh()
+  // does not go through run(), so one failure stayed on screen through
+  // selection changes, closes and reopens. Both surfaces can dismiss it now.
+  function clearError() { root.lastError = "" }
   property var level: null            // {peak_db, clip, t} while recording (watched file)
   readonly property bool clipping: !!(level && level.clip)
   readonly property real peakDb: level && typeof level.peak_db === "number" ? level.peak_db : -99
@@ -161,12 +165,15 @@ QtObject {
   // a button press being deliberate in a way a keybinding is not.
   function stopRecording(force) { run(force ? ["record", "stop", "--force"] : ["record", "stop"]) }
   function toggleRecording() { recording ? stopRecording() : startRecording() }
+  // download defaults to true. Every surface that offers Transcribe means "and
+  // fetch the model if it is missing"; the popup passed no argument at all and
+  // so failed with exit 3 where the Library downloaded and chained.
   function transcribe(id, model, language, download, chunkS) {
     var args = ["transcribe", id]
     if (model) args = args.concat(["--model", model])
     if (language) args = args.concat(["--language", language])
     if (chunkS) args = args.concat(["--chunk-s", String(chunkS)])
-    if (download) args.push("--download")
+    if (download === undefined || download) args.push("--download")
     run(args)
   }
   function cancel(id) { run(["cancel", id]) }
@@ -252,37 +259,56 @@ QtObject {
     onTriggered: root.updateElapsed()
   }
 
+  // Every loader lands here. They used to parse inline behind an empty catch
+  // with no stderr and no else, so a `list` that failed was indistinguishable
+  // from an empty library: the Library drew "No recordings yet" and said
+  // nothing. A read that fails now names itself in the error banner.
+  function applyJson(what, code, text, errText, apply) {
+    if (code !== 0) { root.lastError = what + " failed: " + String(errText || ("exit " + code)).trim(); return false }
+    try { apply(JSON.parse(text)) } catch (e) { root.lastError = what + " returned output this build cannot read"; return false }
+    return true
+  }
   property Process listProc: Process {
     command: [root.cli, "list", "--json"]
     stdout: StdioCollector { id: listOut; waitForEnd: true }
-    onExited: function(code) {
-      if (code === 0) { try { root.recordings = JSON.parse(listOut.text) } catch (e) { root.recordings = [] } }
-    }
+    stderr: StdioCollector { id: listErr; waitForEnd: true }
+    onExited: function(code) { root.applyJson("list", code, listOut.text, listErr.text, function(v) { root.recordings = v }) }
   }
   property Process modelsProc: Process {
     command: [root.cli, "models", "--json"]
     stdout: StdioCollector { id: modelsOut; waitForEnd: true }
-    onExited: function(code) { if (code === 0) { try { root.models = JSON.parse(modelsOut.text) } catch (e) {} } }
+    stderr: StdioCollector { id: modelsErr; waitForEnd: true }
+    onExited: function(code) { root.applyJson("models", code, modelsOut.text, modelsErr.text, function(v) { root.models = v }) }
   }
   property Process vaultsProc: Process {
     command: [root.cli, "vaults", "--json"]
     stdout: StdioCollector { id: vaultsOut; waitForEnd: true }
-    onExited: function(code) { if (code === 0) { try { root.vaults = JSON.parse(vaultsOut.text) } catch (e) {} } }
+    stderr: StdioCollector { id: vaultsErr; waitForEnd: true }
+    onExited: function(code) { root.applyJson("vaults", code, vaultsOut.text, vaultsErr.text, function(v) { root.vaults = v }) }
   }
   property Process dictProc: Process {
     command: [root.cli, "dictionary", "--json"]
     stdout: StdioCollector { id: dictOut; waitForEnd: true }
-    onExited: function(code) { if (code === 0) { try { root.dictionary = JSON.parse(dictOut.text) } catch (e) {} } }
+    stderr: StdioCollector { id: dictErr; waitForEnd: true }
+    onExited: function(code) { root.applyJson("dictionary", code, dictOut.text, dictErr.text, function(v) { root.dictionary = v }) }
   }
   property Process configProc: Process {
     command: [root.cli, "config", "get", "--json"]
     stdout: StdioCollector { id: configOut; waitForEnd: true }
-    onExited: function(code) { if (code === 0) { try { root.config = JSON.parse(configOut.text) } catch (e) {} } }
+    stderr: StdioCollector { id: configErr; waitForEnd: true }
+    onExited: function(code) { root.applyJson("config", code, configOut.text, configErr.text, function(v) { root.config = v }) }
   }
   property Process setupProc: Process {
     command: [root.cli, "setup", "check", "--json"]
     stdout: StdioCollector { id: setupOut; waitForEnd: true }
-    onExited: function(code) { try { root.setup = JSON.parse(setupOut.text) } catch (e) {}; root.refreshModels() }
+    stderr: StdioCollector { id: setupErr; waitForEnd: true }
+    // setup check exits non-zero to mean "your setup is incomplete", which is
+    // the SetupCard's whole subject and not an error to report: parse either way.
+    onExited: function(code) {
+      try { root.setup = JSON.parse(setupOut.text) }
+      catch (e) { if (code !== 0) root.lastError = "setup check failed: " + String(setupErr.text || ("exit " + code)).trim() }
+      root.refreshModels()
+    }
   }
 
   Component.onCompleted: {
