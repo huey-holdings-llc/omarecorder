@@ -2196,6 +2196,7 @@ cmd_setup() {
     {"tool":"mpv","package":"mpv","required":false,"for":"playback"},
     {"tool":"pw-play","package":"pipewire","required":false,"for":"playback without mpv"},
     {"tool":"omarchy-notification-send","package":"omarchy","required":false,"for":"desktop notifications"},
+    {"tool":"notify-send","package":"libnotify","required":false,"for":"desktop notifications (fallback)"},
     {"tool":"omarchy-launch-editor","package":"omarchy","required":false,"for":"opening a transcript"},
     {"tool":"omarchy-shell","package":"omarchy","required":false,"for":"toggling the Library"},
     {"tool":"obsidian","package":"obsidian","required":false,"for":"opening an exported note"}]'

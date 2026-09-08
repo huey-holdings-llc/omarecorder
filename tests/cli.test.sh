@@ -1725,7 +1725,7 @@ check "and prints a usage line" grep -q '^omarecorder: usage: folder <id>$' <<<"
 # setup check promised the README every tool it calls, and listed eleven.
 eq "setup check covers every tool the README names" \
   "$("$CLI" setup check --json | jq -r '[.tools[].tool] as $t
-     | (["voxtype","pw-record","pw-play","pactl","ffmpeg","ffprobe","jq","flock","setsid","systemd-run","systemctl","systemd-inhibit","wl-copy","gio","xdg-open","mpv","omarchy-notification-send","omarchy-launch-editor","omarchy-shell","obsidian"] - $t) | length')" "0"
+     | (["voxtype","pw-record","pw-play","pactl","ffmpeg","ffprobe","jq","flock","setsid","systemd-run","systemctl","systemd-inhibit","wl-copy","gio","xdg-open","mpv","omarchy-notification-send","notify-send","omarchy-launch-editor","omarchy-shell","obsidian"] - $t) | length')" "0"
 check "human setup check prints a tools table, not raw JSON" bash -c "$CLI setup check 2>/dev/null | grep -q '^tools:$'"
 check "and no line of it is compact JSON" bash -c "! $CLI setup check 2>/dev/null | grep -q '{\"tool\"'"
 

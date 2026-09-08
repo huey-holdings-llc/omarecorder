@@ -186,6 +186,10 @@ Item {
   }
   function startPlayback(seconds) {
     if (!svc || !selected) return
+    // A seek restarts the player, so the previous run's verdict and its end
+    // timer have to go with it: a seek into the last few seconds would
+    // otherwise let the old timer stop the new playback at the old end time.
+    socketlessPlayback = false; socketlessEnd.stop()
     playingId = selected.id; mpvPaused = false; positionS = seconds; playStartedAt = Date.now()
     if (seconds > 0) svc.playFrom(selected.id, seconds.toFixed(2)); else svc.play(selected.id)
     mpvRetry.tries = 0; mpvRetry.restart()

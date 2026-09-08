@@ -36,8 +36,9 @@ All notable changes to this project are documented here. Format follows
   installed: an autodetected vault outranked it. A setting you made now beats a
   vault the plugin guessed at, and the README writes the order down.
 - `setup check` promised the README every tool with its package and listed
-  eleven of twenty, and its human output printed two of its fields as compact
-  JSON on one line. It lists them all, as a table.
+  eleven of twenty-one, and its human output printed two of its fields as
+  compact JSON on one line. It lists them all, `notify-send` included, as a
+  table.
 - `folder` had no usage line, and it and `dictionary edit` reported success on
   a machine with no `xdg-open` to hand the path to.
 - `delete` said "deleted" for a move to the trash. It says "trashed" for that
