@@ -510,6 +510,10 @@ CREATED=$(jq -r .created "$DX/meta.json")   # read before the rename: an untitle
 "$CLI" rename "$IDX" "" >/dev/null
 eq "untitled → Recording <date> <time>" "$("$CLI" export "$IDX" --no-open)" "$TMP/vaults/a/inbox/Recording ${CREATED:0:10} ${CREATED:11:2}-${CREATED:14:2}.md"
 "$CLI" rename "$IDX" "Tone: Test?" >/dev/null
+check "config set exportDir while a vault is still open" "$CLI" config set exportDir "$TMP/exports3"
+eq "a configured exportDir beats an autodetected vault" "$("$CLI" export "$IDX" --no-open)" "$TMP/exports3/Tone- Test-.md"
+eq "but an explicit --vault still wins over it" "$("$CLI" export "$IDX" --vault "$TMP/vaults/b" --no-open)" "$TMP/vaults/b/Tone- Test- (3).md"
+"$CLI" config set exportDir "" >/dev/null
 rm "$OBS/obsidian.json"
 eq "no Obsidian: note lands in the recording folder" "$("$CLI" export "$IDX" --no-open)" "$DX/Tone- Test-.md"
 check "config set exportDir" "$CLI" config set exportDir "$TMP/exports2"
@@ -1353,6 +1357,16 @@ DDEL=$("$CLI" show "$ID1" --json | jq -r .dir)
 check "delete --yes" "$CLI" delete "$ID1" --yes
 check "folder gone" bash -c "! test -d '$DDEL'"
 fails "delete unknown fails" "$CLI" delete 2000-01-01_000000 --yes
+# The word has to match what happened: the UI offers "Move to trash", and a
+# caller that reads "deleted" for a trashed take is being told the wrong thing.
+IDT=$("$CLI" import "$TMP/quiet.wav" --title "Verb Test")
+if command -v gio >/dev/null; then
+  eq "a trashed take is reported as trashed" "$("$CLI" delete "$IDT" --yes)" "trashed $IDT"
+else
+  eq "no gio: --permanent is reported as deleted" "$("$CLI" delete "$IDT" --yes --permanent)" "deleted $IDT"
+fi
+IDP=$("$CLI" import "$TMP/quiet.wav" --title "Verb Test 2")
+eq "--permanent is reported as deleted" "$("$CLI" delete "$IDP" --yes --permanent)" "deleted $IDP"
 
 }
 
@@ -1655,6 +1669,69 @@ check "OMARECORDER_QUIET=1 sends nothing" bash -c "rm -rf '$NOTIFY/calls'; mkdir
 "$CLI" delete "$NID" --yes >/dev/null
 }
 
+t_argcheck() {
+# Options and their values. Three shapes used to pass silently: a flag whose
+# value was missing died with bash's "unbound variable" instead of ours, a
+# mistyped --json fell through to human text with exit 0 (so a script parsing
+# it got prose), and three config keys accepted anything at all.
+IDA=$("$CLI" import "$TMP/quiet.wav" --title "Arg Test")
+
+# A flag that takes a value must be given one, and must say so itself.
+run_cli "$CLI" record start --source
+eq "record start --source with no value fails" "$RC" "1"
+check "and says so in our own voice" grep -q '^omarecorder: --source needs a value$' <<<"$ERR"
+check "not bash's unbound variable" bash -c "! grep -q 'unbound variable' <<<\"\$1\"" _ "$ERR"
+fails "import --title with no value fails" "$CLI" import "$TMP/quiet.wav" --title
+fails "transcribe --model with no value fails" "$CLI" transcribe "$IDA" --model
+fails "transcribe --threads with no value fails" "$CLI" transcribe "$IDA" --threads
+fails "trim --from with no value fails" "$CLI" trim "$IDA" --from
+fails "export --dir with no value fails" "$CLI" export "$IDA" --dir
+# An empty value is still a value: --title "" is how you clear one.
+IDB=$("$CLI" import "$TMP/quiet.wav" --title "")
+check "--title \"\" is still accepted" test -n "$IDB"
+"$CLI" delete "$IDB" --yes >/dev/null
+
+# estimate had no option loop at all: a typo silently estimated the default.
+fails "estimate rejects a mistyped flag" "$CLI" estimate "$IDA" --mdoel small.en
+fails "estimate --model with no value fails" "$CLI" estimate "$IDA" --model
+check "estimate still works spelled right" bash -c "$CLI estimate '$IDA' --model base.en | jq -e .rtf >/dev/null"
+
+# A mistyped --json must not hand human text to something parsing JSON.
+for c in "list" "status" "models" "vaults"; do
+  fails "$c rejects --jsonn" "$CLI" $c --jsonn
+  check "$c --json still parses" bash -c "$CLI $c --json | jq -e . >/dev/null"
+done
+fails "show rejects --jsonn" "$CLI" show "$IDA" --jsonn
+fails "setup check rejects --jsonn" "$CLI" setup check --jsonn
+check "setup check --json still parses" bash -c "$CLI setup check --json | jq -e .ok >/dev/null"
+
+# config set validated six of ten keys; these three took anything.
+fails "config set defaultModel rejects an unknown model" "$CLI" config set defaultModel gibberish
+check "config set defaultModel accepts a real one" "$CLI" config set defaultModel small.en
+"$CLI" config set defaultModel base.en >/dev/null
+fails "config set language rejects garbage" "$CLI" config set language zzzz
+check "config set language accepts a two-letter code" "$CLI" config set language de
+"$CLI" config set language en >/dev/null
+: > "$TMP/notadir"
+fails "config set exportDir rejects a file" "$CLI" config set exportDir "$TMP/notadir"
+check "config set exportDir accepts a directory it will create" "$CLI" config set exportDir "$TMP/willmake"
+"$CLI" config set exportDir "" >/dev/null
+
+# folder was the one id-taking command with no usage line.
+run_cli "$CLI" folder
+eq "folder with no id fails" "$RC" "1"
+check "and prints a usage line" grep -q '^omarecorder: usage: folder <id>$' <<<"$ERR"
+
+# setup check promised the README every tool it calls, and listed eleven.
+eq "setup check covers every tool the README names" \
+  "$("$CLI" setup check --json | jq -r '[.tools[].tool] as $t
+     | (["voxtype","pw-record","pw-play","pactl","ffmpeg","ffprobe","jq","flock","setsid","systemd-run","systemctl","systemd-inhibit","wl-copy","gio","xdg-open","mpv","omarchy-notification-send","omarchy-launch-editor","omarchy-shell","obsidian"] - $t) | length')" "0"
+check "human setup check prints a tools table, not raw JSON" bash -c "$CLI setup check 2>/dev/null | grep -q '^tools:$' || $CLI setup check --json >/dev/null"
+check "and no line of it is compact JSON" bash -c "! $CLI setup check 2>/dev/null | grep -q '{\"tool\"'"
+
+"$CLI" delete "$IDA" --yes >/dev/null
+}
+
 t_surface() {
 # The lines a kcov pass found unreached by every other section (#63): the
 # usage errors each dispatcher prints, the human-readable output a terminal
@@ -1751,7 +1828,7 @@ kill "$SP" 2>/dev/null; wait "$SP" 2>/dev/null
 
 # -------------------------------------------------------------------- run ---
 SECTIONS=(basics import levels list rename note security locking recovery export trim tidy dictionary polish
-          guards models download search resume stopconfirm startfail stopfail txfail detached repair metafail ids notify surface play
+          guards argcheck models download search resume stopconfirm startfail stopfail txfail detached repair metafail ids notify surface play
           transcribe meter record delete setup)
 if [[ "${1:-}" == "--list" ]]; then printf '%s\n' "${SECTIONS[@]}"; exit 0; fi
 # A misspelt filter must not pass as "passed: 0 failed: 0".

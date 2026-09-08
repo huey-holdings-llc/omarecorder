@@ -86,6 +86,16 @@ notify() { # notify <headline> [description] [-- exec args...]
   fi
 }
 
+# need_val <flag> [value...]: a flag that takes a value must be given one.
+# Called as `need_val "$@"` from inside the case arm, so $# counts what is left.
+# Without it a missing value trips "unbound variable" under set -u, which is
+# bash's error message rather than ours. An empty value is still allowed: it is
+# meaningful for --title.
+need_val() { (( $# >= 2 )) || die "$1 needs a value"; }
+# want_json [args...]: true for --json, false for no argument. Anything else is
+# a typo, and a typo must not quietly hand human text to something parsing JSON.
+want_json() { case "${1:-}" in --json) return 0 ;; "") return 1 ;; *) die "unknown option: $1" ;; esac; }
+
 fmt_hms() { local s=${1%.*}; s=${s:-0}; printf '%02d:%02d:%02d' $((s / 3600)) $((s % 3600 / 60)) $((s % 60)); }
 
 # Atomic JSON write: write_json <file> <json>. An empty document is refused —
@@ -143,7 +153,11 @@ cmd_config() {
       case "$key" in
         recordingsDir) local d="${val/#\~/$HOME}"; [[ -d "$d" && -w "$d" ]] || die "recordingsDir must be an existing writable directory: $val" ;;
         obsidianVault) [[ -z "$val" || -d "${val/#\~/$HOME}" ]] || die "obsidianVault must be an existing directory (or \"\" for automatic): $val" ;;
-        defaultModel|language|exportDir) ;;
+        defaultModel) jq -e --arg m "$val" 'any(.[]; .name == $m)' <<<"$MODEL_CATALOG" >/dev/null \
+          || die "unknown model: $val (see: omarecorder models)" ;;
+        language) [[ "$val" =~ ^(auto|[a-z][a-z])$ ]] || die "language must be auto or a two-letter code (en, de, fr)" ;;
+        exportDir) local ed="${val/#\~/$HOME}"
+          [[ -z "$val" || ! -e "$ed" || -d "$ed" ]] || die "exportDir is a file, not a directory: $val" ;;
         defaultSource) [[ "$val" =~ ^(mic|system|both)$ ]] || die "defaultSource must be mic|system|both" ;;
         keepAwake) [[ "$val" =~ ^(true|false)$ ]] || die "keepAwake must be true|false" ;;
         autoTranscribe) [[ "$val" =~ ^(true|false)$ ]] || die "autoTranscribe must be true|false" ;;
@@ -171,7 +185,7 @@ save_state() { write_json "$STATE_FILE" "$(jq -c '.version = ((.version // 0) + 
 # long: reconcile does its ffmpeg work outside it. OMARECORDER_LOCK_WAIT: tests.
 with_lock() {
   mkdir -p "$RUN_DIR"
-  ( flock -w "${OMARECORDER_LOCK_WAIT:-30}" 9 || { log "state lock timeout: $*"; exit 1; }; "$@" ) 9>>"$STATE_LOCK"
+  ( flock -w "${OMARECORDER_LOCK_WAIT:-30}" 9 || { log "state lock timeout: $*"; echo "omarecorder: timed out waiting for the state lock; another omarecorder is busy (details: $LOG_FILE)" >&2; exit 1; }; "$@" ) 9>>"$STATE_LOCK"
 }
 _bump_state() { save_state "$(read_state)"; }
 _state_set() { save_state "$(jq -c "$@" <<<"$(read_state)")"; }
@@ -499,8 +513,8 @@ record_start() {
   local source; source=$(cfg defaultSource); local title=""
   while [[ $# -gt 0 ]]; do
     case "$1" in
-      --source) source="$2"; shift 2 ;;
-      --title) title="$2"; shift 2 ;;
+      --source) need_val "$@"; source="$2"; shift 2 ;;
+      --title) need_val "$@"; title="$2"; shift 2 ;;
       *) die "unknown option: $1" ;;
     esac
   done
@@ -974,6 +988,7 @@ _meter_loop() {
 
 # ------------------------------------------------------------ status -------
 cmd_status() {
+  local as_json=0; want_json "$@" && as_json=1
   reconcile_state
   local st; st=$(read_state)
   local out; out=$(jq -c --argjson now "$(now_epoch)" --arg mdir "$VOXTYPE_MODELS_DIR" '
@@ -983,7 +998,7 @@ cmd_status() {
           and (([.jobs[] | select(.type == "transcribe" and .id == $ls.id)] | length) == 0)
         then ($ls + {stopped_ago_s: ($now - ($ls.stopped_at // $now))}) else null end)' <<<"$st")
   # Download progress (bytes_done) is written into the job by _dl_worker itself.
-  if [[ "${1:-}" == "--json" ]]; then jq . <<<"$out"; return 0; fi
+  if (( as_json )); then jq . <<<"$out"; return 0; fi
   if [[ $(jq -r '.recording != null' <<<"$out") == "true" ]]; then
     echo "recording $(jq -r '.recording.id' <<<"$out") ($(fmt_hms "$(jq -r '.recording.elapsed_s' <<<"$out")"), $(jq -r '.recording.source' <<<"$out"))"
   else echo "idle"; fi
@@ -994,7 +1009,7 @@ cmd_status() {
 cmd_import() {
   local src="" move=0 title=""
   while [[ $# -gt 0 ]]; do
-    case "$1" in --move) move=1; shift ;; --title) title="$2"; shift 2 ;; -*) die "unknown option: $1" ;; *) src="$1"; shift ;; esac
+    case "$1" in --move) move=1; shift ;; --title) need_val "$@"; title="$2"; shift 2 ;; -*) die "unknown option: $1" ;; *) src="$1"; shift ;; esac
   done
   src="${src/#\~/$HOME}"
   [[ -f "$src" ]] || die "file not found: $src"
@@ -1042,6 +1057,7 @@ cmd_search() {
 }
 
 cmd_list() {
+  local as_json=0; want_json "$@" && as_json=1
   mkdir -p "$ROOT"
   # Seed before the freshness checks below: on an upgrade every tidy file is
   # current and nothing else would ever create the starter dictionary, and the
@@ -1069,7 +1085,7 @@ cmd_list() {
     done < <(find "$ROOT" -mindepth 1 -maxdepth 1 -type d -name '????-??-??_??????*' | sort -r) | jq -sc '.'
   )
   [[ -n "$arr" ]] || arr='[]'
-  if [[ "${1:-}" == "--json" ]]; then jq . <<<"$arr"; return 0; fi
+  if (( as_json )); then jq . <<<"$arr"; return 0; fi
   # A human at an empty terminal deserves a next step; scripts (no tty) keep
   # getting the clean empty output they parse.
   if [[ "$arr" == "[]" && -t 1 ]]; then echo "No recordings yet. Start one with: omarecorder record start"; return 0; fi
@@ -1095,7 +1111,7 @@ cmd_trim() {
   local id="${1:-}" from="" to="" replace=0 restore=0; [[ -n "$id" ]] || die "$usage"; shift
   while [[ $# -gt 0 ]]; do
     case "$1" in
-      --from) from="${2:-}"; shift 2 ;; --to) to="${2:-}"; shift 2 ;;
+      --from) need_val "$@"; from="$2"; shift 2 ;; --to) need_val "$@"; to="$2"; shift 2 ;;
       --replace) replace=1; shift ;; --restore) restore=1; shift ;;
       *) die "unknown option: $1" ;;
     esac
@@ -1120,7 +1136,7 @@ cmd_trim() {
   [[ -f "$dir/audio.wav" ]] || die "no audio.wav in $dir"
   local dur; dur=$(jq -r '.duration_s // 0' "$dir/meta.json")
   awk -v b="$to" -v d="$dur" 'BEGIN{exit !(b <= d + 1)}' || die "--to is past the end of the recording (${dur} s)"
-  local tmp="$dir/audio.trim.tmp.wav"
+  local tmp="$dir/audio.trim.tmp.$$.wav"   # $$: two trims of one take must not share a temp
   ffmpeg -v error -y -ss "$from" -to "$to" -i "$dir/audio.wav" -c copy "$tmp" 2>>"$LOG_FILE" || { rm -f "$tmp"; die "ffmpeg could not cut $id (details: $LOG_FILE)"; }
   (( $(file_size "$tmp") > 44 )) || { rm -f "$tmp"; die "that range holds no audio"; }   # 44 bytes = a bare WAV header
   if (( ! replace )) && [[ ! -f "$dir/audio.orig.wav" ]]; then mv "$dir/audio.wav" "$dir/audio.orig.wav"; fi
@@ -1138,8 +1154,9 @@ cmd_trim() {
 
 cmd_show() {
   local id="${1:-}"; [[ -n "$id" ]] || die "usage: show <id> [--json]"
+  local as_json=0; want_json "${@:2}" && as_json=1
   local dir; dir=$(require_dir "$id")
-  if [[ "${2:-}" == "--json" ]]; then rec_json "$dir" --with-text | jq .; else
+  if (( as_json )); then rec_json "$dir" --with-text | jq .; else
     read_meta "$dir" | jq .
     if [[ -f "$dir/transcript.md" ]]; then echo; cat "$dir/transcript.md"; fi
   fi
@@ -1182,12 +1199,13 @@ cmd_delete() {
     [[ -t 0 ]] || die "refusing to delete $id without --yes (no terminal to confirm on)"
     read -r -p "Delete '$dir'? [y/N] " a; [[ "$a" =~ ^[Yy]$ ]] || exit 1
   fi
+  local verb=deleted
   if (( permanent )); then rm -rf "$dir"; log "delete $id (permanent)"
-  elif have gio && gio trash "$dir" 2>>"$LOG_FILE"; then log "delete $id (trash)"
+  elif have gio && gio trash "$dir" 2>>"$LOG_FILE"; then log "delete $id (trash)"; verb=trashed
   else die "could not move $id to the trash (gio); use --permanent to delete it for good"; fi
   # A deleted take can never be resumed; withdraw its offer with it.
   state_set --arg id "$id" '.last_stop = (if .last_stop != null and .last_stop.id == $id then null else .last_stop end)'
-  echo "deleted $id"
+  echo "$verb $id"
 }
 
 # copy <id> [--print]: transcript text (without the header line) to the clipboard
@@ -1227,6 +1245,7 @@ vault_json() { # vault_json <path> <open:true|false> <ts>
 
 # vaults [--json]: the vaults Obsidian knows about, open one first, then most recent.
 cmd_vaults() {
+  local as_json=0; want_json "$@" && as_json=1
   local arr='[]' p o t
   if [[ -f "$OBSIDIAN_JSON" ]]; then
     while IFS=$'\t' read -r p o t; do
@@ -1235,7 +1254,7 @@ cmd_vaults() {
     done < <(jq -r '.vaults // {} | to_entries[] | .value | [(.path // ""), (.open == true), ((.ts // 0) | tonumber? // 0)] | @tsv' "$OBSIDIAN_JSON" 2>/dev/null || true)
     arr=$(jq -c 'sort_by((if .open then 0 else 1 end), -.ts)' <<<"$arr")
   fi
-  if [[ "${1:-}" == "--json" ]]; then jq . <<<"$arr"; return 0; fi
+  if (( as_json )); then jq . <<<"$arr"; return 0; fi
   jq -r '.[] | "\(if .open then "*" else " " end) \(.name)  \(.folder)"' <<<"$arr"
 }
 
@@ -1245,7 +1264,7 @@ cmd_vaults() {
 # and with no Obsidian at all the note sits next to the recording.
 resolve_export_target() {
   local recdir="$1" vault="" dir=""; shift
-  while [[ $# -gt 0 ]]; do case "$1" in --vault) vault="${2:-}"; shift 2 ;; --dir) dir="${2:-}"; shift 2 ;; *) die "unknown option: $1" ;; esac; done
+  while [[ $# -gt 0 ]]; do case "$1" in --vault) need_val "$@"; vault="$2"; shift 2 ;; --dir) need_val "$@"; dir="$2"; shift 2 ;; *) die "unknown option: $1" ;; esac; done
   if [[ -n "$dir" ]]; then printf '%s\t\n' "${dir/#\~/$HOME}"; return 0; fi
   [[ -n "$vault" ]] || vault=$(cfg obsidianVault)
   if [[ -n "$vault" ]]; then
@@ -1253,10 +1272,13 @@ resolve_export_target() {
     [[ -d "$vault" ]] || die "vault not found: $vault"
     printf '%s\t%s\n' "$(vault_folder "$vault")" "$vault"; return 0
   fi
-  local first; first=$(cmd_vaults --json | jq -r '.[0] | select(. != null) | [.folder, .path] | @tsv')
-  if [[ -n "$first" ]]; then printf '%s\n' "$first"; return 0; fi
+  # A configured exportDir is a decision the user made; an autodetected vault is
+  # a guess this script made. The decision wins, or exportDir could never take
+  # effect on any machine that has Obsidian installed.
   local ed; ed=$(cfg exportDir)
   if [[ -n "$ed" ]]; then printf '%s\t\n' "${ed/#\~/$HOME}"; return 0; fi
+  local first; first=$(cmd_vaults --json | jq -r '.[0] | select(. != null) | [.folder, .path] | @tsv')
+  if [[ -n "$first" ]]; then printf '%s\n' "$first"; return 0; fi
   printf '%s\t\n' "$recdir"
 }
 
@@ -1274,7 +1296,7 @@ cmd_export() {
   local -a target=(); local open=1 raw=""
   while [[ $# -gt 0 ]]; do
     case "$1" in
-      --vault|--dir) [[ -n "${2:-}" ]] || die "$1 needs a path"; target+=("$1" "$2"); shift 2 ;;
+      --vault|--dir) need_val "$@"; [[ -n "$2" ]] || die "$1 needs a path"; target+=("$1" "$2"); shift 2 ;;
       --no-open) open=0; shift ;;
       --raw) raw=raw; shift ;;
       *) die "unknown option: $1" ;;
@@ -1485,6 +1507,7 @@ cmd_dictionary() {
       bump_state; echo "added: $h -> $w" ;;
     edit)
       seed_dictionary
+      have xdg-open || die "xdg-open not found (package: xdg-utils); the file is $DICT_FILE"
       setsid xdg-open "$DICT_FILE" >/dev/null 2>&1 < /dev/null &
       echo "$DICT_FILE" ;;
     prompt)
@@ -1671,6 +1694,7 @@ model_rtf() { # measured or default
   jq -r --arg m "$m" '.[] | select(.name==$m) | .rtf' <<<"$MODEL_CATALOG"
 }
 cmd_models() {
+  local as_json=0; want_json "$@" && as_json=1
   local bench='{}'; [[ -f "$BENCH_FILE" ]] && bench=$(jq -c . "$BENCH_FILE")
   local out; out=$(jq -c --arg mdir "$VOXTYPE_MODELS_DIR" --argjson bench "$bench" --arg def "$(cfg defaultModel)" '
     map(. + {installed: false, default: (.name == $def), rtf_source: "default"}
@@ -1681,7 +1705,7 @@ cmd_models() {
     if model_installed "$name"; then m=$(jq -c '.installed=true' <<<"$m"); fi
     res=$(jq -c --argjson m "$m" '. + [$m]' <<<"$res")
   done < <(jq -c '.[]' <<<"$out")
-  if [[ "${1:-}" == "--json" ]]; then jq . <<<"$res"; return 0; fi
+  if (( as_json )); then jq . <<<"$res"; return 0; fi
   jq -r '.[] | "\(if .installed then "✓" else " " end) \(.name)\t\(.size_mb) MB\t~\(.rtf)x realtime (\(.rtf_source))\t\(.label)"' <<<"$res"
 }
 
@@ -1810,7 +1834,11 @@ _dl_worker() {
 
 cmd_estimate() {
   local id="${1:-}" model=""; [[ -n "$id" ]] || die "usage: estimate <id> --model <name>"
-  [[ "${2:-}" == "--model" ]] && model="${3:-}"; model="${model:-$(cfg defaultModel)}"
+  shift
+  while [[ $# -gt 0 ]]; do
+    case "$1" in --model) need_val "$@"; model="$2"; shift 2 ;; *) die "unknown option: $1" ;; esac
+  done
+  model="${model:-$(cfg defaultModel)}"
   jq -e --arg m "$model" '.[] | select(.name==$m)' <<<"$MODEL_CATALOG" >/dev/null || die "unknown model: $model"
   local dir; dir=$(require_dir "$id")
   local dur rtf src="default"; dur=$(jq -r '.duration_s // 0' "$dir/meta.json"); rtf=$(model_rtf "$model")
@@ -1826,8 +1854,10 @@ cmd_transcribe() {
   local enhance; enhance=$(cfg enhanceAudio)
   while [[ $# -gt 0 ]]; do
     case "$1" in
-      --model) model="$2"; shift 2 ;; --language) lang="$2"; shift 2 ;; --threads) threads="$2"; shift 2 ;;
-      --from) from="$2"; shift 2 ;; --to) to="$2"; shift 2 ;; --chunk-s) chunk_s="$2"; shift 2 ;;
+      --model) need_val "$@"; model="$2"; shift 2 ;; --language) need_val "$@"; lang="$2"; shift 2 ;;
+      --threads) need_val "$@"; threads="$2"; shift 2 ;;
+      --from) need_val "$@"; from="$2"; shift 2 ;; --to) need_val "$@"; to="$2"; shift 2 ;;
+      --chunk-s) need_val "$@"; chunk_s="$2"; shift 2 ;;
       --enhance) enhance=true; shift ;; --no-enhance) enhance=false; shift ;;
       --download) dl=1; shift ;; *) die "unknown option: $1" ;;
     esac
@@ -2124,14 +2154,23 @@ cmd_open() {
   local id="${1:-}"; [[ -n "$id" ]] || die "usage: open <id>"
   local dir; dir=$(require_dir "$id")
   local f="$dir/transcript.md"; [[ -f "$f" ]] || die "no transcript yet for $id"
-  if have omarchy-launch-editor; then omarchy-launch-editor "$f"; else xdg-open "$f"; fi
+  if have omarchy-launch-editor; then omarchy-launch-editor "$f"
+  elif have xdg-open; then xdg-open "$f"
+  else die "no editor to open it with (install xdg-utils); the transcript is $f"; fi
 }
-cmd_folder() { local dir; dir=$(require_dir "${1:-}"); setsid xdg-open "$dir" >/dev/null 2>&1 < /dev/null & echo "$dir"; }
+cmd_folder() {
+  local id="${1:-}"; [[ -n "$id" ]] || die "usage: folder <id>"
+  local dir; dir=$(require_dir "$id")
+  have xdg-open || die "xdg-open not found (package: xdg-utils); the folder is $dir"
+  setsid xdg-open "$dir" >/dev/null 2>&1 < /dev/null &
+  echo "$dir"
+}
 cmd_library() { have omarchy-shell || die "omarchy-shell not found"; omarchy-shell shell toggle "$PLUGIN_ID"; }
 
 # --------------------------------------------------------------- setup -----
 cmd_setup() {
   [[ "${1:-}" == "check" ]] || die "usage: setup check [--json]"
+  local as_json=0; want_json "${@:2}" && as_json=1
   local voxtype_ok=false backend="" mic="" root_ok=false installed='[]' m
   if have voxtype; then
     voxtype_ok=true
@@ -2146,11 +2185,20 @@ cmd_setup() {
     {"tool":"ffmpeg","package":"ffmpeg","required":true,"for":"import, mixing, levels"},
     {"tool":"ffprobe","package":"ffmpeg","required":true,"for":"durations"},
     {"tool":"jq","package":"jq","required":true,"for":"state"},
+    {"tool":"flock","package":"util-linux","required":true,"for":"state locking"},
+    {"tool":"setsid","package":"util-linux","required":true,"for":"detaching players and editors"},
     {"tool":"systemd-run","package":"systemd","required":false,"for":"background transcription"},
+    {"tool":"systemctl","package":"systemd","required":false,"for":"tracking background jobs"},
+    {"tool":"systemd-inhibit","package":"systemd","required":false,"for":"keeping the machine awake"},
     {"tool":"wl-copy","package":"wl-clipboard","required":false,"for":"copy transcript"},
     {"tool":"gio","package":"glib2","required":false,"for":"move to trash"},
     {"tool":"xdg-open","package":"xdg-utils","required":false,"for":"open folder / Obsidian"},
-    {"tool":"mpv","package":"mpv","required":false,"for":"playback"}]'
+    {"tool":"mpv","package":"mpv","required":false,"for":"playback"},
+    {"tool":"pw-play","package":"pipewire","required":false,"for":"playback without mpv"},
+    {"tool":"omarchy-notification-send","package":"omarchy","required":false,"for":"desktop notifications"},
+    {"tool":"omarchy-launch-editor","package":"omarchy","required":false,"for":"opening a transcript"},
+    {"tool":"omarchy-shell","package":"omarchy","required":false,"for":"toggling the Library"},
+    {"tool":"obsidian","package":"obsidian","required":false,"for":"opening an exported note"}]'
   local checked='[]' missing='[]' t present required_ok=true
   while IFS= read -r t; do
     present=false; have "$(jq -r .tool <<<"$t")" && present=true
@@ -2171,8 +2219,17 @@ cmd_setup() {
       ffmpeg:($tools | any(.tool=="ffmpeg" and .present)), pw_record:($tools | any(.tool=="pw-record" and .present)),
       mic:$mic, mic_ok:($mic != ""), recordingsDir:$root, recordingsDir_ok:$r,
       installed_models:$inst, defaultModel:$dm, defaultModel_ok:$dmok}')
-  if [[ "${2:-}" == "--json" ]]; then jq . <<<"$out"; else
-    jq -r 'to_entries[] | "\(.key): \(.value)"' <<<"$out"; fi
+  if (( as_json )); then jq . <<<"$out"; else
+    # Scalars as a key/value block, then the tool table: `to_entries` alone
+    # printed both arrays as one unreadable line of compact JSON.
+    jq -r 'to_entries[] | select(.value | type != "array") | "\(.key): \(.value)"' <<<"$out"
+    echo; echo "tools:"
+    jq -r 'def pad($w): . + (" " * ([$w - length, 1] | max));
+      .tools[] | "  \(if .present then "✓" else " " end) \(.tool | pad(26)) \(if .required then "required" else "optional" end)  \(.for | pad(32)) \(.package)"' <<<"$out"
+    if [[ $(jq -r '.missing | length' <<<"$out") -gt 0 ]]; then
+      echo; echo "missing:"; jq -r '.missing[] | "  \(.tool) → \(.package)"' <<<"$out"
+    fi
+  fi
   [[ $ok == true ]]
 }
 
@@ -2181,22 +2238,24 @@ usage() {
   cat <<EOF
 omarecorder $VERSION: record, keep, transcribe locally (voxtype)
 
-  record start [--source mic|system|both] [--title T]   start a recording
+  record start [--source mic|system|both] [--title T]    start a recording
   record resume                                          continue the last stopped recording
-  record stop | toggle | status [--json]                 control / inspect
+  record stop [--force] | toggle | status [--json]       control / inspect
   import <file> [--move] [--title T]                     bring an existing audio file in
   list [--json] | show <id> [--json] | analyze <id>      browse / measure levels
   search <text>                                          ids whose transcript contains the text
-  rename <id> <title> | delete <id> [--yes] [--permanent] manage (delete → trash)
+  rename <id> <title>                                    retitle (empty title clears it)
+  delete <id> [--yes] [--permanent]                      remove (trash unless --permanent)
   note <id> <text>                                       set a note on a recording (empty text clears it)
   trim <id> --from s --to s [--replace] | trim <id> --restore  cut the audio (first original kept as audio.orig.wav)
   copy <id> [--raw] [--print]                            transcript text to the clipboard
   tidy <id>                                              rebuild transcript.tidy.md (paragraphs, loops removed)
   dictionary [--json] | dictionary add <heard> <written> corrections tidy applies (whisper mishearings)
   dictionary edit | prompt [--copy] | export [path] | import <file|--clipboard>
-  export <id> [--vault P | --dir P] [--no-open] [--raw]           transcript → Obsidian note (frontmatter + text)
+  export <id> [--vault P | --dir P] [--no-open] [--raw]  transcript → Obsidian note (frontmatter + text)
   vaults [--json]                                        Obsidian vaults on this machine (* = open)
-  transcribe <id> [--model M] [--language L] [--from s --to s] [--chunk-s N] [--enhance|--no-enhance] [--download]
+  transcribe <id> [--model M] [--language L] [--threads N] [--from s --to s]
+              [--chunk-s N] [--enhance|--no-enhance] [--download]
   cancel <id> | estimate <id> --model M
   models [--json] | model download <name> | model cancel <name>
   play <id> [--from s] | stop-play | open <id> | folder <id>
