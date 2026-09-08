@@ -48,6 +48,21 @@ All notable changes to this project are documented here. Format follows
   notification click action's argv, and the player's pid handling. The
   long-take stop confirmation and busy guards moved from the real-mic block
   to the fake stack. A suite-end check fails on any temp file left behind.
+- A local kcov pass over the CLI test suite (not a CI gate, and it never will
+  be; CONTRIBUTING says how to run one) found the lines no test reached, and
+  a `surface` section now covers them: the usage error of every dispatcher,
+  the human-readable output of `status`, `models` and `setup check`, the
+  wl-clipboard paths of `copy`, `dictionary prompt --copy` and `dictionary
+  import --clipboard`, the editor and shell hand-offs of `open`, `dictionary
+  edit` and `library`, the notify-send fallback, the `/run/user` fallback
+  when `XDG_RUNTIME_DIR` is unset, and a dictionary import with nothing
+  usable. Three behaviour-neutral touches make the CLI traceable end to end,
+  because kcov 43 stops recording a bash process once it traces a word that
+  holds both a newline and a single quote, and cannot parse a script with a
+  backslash-octal escape: the tidy awk program receives its one single quote
+  (in the sentence-end regex) through `-v sq="'"`, its empty-word sentinel is
+  `-` instead of `\001`, and the title and note sanitizers strip `[:cntrl:]`
+  instead of an octal range (DEL now becomes a space too).
 - The decisions the shell used to make inline in QML now live in `ui/state.js`
   as pure functions with node tests: which state changes are worth a re-list
   (and when an unchanged signature still is), which download finished, which

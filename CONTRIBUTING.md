@@ -65,6 +65,21 @@ to them is easy to merge; one that breaks them will get a conversation first.
   runs them, and qmllint, when node and the shell's QML modules are on the
   machine. Logic that can be a pure function belongs in those files, not in
   QML, so it can be tested.
+* **Coverage is a local, occasional check, never a gate.** `pacman -S kcov`,
+  then `kcov --include-path=$PWD/bin coverage/ tests/cli.test.sh` writes an
+  HTML report under `coverage/` (the suite takes its usual seven minutes;
+  kcov follows the CLI as a child process). Read it for branches no test
+  reaches; do not wire it into CI or set a threshold. Two things to know
+  when reading it: a line kcov marks unhit inside a multi-line `jq` or `awk`
+  program, or a `done < <(...)` loop terminator, is not code bash ever
+  reports, so it is not a gap; and kcov 43 stops recording a bash process the
+  moment it traces a command whose expanded word holds both a newline and a
+  single quote (bash prints that as `$'...\'...'` and kcov's reader loses the
+  stream), and it fails to parse a script containing a backslash-octal
+  escape such as `\001`. That is why the tidy awk program takes its one
+  single quote through `-v sq="'"`, its empty-word sentinel is `-`, and the
+  sanitizers strip `[:cntrl:]` rather than an octal range. Keep it that way
+  or the report goes dark from that line on.
 * **Small pull requests** with one change each merge faster than one big one.
 * **Second-model review**: larger pull requests get a review from OpenAI
   Codex, requested by the maintainer with a `@codex review` comment. Treat its
