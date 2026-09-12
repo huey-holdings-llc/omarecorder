@@ -125,8 +125,12 @@ most needs someone who knows more than its author:
   route (#70) except two: "Re-transcribe in shorter pieces" under a loop
   warning, and cancelling a running transcription, which stays mouse-only on
   purpose so a stray Enter can never stop an hour-long job. Icon buttons carry
-  an accessible name and their shortcut. Nobody has tried it with a real
-  screen reader yet. Contrast was
+  an accessible name and their shortcut, but a screen reader cannot reach them
+  yet. With Orca 50.2 on Omarchy 4.0.3 (Quickshell 0.3.1), the shell registers
+  on the accessibility bus but exposes no windows at all, so Orca finds no
+  active window and announces nothing in the popup, the Library or the rest of
+  the shell. That needs Quickshell to expose its layer-shell windows; the
+  names are in place for when it does. Contrast was
   measured in September 2026 across the 22 built-in themes: foreground on
   background clears 4.5:1 in all of them, but the dimmer secondary text
   (`Qt.darker(foreground, 1.55)`, the same derivation Omarchy's own panels
