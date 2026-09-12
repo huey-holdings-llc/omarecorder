@@ -121,8 +121,46 @@ most needs someone who knows more than its author:
   other Omarchy themes, a vertical bar, more than one monitor, or a high-DPI
   screen are all valuable. So is anything that makes a screen easier to read
   without adding controls.
-* **Accessibility.** Keyboard reach is good; screen reader behaviour and
-  contrast under every theme have not been checked.
+* **Accessibility.** Everything in the popup and the Library can be worked
+  from the keyboard (#70), and icon buttons carry an accessible name and their
+  shortcut. Nobody has tried it with a real screen reader yet. Contrast was
+  measured in September 2026 across the 22 built-in themes: foreground on
+  background clears 4.5:1 in all of them, but the dimmer secondary text
+  (`Qt.darker(foreground, 1.55)`, the same derivation Omarchy's own panels
+  use) falls short in seven dark themes and comes out darker rather than dimmer
+  on light ones. OmaRecorder matches the kit on purpose; the fix belongs in
+  Omarchy, where it would help every plugin.
+
+  <details><summary>Contrast by theme (WCAG ratio against the background)</summary>
+
+  | Theme | Foreground | Dim text (1.55) | Captions (1.4) |
+  |---|---|---|---|
+  | catppuccin | 11.34 | 4.77 | 5.77 |
+  | catppuccin-latte | 7.06 | 11.17 | 10.18 |
+  | ethereal | 13.67 | 5.69 | 6.93 |
+  | everforest | 7.38 | 3.18 ✗ | 3.79 ✗ |
+  | flexoki-light | 18.62 | 19.35 | 19.24 |
+  | gruvbox | 8.16 | 3.52 ✗ | 4.21 ✗ |
+  | hackerman | 17.45 | 7.09 | 8.66 |
+  | kanagawa | 11.26 | 4.70 | 5.70 |
+  | last-horizon | 19.07 | 7.67 | 9.45 |
+  | lumon | 12.06 | 4.98 | 6.07 |
+  | lupine | 15.43 | 17.50 | 17.18 |
+  | matte-black | 10.08 | 4.36 ✗ | 5.21 |
+  | miasma | 8.82 | 3.82 ✗ | 4.55 |
+  | nord | 9.25 | 3.85 ✗ | 4.65 |
+  | osaka-jade | 9.65 | 4.17 ✗ | 5.03 |
+  | retro-82 | 13.39 | 5.52 | 6.74 |
+  | ristretto | 10.95 | 4.57 | 5.54 |
+  | rose-pine | 6.66 | 10.76 | 9.89 |
+  | solitude | 11.56 | 4.91 | 5.90 |
+  | tokyo-night | 8.10 | 3.60 ✗ | 4.26 ✗ |
+  | vantablack | 21.00 | 8.42 | 10.36 |
+  | white | 21.00 | 21.00 | 21.00 |
+
+  ✗ is below 4.5:1. Reproduce by reading each theme's `colors.toml` and
+  applying Qt's `darker()`, which divides the HSV value by the factor.
+  </details>
 * **Other hardware.** CPU-only machines, CUDA, different microphones and USB
   interfaces. The speed estimates and the clipping detector were tuned on one
   laptop.

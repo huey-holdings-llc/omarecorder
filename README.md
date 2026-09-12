@@ -175,9 +175,12 @@ are left untouched.
   a running `HH:MM:SS`, replaced by CLIP while the input is on the rails. An
   hourglass means a transcription is running.
 * **Popup keys**: `r` record/stop, `u` resume the last take (when offered),
-  `l` library, `i` import, `s` settings, `d` add a dictionary entry
-  (the Recent list folds away while settings are open), `Up`/`Down` and `Enter`
-  on recent rows, `Esc`.
+  `l` library, `i` import, `s` settings, `d` add a dictionary entry,
+  `Up`/`Down` (or `j`/`k`) and `Enter` on recent rows, `Esc`. With settings
+  open the Recent list folds away and the same keys walk the settings: an
+  accent bar marks the control under the cursor, and `Enter` or `Space` opens
+  a dropdown, flips a toggle, presses a button or starts editing the folder
+  field (`Enter` saves, `Esc` cancels, and the keys come back either way).
 * **Resume after a break**: stopping a recording arms a resume offer. While
   it stands, a "Resume last recording · stopped 12m ago" button sits under
   Record in the popup (the take's title is in its tooltip), and `omarecorder
@@ -195,22 +198,39 @@ are left untouched.
   joined by the normal crash recovery on the next command. This is
   deliberately not general editing; there is no appending to older takes.
 * **Library keys**: type to search titles and transcript text (transcript
-  matches join the list a beat later). `Up`/`Down`, `PgUp`/`PgDn`, `Home`/`End`
-  select. `Enter` opens the transcript, or transcribes if there is none
-  (`Shift+Enter` transcribes again). `Space` plays or pauses. The speed chip
-next to the time readout (or `Ctrl+S`; `Ctrl+Shift+S` backwards) cycles the
-playback speed (1x, 1.25x, 1.5x, 2x) for the rest of the session.
-`Left`/`Right`
-  seek 5 seconds when the search box is empty. `Ctrl+M` cycles the model
-  preset (`Ctrl+Shift+M` backwards). `F2` renames, `F3` trims (then
-  `[` and `]` mark start and end at the playhead), `Del` moves to the trash
-  (confirmed, defaults to Cancel). `Esc` leaves trim mode, then clears the
-  search, then closes.
+  matches join the list a beat later; `Ctrl+U` clears the search, as in every
+  Omarchy panel). `Up`/`Down`, `PgUp`/`PgDn`, `Home`/`End` select. `Enter`
+  opens the transcript, or transcribes if there is none (`Shift+Enter`
+  transcribes again). `Space` plays or pauses, and `Left`/`Right` seek 5
+  seconds when the search box is empty. `Del` moves to the trash (confirmed,
+  defaults to Cancel). `Esc` leaves trim mode, then clears the search, then
+  closes.
+* **Hold Ctrl for the rest**: hold `Ctrl` for a moment and every shortcut
+  shows as a small badge on its control, so the footer only lists the keys
+  above. The F-row is never needed; the F-keys that exist still work.
+
+  | Key | Does | Also |
+  |---|---|---|
+  | `Ctrl+R` | rename | `F2` |
+  | `Ctrl+N` | edit the note | |
+  | `Ctrl+T` | trim mode (`[` and `]` mark start and end at the playhead) | `F3` |
+  | `Ctrl+Shift+T` | restore the untrimmed original | |
+  | `Ctrl+D` | switch between the tidy and raw transcript | `F4` |
+  | `Ctrl+P` | show the previous transcript, after a re-transcribe | |
+  | `Ctrl+M` | next model preset (`Ctrl+Shift+M` goes back) | |
+  | `Ctrl+S` | playback speed, 1x to 2x, kept for the session (`Ctrl+Shift+S` back) | speed chip |
+  | `Ctrl+C` | copy the transcript | |
+  | `Ctrl+O` | send the transcript to Obsidian | |
+  | `Ctrl+E` | open the take's folder | |
+  | `Ctrl+X` | cancel a model download | |
+
+  On a narrow screen the footer drops its least useful keys first, so it never
+  cuts off mid-line.
 * **Notes**: every recording has a free-text note, shown as an "Add a note" box
   under the transcript in the Library and set from the CLI with `omarecorder
   note <id> <text>` (empty text clears it). It is stored in the take's
-  `meta.json` and travels into the Obsidian note on export. The box is
-  click-to-edit; there is no key for it yet.
+  `meta.json` and travels into the Obsidian note on export. `Ctrl+N` puts the
+  cursor in the box (`Enter` saves, `Esc` cancels).
 * **When something fails**: the popup and the Library show the error in red
   above the content, with a × to dismiss it. A read that fails (the recordings
   list, the model catalogue) names itself there rather than leaving a surface
@@ -262,11 +282,11 @@ playback speed (1x, 1.25x, 1.5x, 2x) for the rest of the session.
   seek, `Space` to play or pause. Playback runs in mpv, driven over its IPC
   socket and started only while something plays; `omarecorder play` uses the
   same player from the CLI. The
-  scissors button (or `F3`) enters trim mode: two drag handles with start and
+  scissors button (or `Ctrl+T`, or `F3`) enters trim mode: two drag handles with start and
   end badges, or play and press `[` and `]` to mark the range at the playhead.
   Preview plays the range, Trim asks once ("Keep 00:12 to 24:36 and cut the
   rest?") and cuts losslessly (`-c copy`). The first original is kept as
-  `audio.orig.wav` and a restore button appears while it exists. The meta line
+  `audio.orig.wav` and a restore button (`Ctrl+Shift+T`) appears while it exists. The meta line
   says "trimmed", an existing transcript is flagged stale until you transcribe
   again, and the raw `mic.wav` and `system.wav` of a "both" take are never
   touched. Recordings made before 1.0 get their waveform drawn the first time
@@ -508,6 +528,11 @@ there, so those stay as they are.
   this case.
 * **Something missing?** `omarecorder setup check` lists every tool with its
   package and whether a microphone and the recordings folder are usable.
+* **The popup says "Service unavailable"**: since Omarchy 4.0.3 only the
+  built-in bar hands a plugin its own service. A third-party replacement bar
+  gets a restricted handle with no services, so the bar widget cannot reach the
+  recorder there. Use the built-in bar, or record with `omarecorder record
+  toggle` on a keybinding (see Keybinding and menu above).
 * **A transcription looks stuck**: `systemctl --user status omarecorder-tx-<id>`
   (downloads: `omarecorder-dl-<model>`, dots replaced by dashes). `omarecorder
   status` drops finished units from the state on its own; `omarecorder cancel

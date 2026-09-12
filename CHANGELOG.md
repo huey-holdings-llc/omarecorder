@@ -3,6 +3,43 @@
 All notable changes to this project are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow SemVer.
 
+## [Unreleased]
+
+### Added
+- Every Library action has a Ctrl key, so the F-row is never needed: `Ctrl+N`
+  note, `Ctrl+R` rename, `Ctrl+T` trim, `Ctrl+Shift+T` restore the original,
+  `Ctrl+D` tidy or raw, `Ctrl+P` previous transcript, `Ctrl+E` open the folder
+  and `Ctrl+X` cancel a model download. F2, F3 and F4 still work.
+- Hold `Ctrl` in the Library and each shortcut shows as a small badge on its
+  control, only where the control is showing.
+- The popup's settings can be worked from the keyboard. With settings open,
+  `Up`/`Down` (or `j`/`k`) walk the controls, an accent bar marks the one under
+  the cursor, and `Enter` or `Space` works it.
+- Icon buttons give a screen reader their shortcut as the accessible
+  description.
+
+### Changed
+- The Library's footer lists only the keys that are not Ctrl keys, ends with
+  "hold Ctrl for shortcuts", and is measured item by item: on a narrow screen
+  it drops its least useful keys first instead of cutting off mid-line.
+- The setup card names the package to install, `(pacman -S <package>)`, the
+  way the CLI's own hints do, instead of printing a `sudo` command.
+- The README's development section says where to put the source instead of
+  spelling out a clone command.
+
+### Fixed
+- `Esc` in the Library's title or note field, or in the popup's recordings
+  folder field, detached the field from what it shows. Every recording
+  selected afterwards kept the old text, and `Enter` in the title field then
+  renamed that recording with the old name. It had been there since 1.4.1;
+  the new `Ctrl+R` and `Ctrl+N` made it easy to hit.
+- Saving or cancelling a settings field, or adding a dictionary entry, in the
+  popup let go of the keyboard with nothing to take it back, so the popup's
+  keys did nothing until it was reopened.
+- `stop-play` left mpv's IPC socket behind in the runtime directory.
+- The shell logged a missing `state.json` on every start after a boot, before
+  the CLI had first run.
+
 ## [1.4.1] - 2026-09-08
 
 ### Fixed
