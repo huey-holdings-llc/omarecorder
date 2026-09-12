@@ -47,7 +47,7 @@ Panel {
   implicitHeight: button.implicitHeight
 
   onOpenedChanged: if (opened) {
-    cursorActive = false; cursorIndex = -1
+    cursorActive = false; cursorIndex = -1; settingsSection.resetCursor()
     if (panelFlick) panelFlick.contentY = 0
     if (ready) svc.refresh()
     Qt.callLater(function() { keyCatcher.forceActiveFocus() })
@@ -58,7 +58,7 @@ Panel {
   // follows the bottom until the user takes over or settings close.
   property bool settingsFollowBottom: false
   onSettingsOpenChanged: {
-    cursorActive = false; cursorIndex = -1
+    cursorActive = false; cursorIndex = -1; settingsSection.resetCursor()
     settingsFollowBottom = settingsOpen
     Qt.callLater(function() {
       if (!panelFlick) return
@@ -66,16 +66,27 @@ Panel {
     })
   }
 
+  // With settings open the cursor walks the settings instead of Recent
+  // (which folds away), so the keyboard reaches every control the mouse can.
   function moveCursor(dy) {
-    if (recent.length === 0 || settingsOpen) return
+    if (settingsOpen) { settingsSection.moveCursor(dy); return }
+    if (recent.length === 0) return
     cursorActive = true
     cursorIndex = Math.max(0, Math.min(recent.length - 1, cursorIndex + dy))
   }
   function activateCursor() {
+    if (settingsOpen) { settingsSection.activateCursor(); return }
     if (!cursorActive || cursorIndex < 0 || cursorIndex >= recent.length) return
     var r = recent[cursorIndex]
     if (r.id === svc.activeId) return
     if (r.has_transcript) svc.openTranscript(r.id); else svc.transcribe(r.id)
+  }
+  // Keeps the settings control under the cursor inside the scrolled popup.
+  function ensureVisible(item) {
+    if (!panelFlick || !item) return
+    var y = item.mapToItem(column, 0, 0).y
+    if (y < panelFlick.contentY) panelFlick.contentY = y
+    else if (y + item.height > panelFlick.contentY + panelFlick.height) panelFlick.contentY = y + item.height - panelFlick.height
   }
   function toggleRecording() { if (ready) svc.toggleRecording() }
   // Import = a path field in the popup. (A QtQuick FileDialog crashes
@@ -394,6 +405,8 @@ Panel {
 
           SettingsSection {
             id: settingsSection
+            onCursorMoved: function(item) { root.settingsFollowBottom = false; root.ensureVisible(item) }
+            onDoneEditing: keyCatcher.forceActiveFocus()
             visible: root.settingsOpen && root.ready
             width: parent.width
             svc: root.svc
@@ -416,7 +429,8 @@ Panel {
         // non-breaking spaces keep each key with its word, so a wrap can
         // only happen at a separator, never between "d" and "dictionary".
         wrapMode: Text.Wrap
-        text: "r record · " + (root.ready && root.svc.resumable && !root.recording ? "u resume · " : "")
+        text: root.settingsOpen ? "↑↓ move · Enter change · d dictionary · s settings · Esc close"
+              : "r record · " + (root.ready && root.svc.resumable && !root.recording ? "u resume · " : "")
               + "l library · i import · s settings · d dictionary · Esc close"
         color: root.dim
         font.family: root.fontFamily
