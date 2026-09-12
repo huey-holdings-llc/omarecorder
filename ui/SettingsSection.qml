@@ -115,7 +115,7 @@ Item {
         foreground: root.foreground
         font.family: root.fontFamily
         onAccepted: { if (root.svc && text.length) root.svc.setConfig("recordingsDir", text); focus = false; root.doneEditing() }
-        Keys.onEscapePressed: { text = root.cfg.recordingsDir || ""; focus = false; root.doneEditing() }
+        Keys.onEscapePressed: { text = Qt.binding(function() { return root.cfg.recordingsDir || "" }); focus = false; root.doneEditing() }
       }
     }
     Dropdown {
