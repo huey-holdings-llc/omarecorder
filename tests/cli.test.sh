@@ -121,7 +121,11 @@ cat > "$FAKEAUDIO/pw-record" <<STUBEOF
 [ -n "\${PWREC_DELAY:-}" ] && sleep "\$PWREC_DELAY"
 for f in "\$@"; do :; done   # the output file is the last argument
 cp "$TMP/quiet.wav" "\$f"
-exec sleep 600
+# Stay a process named pw-record (no exec): the CLI checks a recorder pid's name
+# before it signals it. Leave promptly on SIGINT, as the real recorder does.
+trap 'kill "\$c" 2>/dev/null; exit 0' INT TERM
+sleep 600 & c=\$!
+wait "\$c"
 STUBEOF
 chmod +x "$FAKEAUDIO/pactl" "$FAKEAUDIO/pw-record"
 FAKEPATH="$FAKEAUDIO:$PATH"
@@ -147,12 +151,23 @@ STUBEOF
 STUBFAIL="$TMP/voxfail"; mkdir -p "$STUBFAIL"  # failure: download never produces the file
 printf '#!/bin/bash\nexit 1\n' > "$STUBFAIL/voxtype"
 chmod +x "$STUB/voxtype" "$STUBSNAP/voxtype" "$STUBFAIL/voxtype"
-mkstoprec() { # <id> <title>: hand-built live recording with a harmless pid
+# A stand-in for a live recorder. It is named pw-record because the CLI checks a
+# pid's name before it signals it (pids get recycled), and it leaves promptly on
+# SIGINT, as the real one does.
+FAKEREC="$TMP/fakerec"; mkdir -p "$FAKEREC"
+cat > "$FAKEREC/pw-record" <<'REC'
+#!/bin/bash
+trap 'kill "$c" 2>/dev/null; exit 0' INT TERM
+sleep 60 & c=$!
+wait "$c"
+REC
+chmod +x "$FAKEREC/pw-record"
+mkstoprec() { # <id> <title>: hand-built live recording with a stand-in recorder
   local dir="$OMARECORDER_DIR/$1 $2"
   mkdir -p "$dir"; cp "$TMP/quiet.wav" "$dir/audio.wav"
   jq -cn --arg id "$1" --arg ttl "$2" '{id:$id,title:$ttl,source:"mic",created:"2026-01-06T01:01:01+0000",duration_s:null,size_bytes:0,sample_rate:16000,transcript:null,notes:""}' > "$dir/meta.json"
   # stdout redirected so the $(...) capture is not held open by the child
-  sleep 60 >/dev/null 2>&1 & local spid=$!
+  "$FAKEREC/pw-record" >/dev/null 2>&1 & local spid=$!
   jq -cn --arg id "$1" --arg dir "$dir" --argjson p "$spid" --argjson t "$(date +%s)" \
     '{recording:{id:$id,dir:$dir,source:"mic",pids:[$p],started_at:$t},jobs:[],version:1}' > "$RUN/state.json"
   echo "$dir"
@@ -334,6 +349,16 @@ $CLI rename "$IDN" "Note Keeper Renamed" >/dev/null
 eq "note survives a rename" "$($CLI show "$IDN" --json | jq -r .notes)" "sticks around"
 $CLI delete "$IDN" --yes >/dev/null
 
+# Concurrent imports of files with the same mtime claim distinct ids: picking an
+# id and creating its folder is one locked step, so no two share a folder and a
+# failed one can never remove another's.
+same_pids=()
+for n in 1 2 3 4; do cp "$TMP/quiet.wav" "$TMP/same$n.wav"; touch -d "@1700000000" "$TMP/same$n.wav"; done
+for n in 1 2 3 4; do ( "$CLI" import "$TMP/same$n.wav" > "$TMP/same$n.id" 2>/dev/null ) & same_pids+=($!); done
+wait "${same_pids[@]}"
+eq "four concurrent same-second imports get four ids" "$(cat "$TMP"/same?.id | sort -u | grep -c .)" "4"
+eq "and four folders" "$(find "$OMARECORDER_DIR" -maxdepth 1 -name '2023-11-14_*' | wc -l)" "4"
+for n in 1 2 3 4; do "$CLI" delete "$(cat "$TMP/same$n.id")" --yes --permanent >/dev/null 2>&1 || true; rm -f "$TMP/same$n.wav" "$TMP/same$n.id"; done
 }
 
 t_security() {
@@ -373,8 +398,10 @@ check "recording still there" test -d "$DE"
   "$CLI" delete "$IDE" --yes >/dev/null 2>&1; echo $? > "$TMP/rc" )
 check "delete refuses when trash is unavailable" test "$(cat "$TMP/rc")" -ne 0
 check "recording survives failed trash" test -d "$DE"
+mkdir -p "$XDG_STATE_HOME/omarecorder"; echo "whisper said private words" > "$XDG_STATE_HOME/omarecorder/tx-$IDE.err"
 check "delete --permanent works without trash" "$CLI" delete "$IDE" --yes --permanent
 check "permanent delete removed folder" bash -c "! test -d '$DE'"
+check "and the engine error kept for that take" bash -c "! test -e '$XDG_STATE_HOME/omarecorder/tx-$IDE.err'"
 # files are private
 IDP=$("$CLI" import "$TMP/quiet.wav" --title Private); DP=$("$CLI" show "$IDP" --json | jq -r .dir)
 eq "audio.wav is 0600" "$(stat -c %a "$DP/audio.wav")" "600"
@@ -415,6 +442,12 @@ fails "state_set refuses when the lock never frees (OMARECORDER_LOCK_WAIT=1)" en
 wait "$LOCKER" 2>/dev/null
 eq "state.json untouched by the refused write" "$(jq -r .version "$RUN/state.json")" "$V_BEFORE"
 "$CLI" config set threads 0 >/dev/null
+# The runtime folder holds pids and the player socket: a symlink there (or a
+# folder owned by someone else) is refused rather than trusted.
+mkdir -p "$TMP/runtarget"; ln -sfn "$TMP/runtarget" "$TMP/runlink"
+fails "a symlinked runtime folder is refused" env OMARECORDER_RUN_DIR="$TMP/runlink" "$CLI" status
+check "and nothing was written through it" bash -c "[ -z \"\$(ls -A '$TMP/runtarget')\" ]"
+rm -f "$TMP/runlink"
 }
 
 t_recovery() {
@@ -464,6 +497,17 @@ check "a header-only stub folder is removed" bash -c "! test -d \"$DH\""
 rm -rf "$DX"
 rm -rf "$DF"; "$CLI" delete "$IDS" --yes >/dev/null; "$CLI" delete "$IDM" --yes >/dev/null; "$CLI" delete "$IDT_SHORT" --yes >/dev/null
 
+# A pid in state.json that is alive but is not a recorder (pids get recycled)
+# is never signalled: the take is treated as having lost its recorder.
+IDN="2026-01-05_020304"; mkstoprec "$IDN" "Not a recorder" >/dev/null
+kill "$(jq -r '.recording.pids[0]' "$RUN/state.json")" 2>/dev/null || true
+sleep 300 >/dev/null 2>&1 & NR=$!
+jq --argjson p "$NR" '.recording.pids = [$p]' "$RUN/state.json" > "$RUN/state.json.t" && mv "$RUN/state.json.t" "$RUN/state.json"
+"$CLI" record stop >/dev/null 2>&1 || true
+check "record stop never signals a pid that is not a recorder" kill -0 "$NR"
+eq "and the take is no longer recording" "$("$CLI" status)" "idle"
+kill "$NR" 2>/dev/null; wait "$NR" 2>/dev/null
+"$CLI" delete "$IDN" --yes --permanent >/dev/null 2>&1 || true
 }
 
 t_export() {
@@ -476,6 +520,13 @@ jq -cn --arg a "$TMP/vaults/a" --arg b "$TMP/vaults/b" --arg c "$TMP/vaults/gone
 eq "vaults --json: open vault first, missing one dropped" "$("$CLI" vaults --json | jq -r '.[].name' | paste -sd,)" "a,b"
 eq "vaults: folder follows newFileFolderPath" "$("$CLI" vaults --json | jq -r '.[0].folder')" "$TMP/vaults/a/inbox"
 eq "vaults: no app.json → vault root" "$("$CLI" vaults --json | jq -r '.[1].folder')" "$TMP/vaults/b"
+# A synced vault's settings are data, not instructions: a new-note folder that
+# climbs out of the vault is ignored and notes go to the vault root.
+printf '{"newFileLocation":"folder","newFileFolderPath":"../../escape"}' > "$TMP/vaults/a/.obsidian/app.json"
+eq "vaults: a folder outside the vault falls back to its root" "$("$CLI" vaults --json | jq -r '.[0].folder')" "$TMP/vaults/a"
+printf '{"newFileLocation":"folder","newFileFolderPath":"inbox/../../escape"}' > "$TMP/vaults/a/.obsidian/app.json"
+eq "vaults: so does one that climbs out halfway" "$("$CLI" vaults --json | jq -r '.[0].folder')" "$TMP/vaults/a"
+printf '{"newFileLocation":"folder","newFileFolderPath":"inbox"}' > "$TMP/vaults/a/.obsidian/app.json"
 eq "vaults: open flag is a boolean" "$("$CLI" vaults --json | jq -c 'map(.open)')" "[true,false]"
 check "vaults: human output stars the open vault" bash -c "\"$CLI\" vaults | grep -q '^\* a  '"
 IDX=$("$CLI" import "$TMP/quiet.wav" --title "Tone: Test?"); DX=$("$CLI" show "$IDX" --json | jq -r .dir)
@@ -1133,7 +1184,7 @@ NOW=$(date +%s)
 SID="2026-02-04_040404"; SD="$OMARECORDER_DIR/$SID Slow Stop"; mkdir -p "$SD"
 cp "$TMP/quiet.wav" "$SD/audio.wav"
 jq -cn --arg id "$SID" '{id:$id,title:"Slow Stop",source:"mic",created:"2026-02-04T04:04:04+0000",duration_s:null,size_bytes:0,sample_rate:16000,transcript:null,notes:""}' > "$SD/meta.json"
-sleep 60 >/dev/null 2>&1 & SPID=$!
+"$FAKEREC/pw-record" >/dev/null 2>&1 & SPID=$!
 jq -cn --arg id "$SID" --arg dir "$SD" --argjson p "$SPID" --argjson t "$NOW" \
   '{recording:{id:$id,dir:$dir,source:"mic",pids:[$p],started_at:$t},jobs:[],version:1,
     last_stop:{id:"2026-02-05_050505",title:"Newer",stopped_at:($t+50),resumable:true}}' > "$RUN/state.json"
@@ -1779,6 +1830,13 @@ eq "dictionary edit prints the file" "$(PATH="$EX:$PATH" "$CLI" dictionary edit)
 check "and hands it to xdg-open" wait_for 3 grep -qx "$XDG_CONFIG_HOME/omarecorder/dictionary" "$EX/xdg-open.args"
 check "open hands the transcript to the editor" env PATH="$EX:$PATH" "$CLI" open "$IDS"
 eq "with the transcript path" "$(cat "$EX/omarchy-launch-editor.args")" "$DS/transcript.md"
+printf 'Hello from the tidy transcript.\n' > "$DS/transcript.tidy.md"
+check "open prefers the tidy transcript" env PATH="$EX:$PATH" "$CLI" open "$IDS"
+eq "with the tidy path" "$(cat "$EX/omarchy-launch-editor.args")" "$DS/transcript.tidy.md"
+check "open --raw asks for the raw one" env PATH="$EX:$PATH" "$CLI" open "$IDS" --raw
+eq "with the raw path" "$(cat "$EX/omarchy-launch-editor.args")" "$DS/transcript.md"
+fails "open rejects an unknown option" env PATH="$EX:$PATH" "$CLI" open "$IDS" --frob
+rm -f "$DS/transcript.tidy.md"
 check "library toggles the overlay through omarchy-shell" env PATH="$EX:$PATH" "$CLI" library
 eq "with the plugin id" "$(paste -sd' ' "$EX/omarchy-shell.args")" "shell toggle $(jq -r .id "$HERE/../manifest.json")"
 # notify-send is the sender when omarchy-notification-send is absent

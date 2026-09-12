@@ -354,6 +354,9 @@ sweep_orphans() {
 }
 
 pid_alive() { kill -0 "$1" 2>/dev/null; }
+# A recorder pid from state.json is only ours while it still is a recorder: pids
+# get recycled, and a stale one must never be signalled or read as a live take.
+recorder_alive() { pid_alive "$1" && [[ "$(cat "/proc/$1/comm" 2>/dev/null)" =~ ^(pw-record|pw-cat)$ ]]; }
 
 # oneshot units report "activating" while they run — treat that as alive.
 unit_active() { [[ "$(systemctl --user show -p ActiveState --value "$1" 2>/dev/null)" =~ ^(active|activating|reloading|deactivating)$ ]]; }
@@ -365,7 +368,9 @@ _reconcile_state() {
   st=$(read_state)
   if [[ $(jq -r '.recording != null' <<<"$st") == "true" ]]; then
     local alive=0 p
-    for p in $(jq -r '.recording.pids[] | select(type=="number")' <<<"$st"); do pid_alive "$p" && alive=1; done
+    # A resume reservation holds this CLI's own pid while its recorders spawn.
+    local live=recorder_alive; [[ $(jq -r '.recording.starting == true' <<<"$st") == "true" ]] && live=pid_alive
+    for p in $(jq -r '.recording.pids[] | select(type=="number")' <<<"$st"); do "$live" "$p" && alive=1; done
     if [[ $alive == 0 ]]; then
       local ddir mpid; ddir=$(jq -r '.recording.dir // empty' <<<"$st"); mpid=$(jq -r '.recording.meter_pid // empty' <<<"$st")
       stop_meter "$mpid"
@@ -409,6 +414,19 @@ recover_take() {
 
 # ------------------------------------------------------------ recordings ----
 new_id() { date +%Y-%m-%d_%H%M%S; }
+# Pick a free id and create its folder in one step, under the state lock: two
+# starts or imports in the same second must never share a folder, because a
+# failed one removes its folder. With a base epoch (import) the id counts up
+# from the file's time; without one (record start) it waits for the next second.
+_claim_dir() { # <title> [base_epoch] -> the new folder
+  local title="$1" base="${2:-}" n=0 id dir
+  if [[ -n "$base" ]]; then id=$(date -d "@$base" +%Y-%m-%d_%H%M%S); else id=$(new_id); fi
+  while rec_dir "$id" >/dev/null 2>&1; do
+    if [[ -n "$base" ]]; then n=$((n+1)); id=$(date -d "@$((base + n))" +%Y-%m-%d_%H%M%S); else sleep 1; id=$(new_id); fi
+  done
+  dir="$ROOT/$id"; [[ -n "$title" ]] && dir="$ROOT/$id $title"
+  mkdir -p "$dir" && printf '%s\n' "$dir"
+}
 id_valid() { [[ "$1" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}_[0-9]{6}$ ]]; }
 
 # rec_dir <id> → path (dir name is "<id>" or "<id> <title>")
@@ -523,11 +541,9 @@ record_start() {
   [[ $(jq -r '.recording != null' <<<"$(read_state)") == "true" ]] && die "already recording"
   have pw-record || die "pw-record not found (pipewire)"
   mkdir -p "$ROOT" "$RUN_DIR"
-  local id; id=$(new_id)
-  while rec_dir "$id" >/dev/null 2>&1; do sleep 1; id=$(new_id); done
   title=$(sanitize_title "$title")
-  local dir="$ROOT/$id"; [[ -n "$title" ]] && dir="$ROOT/$id $title"
-  mkdir -p "$dir"
+  local dir id; dir=$(with_lock _claim_dir "$title") || die "could not create a folder for the recording"
+  id=$(basename "$dir"); id="${id%% *}"
 
   local -a inputs=() # "kind|target|file", kind = mic (a source) or sink (its monitor)
   local mic sys
@@ -715,14 +731,14 @@ record_stop() { # [--force]
   local stopped_epoch; stopped_epoch=$(now_epoch)
   local id dir source; id=$(jq -r '.id' <<<"$rec"); dir=$(jq -r '.dir' <<<"$rec"); source=$(jq -r '.source' <<<"$rec")
   local p
-  for p in $(jq -r '.pids[]' <<<"$rec"); do kill -INT "$p" 2>/dev/null || true; done
+  for p in $(jq -r '.pids[]' <<<"$rec"); do recorder_alive "$p" && kill -INT "$p" 2>/dev/null || true; done
   local i=0
   while (( i < 50 )); do
     local any=0
-    for p in $(jq -r '.pids[]' <<<"$rec"); do pid_alive "$p" && any=1; done
+    for p in $(jq -r '.pids[]' <<<"$rec"); do recorder_alive "$p" && any=1; done
     [[ $any == 0 ]] && break; sleep 0.2; i=$((i+1))
   done
-  for p in $(jq -r '.pids[]' <<<"$rec"); do pid_alive "$p" && kill -TERM "$p" 2>/dev/null || true; done
+  for p in $(jq -r '.pids[]' <<<"$rec"); do recorder_alive "$p" && kill -TERM "$p" 2>/dev/null || true; done
   stop_meter "$(jq -r '.meter_pid // empty' <<<"$rec")"
   bump_state
   [[ -d "$dir" ]] || die "recording folder vanished: $dir"
@@ -1014,13 +1030,10 @@ cmd_import() {
   src="${src/#\~/$HOME}"
   [[ -f "$src" ]] || die "file not found: $src"
   mkdir -p "$ROOT"
-  local id; id=$(date -r "$src" +%Y-%m-%d_%H%M%S)
-  # Same-second collisions (two files from one batch) take the next free second.
-  local base n=0; base=$(date -r "$src" +%s)
-  while rec_dir "$id" >/dev/null 2>&1; do n=$((n+1)); id=$(date -d "@$((base + n))" +%Y-%m-%d_%H%M%S); done
   title=$(sanitize_title "${title:-$(basename "${src%.*}")}")
-  local dir="$ROOT/$id"; [[ -n "$title" ]] && dir="$ROOT/$id $title"
-  mkdir -p "$dir"
+  # Same-second collisions (two files from one batch) take the next free second.
+  local dir id; dir=$(with_lock _claim_dir "$title" "$(date -r "$src" +%s)") || die "could not create a folder for $src"
+  id=$(basename "$dir"); id="${id%% *}"
   local probe; probe=$(ffprobe -v error -select_streams a:0 -show_entries stream=sample_rate,channels,codec_name -of csv=p=0 "$src" 2>/dev/null || true)
   if [[ "$probe" == "pcm_s16le,$RATE,1" ]]; then
     if (( move )); then mv "$src" "$dir/audio.wav"; else cp "$src" "$dir/audio.wav"; fi
@@ -1203,6 +1216,8 @@ cmd_delete() {
   if (( permanent )); then rm -rf "$dir"; log "delete $id (permanent)"
   elif have gio && gio trash "$dir" 2>>"$LOG_FILE"; then log "delete $id (trash)"; verb=trashed
   else die "could not move $id to the trash (gio); use --permanent to delete it for good"; fi
+  # whisper's stderr, kept after a failed run, can echo speech: it goes with the take.
+  rm -f "$STATE_DIR/tx-$id.err"
   # A deleted take can never be resumed; withdraw its offer with it.
   state_set --arg id "$id" '.last_stop = (if .last_stop != null and .last_stop.id == $id then null else .last_stop end)'
   echo "$verb $id"
@@ -1235,6 +1250,8 @@ vault_folder() {
   local v="$1" sub=""
   if [[ "$(vault_new_file_location "$v")" == "folder" ]]; then
     sub=$(jq -r '.newFileFolderPath // ""' "$v/.obsidian/app.json" 2>/dev/null || true); sub="${sub#/}"; sub="${sub%/}"
+    # A synced vault's settings are data: a folder that climbs out of it is ignored.
+    [[ "/$sub/" == *"/../"* ]] && sub=""
   fi
   if [[ -n "$sub" ]]; then echo "$v/$sub"; else echo "$v"; fi
 }
@@ -2153,9 +2170,12 @@ cmd_stop_play() {
   echo "stopped"
 }
 cmd_open() {
-  local id="${1:-}"; [[ -n "$id" ]] || die "usage: open <id>"
+  local id="${1:-}" raw=""; [[ -n "$id" ]] || die "usage: open <id> [--raw]"; shift
+  while [[ $# -gt 0 ]]; do case "$1" in --raw) raw=raw ;; *) die "unknown option: $1" ;; esac; shift; done
   local dir; dir=$(require_dir "$id")
-  local f="$dir/transcript.md"; [[ -f "$f" ]] || die "no transcript yet for $id"
+  [[ -f "$dir/transcript.md" ]] || die "no transcript yet for $id"
+  # The tidy transcript when there is one, as the Library shows it; --raw for whisper's own.
+  local f; f=$(transcript_file "$dir" "$raw")
   if have omarchy-launch-editor; then omarchy-launch-editor "$f"
   elif have xdg-open; then xdg-open "$f"
   else die "no editor to open it with (install xdg-utils); the transcript is $f"; fi
@@ -2261,7 +2281,7 @@ omarecorder $VERSION: record, keep, transcribe locally (voxtype)
               [--chunk-s N] [--enhance|--no-enhance] [--download]
   cancel <id> | estimate <id> --model M
   models [--json] | model download <name> | model cancel <name>
-  play <id> [--from s] | stop-play | open <id> | folder <id>
+  play <id> [--from s] | stop-play | open <id> [--raw] | folder <id>
   config get [key|--json] | config set <key> <value>
   setup check [--json] | library | status [--json] | version
 
@@ -2271,7 +2291,12 @@ EOF
 
 main() {
   load_config
-  mkdir -p "$RUN_DIR" 2>/dev/null && chmod 700 "$RUN_DIR" 2>/dev/null || true   # private even if it pre-dates umask 077
+  mkdir -p "$RUN_DIR" 2>/dev/null || true
+  # Pids and the player socket live here, so it has to be a real directory this
+  # user owns, checked before anything follows it: never a symlink or someone
+  # else's folder (OMARECORDER_RUN_DIR, a test hook, can point anywhere).
+  if [[ -d "$RUN_DIR" && ! -L "$RUN_DIR" && -O "$RUN_DIR" ]]; then chmod 700 "$RUN_DIR" 2>/dev/null || true   # private even if it pre-dates umask 077
+  else case "${1:-help}" in help|-h|--help|version) ;; *) die "runtime directory $RUN_DIR is not a private directory owned by you" ;; esac; fi
   mkdir -p "$STATE_DIR" 2>/dev/null || true   # ffmpeg stderr is appended to $LOG_FILE before anything has logged
   local cmd="${1:-help}"; shift || true
   case "$cmd" in
