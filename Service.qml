@@ -113,13 +113,19 @@ QtObject {
   }
 
   // ---- loaders ----
-  function refresh() { refreshList(); refreshModels(); refreshConfig(); refreshSetup(); refreshVaults(); refreshDictionary() }
-  function refreshList() { if (!listProc.running) listProc.running = true }
-  function refreshDictionary() { if (!dictProc.running) dictProc.running = true }
-  function refreshModels() { if (!modelsProc.running) modelsProc.running = true }
-  function refreshVaults() { if (!vaultsProc.running) vaultsProc.running = true }
-  function refreshConfig() { if (!configProc.running) configProc.running = true }
-  function refreshSetup() { if (!setupProc.running) setupProc.running = true }
+  function refresh() { reconcile(); refreshList(); refreshModels(); refreshConfig(); refreshSetup(); refreshVaults(); refreshDictionary() }
+  // A refresh asked for while the same loader is still running is remembered and
+  // run again when it exits. Dropping it lost changes that landed mid-read: a
+  // rename during another take's transcription left the transcript pane blank.
+  property var _again: ({})
+  function load(proc, name) { if (proc.running) _again[name] = true; else proc.running = true }
+  function loadAgain(proc, name) { if (_again[name]) { _again[name] = false; Qt.callLater(function() { proc.running = true }) } }
+  function refreshList() { load(listProc, "list") }
+  function refreshDictionary() { load(dictProc, "dictionary") }
+  function refreshModels() { load(modelsProc, "models") }
+  function refreshVaults() { load(vaultsProc, "vaults") }
+  function refreshConfig() { load(configProc, "config") }
+  function refreshSetup() { load(setupProc, "setup") }
 
   // The signature of the last state that caused a re-list (State.stateSig:
   // job shape, per-piece progress and the live recording id, not the
@@ -205,7 +211,12 @@ QtObject {
   function dictEdit() { run(["dictionary", "edit"]) }
   function dictCopyPrompt(onDone) { run(["dictionary", "prompt", "--copy"], onDone) }
   function dictImportClipboard(onDone) { run(["dictionary", "import", "--clipboard"], function(code, out) { if (code === 0) root.refreshDictionary(); if (onDone) onDone(code, out) }) }
-  function openLibrary() { Quickshell.execDetached(["omarchy-shell", "shell", "toggle", pluginId]) }
+  // With an id the Library opens on that take; summon rather than toggle, so a
+  // Library that is already open is not closed by it.
+  function openLibrary(id) {
+    if (id) Quickshell.execDetached(["omarchy-shell", "shell", "summon", pluginId, JSON.stringify({ id: String(id) })])
+    else Quickshell.execDetached(["omarchy-shell", "shell", "toggle", pluginId])
+  }
 
   // ---- plumbing ----
   property Component actionComponent: Component {
@@ -275,31 +286,31 @@ QtObject {
     command: [root.cli, "list", "--json"]
     stdout: StdioCollector { id: listOut; waitForEnd: true }
     stderr: StdioCollector { id: listErr; waitForEnd: true }
-    onExited: function(code) { root.applyJson("list", code, listOut.text, listErr.text, function(v) { root.recordings = v }) }
+    onExited: function(code) { root.applyJson("list", code, listOut.text, listErr.text, function(v) { root.recordings = v }); root.loadAgain(root.listProc, "list") }
   }
   property Process modelsProc: Process {
     command: [root.cli, "models", "--json"]
     stdout: StdioCollector { id: modelsOut; waitForEnd: true }
     stderr: StdioCollector { id: modelsErr; waitForEnd: true }
-    onExited: function(code) { root.applyJson("models", code, modelsOut.text, modelsErr.text, function(v) { root.models = v }) }
+    onExited: function(code) { root.applyJson("models", code, modelsOut.text, modelsErr.text, function(v) { root.models = v }); root.loadAgain(root.modelsProc, "models") }
   }
   property Process vaultsProc: Process {
     command: [root.cli, "vaults", "--json"]
     stdout: StdioCollector { id: vaultsOut; waitForEnd: true }
     stderr: StdioCollector { id: vaultsErr; waitForEnd: true }
-    onExited: function(code) { root.applyJson("vaults", code, vaultsOut.text, vaultsErr.text, function(v) { root.vaults = v }) }
+    onExited: function(code) { root.applyJson("vaults", code, vaultsOut.text, vaultsErr.text, function(v) { root.vaults = v }); root.loadAgain(root.vaultsProc, "vaults") }
   }
   property Process dictProc: Process {
     command: [root.cli, "dictionary", "--json"]
     stdout: StdioCollector { id: dictOut; waitForEnd: true }
     stderr: StdioCollector { id: dictErr; waitForEnd: true }
-    onExited: function(code) { root.applyJson("dictionary", code, dictOut.text, dictErr.text, function(v) { root.dictionary = v }) }
+    onExited: function(code) { root.applyJson("dictionary", code, dictOut.text, dictErr.text, function(v) { root.dictionary = v }); root.loadAgain(root.dictProc, "dictionary") }
   }
   property Process configProc: Process {
     command: [root.cli, "config", "get", "--json"]
     stdout: StdioCollector { id: configOut; waitForEnd: true }
     stderr: StdioCollector { id: configErr; waitForEnd: true }
-    onExited: function(code) { root.applyJson("config", code, configOut.text, configErr.text, function(v) { root.config = v }) }
+    onExited: function(code) { root.applyJson("config", code, configOut.text, configErr.text, function(v) { root.config = v }); root.loadAgain(root.configProc, "config") }
   }
   property Process setupProc: Process {
     command: [root.cli, "setup", "check", "--json"]
@@ -311,8 +322,18 @@ QtObject {
       try { root.setup = JSON.parse(setupOut.text) }
       catch (e) { if (code !== 0) root.lastError = "setup check failed: " + String(setupErr.text || ("exit " + code)).trim() }
       root.refreshModels()
+      root.loadAgain(root.setupProc, "setup")
     }
   }
+
+  // `status` is the only command that notices a recorder or a worker that died
+  // without saying so. Run it when a surface opens (refresh) and every 30 s while
+  // something is recording or working. It has its own process rather than run(),
+  // so it never touches lastError; a change it finds bumps state.json, and the
+  // watcher above brings the views up to date.
+  property Process statusProc: Process { command: [root.cli, "status"] }
+  function reconcile() { if (!statusProc.running) statusProc.running = true }
+  property Timer reconcileTimer: Timer { interval: 30000; repeat: true; running: root.recording || root.busy; onTriggered: root.reconcile() }
 
   Component.onCompleted: {
     if (!root.runtimeDir) { root.lastError = "XDG_RUNTIME_DIR is not set, so OmaRecorder cannot run"; return }

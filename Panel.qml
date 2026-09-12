@@ -102,7 +102,7 @@ Panel {
       if (panelFlick) panelFlick.contentY = Math.max(0, panelFlick.contentHeight - panelFlick.height)
     })
   }
-  function openLibrary() { if (ready) { root.close(); svc.openLibrary() } }
+  function openLibrary(id) { if (ready) { root.close(); svc.openLibrary(id) } }
   // One list for the Source dropdown and its key (`c` forward, `C` back).
   readonly property var sources: [
     { value: "mic", label: "Microphone (what the mic hears)" },
@@ -355,7 +355,7 @@ Panel {
                 fontFamily: root.fontFamily
                 current: root.cursorActive && root.cursorIndex === index
                 urgent: root.urgent
-                onClicked: { root.cursorActive = true; root.cursorIndex = index; root.openLibrary() }
+                onClicked: { root.cursorActive = true; root.cursorIndex = index; root.openLibrary(modelData.id) }
                 onTranscribeRequested: root.svc.transcribe(modelData.id)
                 onOpenRequested: root.svc.openTranscript(modelData.id)
               }
