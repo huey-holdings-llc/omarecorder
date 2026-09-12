@@ -519,8 +519,10 @@ there, so those stay as they are.
 
 ## Development
 
+Put a copy of this repository (or your fork of it) in `~/projects/omarecorder`,
+then:
+
 ```bash
-git clone https://github.com/huey-holdings-llc/omarecorder ~/projects/omarecorder
 cd ~/projects/omarecorder
 scripts/dev-install.sh --enable   # rsync into the plugin dir, validate, symlink the CLI, rescan plugins
 omarchy-restart-shell             # QML changes need this: rescan keeps Qt's component cache

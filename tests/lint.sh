@@ -90,6 +90,13 @@ if command -v node >/dev/null; then
   if out=$({ sed '/^\.pragma/d' ui/state.js; cat tests/state.test.js; } | node - 2>&1); then ok "$out"; else printf '%s\n' "$out"; bad "state.js tests"; fi
 else skipped "state.js tests (need node)"; fi
 
+step "marketplace scan"
+# The marketplace's security baseline lists an explicit privilege command (sudo,
+# pkexec) and a clone from a remote as capabilities a reviewer has to accept.
+# OmaRecorder needs neither: the setup hint names the package, the README says
+# where the source lives. Keep it that way.
+if git grep -nIE '\b(sudo|pkexec) +[a-z]|git clone +[a-z]+://' -- . ':!tests/lint.sh'; then bad "privilege or remote-clone command in the tree"; else ok "no privilege or remote-clone commands"; fi
+
 step "docs"
 grep -q '## Remove' README.md && ok "README has a Remove section" || bad "README lacks Remove"
 grep -q '## Update' README.md && ok "README has an Update section" || bad "README lacks Update"
