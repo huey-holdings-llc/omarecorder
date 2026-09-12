@@ -105,3 +105,13 @@ function fitHints(items, sepWidth, avail) {
   }
   return { shown: shown, fits: true }
 }
+
+// What a key event does to the Library's hold-Ctrl badges: "start" the
+// reveal timer, "hide" them, or "none". A held key auto-repeats as
+// release+press pairs flagged isAutoRepeat; those must change nothing, or
+// the first repeat stops the timer and the badges never appear.
+function ctrlHintAction(type, isCtrl, isAutoRepeat) {
+  if (isAutoRepeat) return "none"
+  if (isCtrl) return type === "press" ? "start" : "hide"
+  return type === "press" ? "hide" : "none"
+}

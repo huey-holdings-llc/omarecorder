@@ -23,7 +23,6 @@ Item {
 
   implicitWidth: group.implicitWidth
   implicitHeight: group.implicitHeight
-  clip: true
 
   function findModel(name) { for (var i = 0; i < models.length; i++) if (models[i].name === name) return models[i]; return null }
   function estimateText(m) {
@@ -71,15 +70,22 @@ Item {
     return opts
   }
 
-  ButtonGroup {
-    id: group
-    options: root.buildOptions()
-    value: root.value
-    // The Library keyCatcher owns every key (Ctrl+M cycles the chips); the
-    // group must never take Tab focus away from it.
-    focusable: false
-    foreground: root.foreground
-    fontFamily: root.fontFamily
-    onChanged: function(v) { root.value = v; root.changed(v) }
+  // The chips clip (a row too narrow for them cuts them rather than letting
+  // them spill); the picker itself does not, so a key badge can sit on its
+  // corner like every other control's.
+  Item {
+    anchors.fill: parent
+    clip: true
+    ButtonGroup {
+      id: group
+      options: root.buildOptions()
+      value: root.value
+      // The Library keyCatcher owns every key (Ctrl+M cycles the chips); the
+      // group must never take Tab focus away from it.
+      focusable: false
+      foreground: root.foreground
+      fontFamily: root.fontFamily
+      onChanged: function(v) { root.value = v; root.changed(v) }
+    }
   }
 }

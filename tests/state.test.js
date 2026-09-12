@@ -98,5 +98,16 @@ eq("fitHints says when even the kept items do not fit", fitHints([hint(300, 1, t
 eq("fitHints with no width measured yet shows everything", fitHints([hint(100, 1), hint(100, 2)], 10, 0), { shown: [0, 1], fits: true })
 eq("fitHints empty list", fitHints([], 10, 100), { shown: [], fits: true })
 
+// ctrlHintAction: what a key event does to the hold-Ctrl badges. A held key
+// auto-repeats as release+press pairs flagged isAutoRepeat; reacting to those
+// stopped the reveal timer every time, so the badges never appeared.
+eq("ctrlHintAction first Ctrl press starts the reveal", ctrlHintAction("press", true, false), "start")
+eq("ctrlHintAction auto-repeat Ctrl release is ignored", ctrlHintAction("release", true, true), "none")
+eq("ctrlHintAction auto-repeat Ctrl press is ignored", ctrlHintAction("press", true, true), "none")
+eq("ctrlHintAction letting go of Ctrl hides", ctrlHintAction("release", true, false), "hide")
+eq("ctrlHintAction another key hides (a chord is under way)", ctrlHintAction("press", false, false), "hide")
+eq("ctrlHintAction another key's release does nothing", ctrlHintAction("release", false, false), "none")
+eq("ctrlHintAction another key's auto-repeat does nothing", ctrlHintAction("press", false, true), "none")
+
 console.log("state.js: passed " + passed + "  failed " + failed)
 if (failed > 0) process.exit(1)

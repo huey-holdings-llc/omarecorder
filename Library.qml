@@ -111,7 +111,7 @@ Item {
     if (svc) svc.refresh()
     Qt.callLater(function() { keyCatcher.forceActiveFocus() })
   }
-  function close() { root.deleteConfirmOpen = false; root.trimConfirmOpen = false; root.trimMode = false; root.opened = false; stopPlayback() }
+  function close() { root.deleteConfirmOpen = false; root.trimConfirmOpen = false; root.trimMode = false; root.opened = false; hideCtrlHints(); stopPlayback() }
   function toggle() { root.opened ? root.close() : root.open("{}") }
 
   // Transcript matches arrive ~300 ms behind the keystrokes (the CLI greps
@@ -122,9 +122,19 @@ Item {
   function filteredRows() { return State.filterRows(svc ? svc.recordings : [], filterText, transcriptMatchIds, transcriptMatchQuery) }
   function indexOfId(id) { return State.indexOfId(rows, id) }
   function ensureSelection() { if (selectedIndex < 0 && rows.length > 0) selectedId = rows[0].id }
-  readonly property string hintsText: root.trimMode
-    ? "Space play   ←→ seek   [ ] mark start / end   Enter trim   Esc leave trim mode"
-    : "↑↓ select   Enter open / transcribe   Ctrl+M model   Space play   Ctrl+S speed   ←→ seek   F2 rename   F3 trim   F4 raw   Del delete   Esc close"
+  // The key legend. On a narrow card the lowest-priority items drop first
+  // (never "hold Ctrl" or "Esc close"), so it never clips; the Ctrl keys are
+  // not listed at all, because holding Ctrl shows each one on its control.
+  readonly property var hintItems: root.trimMode
+    ? [{ text: "Space play", priority: 3 }, { text: "←→ seek", priority: 2 }, { text: "[ ] mark start / end", priority: 4 },
+       { text: "Enter trim", priority: 9, keep: true }, { text: "Esc leave trim mode", priority: 9, keep: true }]
+    : [{ text: "↑↓ select", priority: 5 }, { text: "Enter open / transcribe", priority: 4 }, { text: "Space play", priority: 3 },
+       { text: "←→ seek", priority: 1 }, { text: "Del delete", priority: 2 },
+       { text: "hold Ctrl for shortcuts", priority: 9, keep: true }, { text: "Esc close", priority: 9, keep: true }]
+  // Hold Ctrl for a beat and every Ctrl key shows as a badge on its control.
+  property bool ctrlHints: false
+  function hideCtrlHints() { ctrlReveal.stop(); ctrlHints = false }
+  Timer { id: ctrlReveal; interval: 350; onTriggered: root.ctrlHints = true }
   function select(delta) { selectAbsolute(State.stepIndex(selectedIndex, delta, rows.length)) }
   function selectAbsolute(i) {
     i = State.clampIndex(i, rows.length)
@@ -211,6 +221,10 @@ Item {
     if (!selected || selectedLive || selectedJob || !selected.waveform) return
     trimFrom = 0; trimTo = selected.duration_s || 0; trimMode = true
   }
+  // One path each for the key, its Ctrl alias and the button.
+  function toggleTrim() { if (trimMode) trimMode = false; else startTrim() }
+  function toggleRaw() { if (hasTidy) { showRaw = !showRaw; showPrev = false } }
+  function restoreOriginal() { if (svc && selected && selected.has_orig) { stopPlayback(); svc.restoreTrim(selected.id) } }
   function previewRange() {
     if (previewing) { mpvSend(["set_property", "pause", true]); previewing = false; return }
     previewing = true
@@ -373,7 +387,18 @@ Item {
         anchors.rightMargin: card.contentRightInset
         focus: true
         Keys.priority: Keys.BeforeItem
+        // Holding Ctrl reveals the badges after a beat. Letting go, any other key
+        // (a chord under way) or focus moving into a field hides them again, so a
+        // quick Ctrl+C never flashes them.
+        Keys.onReleased: function(event) {
+          if (State.ctrlHintAction("release", event.key === Qt.Key_Control, event.isAutoRepeat) === "hide") root.hideCtrlHints()
+        }
+        onActiveFocusChanged: if (!activeFocus) root.hideCtrlHints()
         Keys.onPressed: function(event) {
+          var hint = State.ctrlHintAction("press", event.key === Qt.Key_Control, event.isAutoRepeat)
+          if (hint === "start" && keyCatcher.activeFocus && !root.deleteConfirmOpen && !root.trimConfirmOpen) ctrlReveal.restart()
+          else if (hint === "hide") root.hideCtrlHints()
+          if (event.key === Qt.Key_Control) return
           if (root.deleteConfirmOpen) { if (deleteConfirm.handleKey(event)) event.accepted = true; return }
           if (root.trimConfirmOpen) { if (trimConfirm.handleKey(event)) event.accepted = true; return }
           if (titleField.activeFocus || noteField.activeFocus) return
@@ -389,12 +414,21 @@ Item {
           else if (event.key === Qt.Key_Left && !root.filterText) { root.seekTo(root.positionS - 5); event.accepted = true }
           else if (event.key === Qt.Key_Right && !root.filterText) { root.seekTo(root.positionS + 5); event.accepted = true }
           else if (event.key === Qt.Key_F2) { titleField.forceActiveFocus(); titleField.selectAll(); event.accepted = true }
-          else if (event.key === Qt.Key_F3) { if (root.trimMode) root.trimMode = false; else root.startTrim(); event.accepted = true }
+          else if (event.key === Qt.Key_F3) { root.toggleTrim(); event.accepted = true }
           else if (root.trimMode && event.key === Qt.Key_BracketLeft) { root.markStart(); event.accepted = true }
           else if (root.trimMode && event.key === Qt.Key_BracketRight) { root.markEnd(); event.accepted = true }
           else if (event.key === Qt.Key_Space) { if (root.filterText) root.setFilter(root.filterText + " "); else root.togglePlay(); event.accepted = true }
           else if (root.trimMode && (event.key === Qt.Key_Return || event.key === Qt.Key_Enter)) { root.requestTrim(); event.accepted = true }
-          else if (event.key === Qt.Key_F4) { if (root.hasTidy) { root.showRaw = !root.showRaw; root.showPrev = false } event.accepted = true }
+          else if (event.key === Qt.Key_F4) { root.toggleRaw(); event.accepted = true }
+          // Ctrl aliases for everything, so the F-row is never required (F2, F3 and F4 still work).
+          else if ((event.modifiers & Qt.ControlModifier) && event.key === Qt.Key_N) { if (noteField.visible && noteField.enabled) { noteField.forceActiveFocus(); noteField.cursorPosition = noteField.text.length } event.accepted = true }
+          else if ((event.modifiers & Qt.ControlModifier) && event.key === Qt.Key_R) { if (titleField.enabled) { titleField.forceActiveFocus(); titleField.selectAll() } event.accepted = true }
+          else if ((event.modifiers & Qt.ControlModifier) && (event.modifiers & Qt.ShiftModifier) && event.key === Qt.Key_T) { root.restoreOriginal(); event.accepted = true }
+          else if ((event.modifiers & Qt.ControlModifier) && event.key === Qt.Key_T) { root.toggleTrim(); event.accepted = true }
+          else if ((event.modifiers & Qt.ControlModifier) && event.key === Qt.Key_D) { root.toggleRaw(); event.accepted = true }
+          else if ((event.modifiers & Qt.ControlModifier) && event.key === Qt.Key_P) { if (root.hasPrev) root.showPrev = !root.showPrev; event.accepted = true }
+          else if ((event.modifiers & Qt.ControlModifier) && event.key === Qt.Key_E) { if (root.svc && root.selected) root.svc.openFolder(root.selected.id); event.accepted = true }
+          else if ((event.modifiers & Qt.ControlModifier) && event.key === Qt.Key_X) { if (root.svc && picker.download) root.svc.cancelDownload(picker.value); event.accepted = true }
           else if ((event.modifiers & Qt.ControlModifier) && event.key === Qt.Key_C && root.transcriptText.length > 0) {
             root.svc.copyTranscript(root.selected.id, root.showRaw, function(code) { if (code === 0) copiedFlash.restart() }); event.accepted = true
           }
@@ -487,7 +521,7 @@ Item {
 
           Row {
             width: parent.width
-            height: parent.height - y - Style.space(28)
+            height: parent.height - y - legend.height - parent.spacing
             spacing: Style.spacing.lg
 
             // ---- list ----
@@ -548,6 +582,9 @@ Item {
                 font.pixelSize: Style.font.subtitle
                 onAccepted: { if (root.svc && root.selected && text !== (root.selected.title || "")) root.svc.rename(root.selected.id, text); keyCatcher.forceActiveFocus() }
                 Keys.onEscapePressed: { text = root.selected ? (root.selected.title || "") : ""; keyCatcher.forceActiveFocus() }
+                Accessible.name: "Title"
+                Accessible.description: "Ctrl+R"
+                KeyBadge { key: "R"; shown: root.ctrlHints; fontFamily: root.fontFamily; x: parent.width - width - Style.space(6); y: (parent.height - height) / 2 }
               }
 
               Text {
@@ -598,6 +635,9 @@ Item {
                 font.pixelSize: Style.font.caption
                 onAccepted: { if (root.svc && root.selected && text !== (root.selected.notes || "")) root.svc.setNote(root.selected.id, text); keyCatcher.forceActiveFocus() }
                 Keys.onEscapePressed: { text = root.selected ? (root.selected.notes || "") : ""; keyCatcher.forceActiveFocus() }
+                Accessible.name: "Note"
+                Accessible.description: "Ctrl+N"
+                KeyBadge { key: "N"; shown: root.ctrlHints; fontFamily: root.fontFamily; x: parent.width - width - Style.space(6); y: (parent.height - height) / 2 }
               }
 
               LevelMeter {
@@ -631,6 +671,7 @@ Item {
                   fontFamily: root.fontFamily
                   visible: !root.selectedJob && !root.selectedLive
                   onChanged: function(m) { root.chosenModel = m }
+                  KeyBadge { key: "M"; shown: root.ctrlHints; fontFamily: root.fontFamily }
                 }
                 Button {
                   id: mainButton
@@ -667,11 +708,12 @@ Item {
                 AccessibleActionButton {
                   anchors.verticalCenter: parent.verticalCenter
                   iconText: "󰆐"
-                  tooltipText: "Trim (F3)"
+                  tooltipText: "Trim (Ctrl+T)"
                   enabled: !!(root.selected && root.selected.waveform && !root.selectedLive && !root.selectedJob)
                   opacity: enabled ? 1 : 0.4
                   foreground: root.trimMode ? Color.accent : root.foreground; fontFamily: root.fontFamily
-                  onClicked: root.trimMode ? (root.trimMode = false) : root.startTrim()
+                  onClicked: root.toggleTrim()
+                  KeyBadge { key: "T"; shown: root.ctrlHints; fontFamily: root.fontFamily }
                 }
                 AccessibleActionButton {
                   anchors.verticalCenter: parent.verticalCenter
@@ -679,9 +721,10 @@ Item {
                   enabled: !!(root.selected && root.selected.has_orig)
                   opacity: enabled ? 1 : 0
                   iconText: "󰕌"
-                  tooltipText: "Restore the untrimmed original"
+                  tooltipText: "Restore the untrimmed original (Ctrl+Shift+T)"
                   foreground: root.foreground; fontFamily: root.fontFamily
-                  onClicked: if (root.svc && root.selected) { root.stopPlayback(); root.svc.restoreTrim(root.selected.id) }
+                  onClicked: root.restoreOriginal()
+                  KeyBadge { key: "⇧T"; shown: root.ctrlHints; fontFamily: root.fontFamily }
                 }
                 AccessibleActionButton {
                   anchors.verticalCenter: parent.verticalCenter
@@ -691,17 +734,19 @@ Item {
                   enabled: !!picker.download
                   opacity: enabled ? 1 : 0
                   iconText: "󰜺"
-                  tooltipText: "Cancel this model download"
+                  tooltipText: "Cancel this model download (Ctrl+X)"
                   hoverColor: root.urgent
                   foreground: root.foreground; fontFamily: root.fontFamily
                   onClicked: if (root.svc) root.svc.cancelDownload(picker.value)
+                  KeyBadge { key: "X"; shown: root.ctrlHints; fontFamily: root.fontFamily }
                 }
                 AccessibleActionButton {
                   anchors.verticalCenter: parent.verticalCenter
                   iconText: "󰉋"
-                  tooltipText: "Open folder"
+                  tooltipText: "Open folder (Ctrl+E)"
                   foreground: root.foreground; fontFamily: root.fontFamily
                   onClicked: if (root.svc && root.selected) root.svc.openFolder(root.selected.id)
+                  KeyBadge { key: "E"; shown: root.ctrlHints; fontFamily: root.fontFamily }
                 }
                 AccessibleActionButton {
                   anchors.verticalCenter: parent.verticalCenter
@@ -758,6 +803,8 @@ Item {
                   width: Math.ceil(speedMetrics.width) + Style.spacing.sm * 2 + 2
                   TextMetrics { id: speedMetrics; font.family: root.fontFamily; font.pixelSize: Style.font.caption; text: "1.25x" }
                   onClicked: root.cycleSpeed(1)
+                  Accessible.description: "Ctrl+S"
+                  KeyBadge { key: "S"; shown: root.ctrlHints; fontFamily: root.fontFamily }
                 }
               }
 
@@ -915,7 +962,8 @@ Item {
                   text: "Tidy"
                   active: !root.showRaw && !root.showPrev
                   fontSize: Style.font.caption; horizontalPadding: Style.spacing.sm; verticalPadding: Style.spacing.xxs
-                  tooltipText: "Paragraphs, repeated passages removed (F4)"
+                  tooltipText: "Paragraphs, repeated passages removed (Ctrl+D)"
+                  Accessible.description: "Ctrl+D"
                   foreground: root.foreground; fontFamily: root.fontFamily
                   onClicked: { root.showRaw = false; root.showPrev = false }
                 }
@@ -924,9 +972,11 @@ Item {
                   text: "Raw"
                   active: root.showRaw && !root.showPrev
                   fontSize: Style.font.caption; horizontalPadding: Style.spacing.sm; verticalPadding: Style.spacing.xxs
-                  tooltipText: "Exactly as whisper wrote it (F4)"
+                  tooltipText: "Exactly as whisper wrote it (Ctrl+D)"
+                  Accessible.description: "Ctrl+D"
                   foreground: root.foreground; fontFamily: root.fontFamily
                   onClicked: { root.showRaw = true; root.showPrev = false }
+                  KeyBadge { key: "D"; shown: root.ctrlHints; fontFamily: root.fontFamily }
                 }
                 Button {
                   // Toggles, so the old text stays reachable even when there is
@@ -935,15 +985,18 @@ Item {
                   text: "Previous"
                   active: root.showPrev
                   fontSize: Style.font.caption; horizontalPadding: Style.spacing.sm; verticalPadding: Style.spacing.xxs
-                  tooltipText: "The transcript the last re-transcribe replaced"
+                  tooltipText: "The transcript the last re-transcribe replaced (Ctrl+P)"
+                  Accessible.description: "Ctrl+P"
                   foreground: root.foreground; fontFamily: root.fontFamily
                   onClicked: root.showPrev = !root.showPrev
+                  KeyBadge { key: "P"; shown: root.ctrlHints; fontFamily: root.fontFamily }
                 }
                 AccessibleActionButton {
                   iconText: "󰆏"
                   tooltipText: "Copy transcript (Ctrl+C)"
                   foreground: root.foreground; fontFamily: root.fontFamily
                   onClicked: if (root.svc && root.selected) root.svc.copyTranscript(root.selected.id, root.showRaw, function(code) { if (code === 0) copiedFlash.restart() })
+                  KeyBadge { key: "C"; shown: root.ctrlHints; fontFamily: root.fontFamily }
                 }
                 Text {
                   anchors.verticalCenter: parent.verticalCenter
@@ -959,6 +1012,7 @@ Item {
                   tooltipText: "Send to Obsidian (Ctrl+O)"
                   foreground: root.foreground; fontFamily: root.fontFamily
                   onClicked: if (root.svc && root.selected) root.svc.exportToObsidian(root.selected.id, root.showRaw, function(code) { if (code === 0) sentFlash.restart() })
+                  KeyBadge { key: "O"; shown: root.ctrlHints; fontFamily: root.fontFamily }
                 }
                 Text {
                   anchors.verticalCenter: parent.verticalCenter
@@ -1012,14 +1066,30 @@ Item {
           }
 
           // ---- footer: key hints ----
-          Text {
+          // Measured item by item, so a narrow card drops the least useful keys
+          // instead of cutting the line off; State.fitHints picks which. Each
+          // item's spaces are non-breaking, so a wrap can only fall between items.
+          Item {
+            id: legend
             width: parent.width
-            text: root.hintsText
-            color: root.dim
-            font.family: root.fontFamily
-            font.pixelSize: Style.font.caption
-            horizontalAlignment: Text.AlignHCenter
-            elide: Text.ElideRight
+            height: legendText.implicitHeight
+            readonly property string sep: "   "
+            readonly property var labels: root.hintItems.map(function(h) { return h.text.replace(/ /g, " ") })
+            readonly property var fit: State.fitHints(root.hintItems.map(function(h, i) {
+              return { width: legendFont.advanceWidth(legend.labels[i]), priority: h.priority, keep: !!h.keep }
+            }), legendFont.advanceWidth(sep), width)
+            FontMetrics { id: legendFont; font.family: root.fontFamily; font.pixelSize: Style.font.caption }
+            Text {
+              id: legendText
+              width: parent.width
+              text: legend.fit.shown.map(function(i) { return legend.labels[i] }).join(legend.sep)
+              textFormat: Text.PlainText
+              color: root.dim
+              font.family: root.fontFamily
+              font.pixelSize: Style.font.caption
+              horizontalAlignment: Text.AlignHCenter
+              wrapMode: Text.Wrap
+            }
           }
         }
       }
