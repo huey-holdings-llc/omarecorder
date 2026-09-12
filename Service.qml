@@ -227,6 +227,9 @@ QtObject {
     path: root.stateFile
     watchChanges: true
     blockLoading: false
+    // Absent after a boot until the CLI first runs; onLoadFailed covers that,
+    // so the warning it would print on every shell start is noise.
+    printErrors: false
     onFileChanged: reload()
     onLoaded: root.applyState(text())
     onLoadFailed: function(err) { root.state = { recording: null, jobs: [], version: 0 }; root.updateElapsed() }
