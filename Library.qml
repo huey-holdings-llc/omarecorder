@@ -581,7 +581,10 @@ Item {
                 font.family: root.fontFamily
                 font.pixelSize: Style.font.subtitle
                 onAccepted: { if (root.svc && root.selected && text !== (root.selected.title || "")) root.svc.rename(root.selected.id, text); keyCatcher.forceActiveFocus() }
-                Keys.onEscapePressed: { text = root.selected ? (root.selected.title || "") : ""; keyCatcher.forceActiveFocus() }
+                // Esc hands the field back to its binding. A plain assignment would
+                // cut it loose from the selection: the next recording would show
+                // this one's title, and Enter would rename that recording with it.
+                Keys.onEscapePressed: { text = Qt.binding(function() { return root.selected ? (root.selected.title || "") : "" }); keyCatcher.forceActiveFocus() }
                 Accessible.name: "Title"
                 Accessible.description: "Ctrl+R"
                 KeyBadge { key: "R"; shown: root.ctrlHints; fontFamily: root.fontFamily; x: parent.width - width - Style.space(6); y: (parent.height - height) / 2 }
@@ -634,7 +637,8 @@ Item {
                 font.family: root.fontFamily
                 font.pixelSize: Style.font.caption
                 onAccepted: { if (root.svc && root.selected && text !== (root.selected.notes || "")) root.svc.setNote(root.selected.id, text); keyCatcher.forceActiveFocus() }
-                Keys.onEscapePressed: { text = root.selected ? (root.selected.notes || "") : ""; keyCatcher.forceActiveFocus() }
+                // Same as the title: restore the binding, never assign.
+                Keys.onEscapePressed: { text = Qt.binding(function() { return root.selected ? (root.selected.notes || "") : "" }); keyCatcher.forceActiveFocus() }
                 Accessible.name: "Note"
                 Accessible.description: "Ctrl+N"
                 KeyBadge { key: "N"; shown: root.ctrlHints; fontFamily: root.fontFamily; x: parent.width - width - Style.space(6); y: (parent.height - height) / 2 }
