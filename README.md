@@ -175,8 +175,9 @@ are left untouched.
   a running `HH:MM:SS`, replaced by CLIP while the input is on the rails. An
   hourglass means a transcription is running.
 * **Popup keys**: `r` record/stop, `u` resume the last take (when offered),
-  `l` library, `i` import, `s` settings, `d` add a dictionary entry,
-  `Up`/`Down` (or `j`/`k`) and `Enter` on recent rows, `Esc`. With settings
+  `c` cycle the source (`C` goes back), `l` library, `i` import, `s` settings,
+  `d` add a dictionary entry, `x` dismiss an error message, `Up`/`Down` (or
+  `j`/`k`) and `Enter` on recent rows, `Esc`. With settings
   open the Recent list folds away and the same keys walk the settings: an
   accent bar marks the control under the cursor, and `Enter` or `Space` opens
   a dropdown, flips a toggle, presses a button or starts editing the folder
@@ -203,8 +204,8 @@ are left untouched.
   opens the transcript, or transcribes if there is none (`Shift+Enter`
   transcribes again). `Space` plays or pauses, and `Left`/`Right` seek 5
   seconds when the search box is empty. `Del` moves to the trash (confirmed,
-  defaults to Cancel). `Esc` leaves trim mode, then clears the search, then
-  closes.
+  defaults to Cancel). `Esc` dismisses an error message, then leaves trim
+  mode, then clears the search, then closes.
 * **Hold Ctrl for the rest**: hold `Ctrl` for a moment and every shortcut
   shows as a small badge on its control, so the footer only lists the keys
   above. The F-row is never needed; the F-keys that exist still work.
@@ -232,7 +233,8 @@ are left untouched.
   `meta.json` and travels into the Obsidian note on export. `Ctrl+N` puts the
   cursor in the box (`Enter` saves, `Esc` cancels).
 * **When something fails**: the popup and the Library show the error in red
-  above the content, with a × to dismiss it. A read that fails (the recordings
+  above the content, with a × to dismiss it (`x` in the popup, `Esc` in the
+  Library). A read that fails (the recordings
   list, the model catalogue) names itself there rather than leaving a surface
   looking merely empty.
 * **Notifications**: "Recording saved" is clickable and transcribes with your

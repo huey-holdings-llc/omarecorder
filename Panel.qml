@@ -5,6 +5,7 @@ import Quickshell.Io
 import qs.Commons
 import qs.Ui
 import "ui"
+import "ui/state.js" as State
 
 // OmaRecorder bar widget: glyph + elapsed timer in the bar, and a popup with
 // record/stop, source, the most recent recordings, and settings.
@@ -102,6 +103,16 @@ Panel {
     })
   }
   function openLibrary() { if (ready) { root.close(); svc.openLibrary() } }
+  // One list for the Source dropdown and its key (`c` forward, `C` back).
+  readonly property var sources: [
+    { value: "mic", label: "Microphone (what the mic hears)" },
+    { value: "system", label: "System audio (what the computer plays)" },
+    { value: "both", label: "Mic + system audio (two tracks, mixed)" }
+  ]
+  function cycleSource(dir) {
+    if (!ready || recording) return
+    svc.setConfig("defaultSource", State.cycleValue(sources.map(function(o) { return o.value }), svc.defaultSource, dir))
+  }
 
   IpcHandler {
     target: root.ipcTarget
@@ -155,11 +166,14 @@ Panel {
       onActivateRequested: root.activateCursor()
       onCloseRequested: root.close()
       onTabRequested: function(direction) { root.switchPanel(direction) }
+      // The kit sends `x` as "delete"; here it dismisses an error message.
+      onDeleteRequested: if (root.ready && root.svc.lastError.length > 0) root.svc.clearError()
       onTextKey: function(t) {
         if (t === "r" || t === "R") root.toggleRecording()
         else if (t === "l" || t === "L") root.openLibrary()
         else if (t === "s" || t === "S") root.settingsOpen = !root.settingsOpen
         else if (t === "i" || t === "I") root.importAudio()
+        else if (t === "c" || t === "C") root.cycleSource(t === "C" ? -1 : 1)
         else if ((t === "u" || t === "U") && root.ready && root.svc.resumable && !root.recording) root.svc.resumeRecording()
         else if ((t === "d" || t === "D") && root.ready) { root.settingsOpen = true; root.settingsFollowBottom = true; Qt.callLater(settingsSection.focusDictAdd) }
       }
@@ -236,7 +250,7 @@ Panel {
               id: dismissError
               anchors.verticalCenter: parent.verticalCenter
               iconText: "󰅖"
-              tooltipText: "Dismiss this message"
+              tooltipText: "Dismiss this message (x)"
               foreground: root.dim
               fontFamily: root.fontFamily
               onClicked: if (root.ready) root.svc.clearError()
@@ -257,11 +271,7 @@ Panel {
             label: "Source"
             value: root.ready ? root.svc.defaultSource : "mic"
             // Say what each option captures: a mic on speakers hears the computer too.
-            options: [
-              { value: "mic", label: "Microphone (what the mic hears)" },
-              { value: "system", label: "System audio (what the computer plays)" },
-              { value: "both", label: "Mic + system audio (two tracks, mixed)" }
-            ]
+            options: root.sources
             foreground: root.foreground
             fontFamily: root.fontFamily
             onChanged: function(v) { root.svc.setConfig("defaultSource", v) }
@@ -431,7 +441,8 @@ Panel {
         wrapMode: Text.Wrap
         text: root.settingsOpen ? "↑↓ move · Enter change · d dictionary · s settings · Esc close"
               : "r record · " + (root.ready && root.svc.resumable && !root.recording ? "u resume · " : "")
-              + "l library · i import · s settings · d dictionary · Esc close"
+              + (root.ready && !root.recording ? "c source · " : "") + "l library · i import · s settings · d dictionary · "
+              + (root.ready && root.svc.lastError.length > 0 ? "x dismiss · " : "") + "Esc close"
         color: root.dim
         font.family: root.fontFamily
         font.pixelSize: Style.font.caption

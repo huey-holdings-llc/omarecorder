@@ -402,7 +402,8 @@ Item {
           if (root.deleteConfirmOpen) { if (deleteConfirm.handleKey(event)) event.accepted = true; return }
           if (root.trimConfirmOpen) { if (trimConfirm.handleKey(event)) event.accepted = true; return }
           if (titleField.activeFocus || noteField.activeFocus) return
-          if (event.key === Qt.Key_Escape) { if (root.trimMode) { root.trimMode = false; root.previewing = false } else if (root.filterText) root.setFilter(""); else root.close(); event.accepted = true }
+          // Esc peels one layer at a time: an error message, trim mode, the search, then the Library.
+          if (event.key === Qt.Key_Escape) { if (root.svc && root.svc.lastError.length > 0) root.svc.clearError(); else if (root.trimMode) { root.trimMode = false; root.previewing = false } else if (root.filterText) root.setFilter(""); else root.close(); event.accepted = true }
           else if (Util.editsFilter(event, root.filterText)) { root.setFilter(Util.editedFilter(event, root.filterText)); event.accepted = true }
           else if (event.key === Qt.Key_Up) { root.select(-1); event.accepted = true }
           else if (event.key === Qt.Key_Down) { root.select(1); event.accepted = true }
@@ -896,7 +897,7 @@ Item {
                   id: dismissError
                   anchors.verticalCenter: parent.verticalCenter
                   iconText: "󰅖"
-                  tooltipText: "Dismiss this message"
+                  tooltipText: "Dismiss this message (Esc)"
                   foreground: root.dim
                   fontFamily: root.fontFamily
                   onClicked: if (root.svc) root.svc.clearError()

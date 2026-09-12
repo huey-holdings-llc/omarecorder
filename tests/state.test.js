@@ -109,5 +109,15 @@ eq("ctrlHintAction another key hides (a chord is under way)", ctrlHintAction("pr
 eq("ctrlHintAction another key's release does nothing", ctrlHintAction("release", false, false), "none")
 eq("ctrlHintAction another key's auto-repeat does nothing", ctrlHintAction("press", false, true), "none")
 
+// cycleValue: a one-key picker (the popup's source key) steps through a fixed
+// list and wraps at both ends; an unknown current value starts from the ends.
+eq("cycleValue forward", cycleValue(["mic", "system", "both"], "mic", 1), "system")
+eq("cycleValue forward wraps", cycleValue(["mic", "system", "both"], "both", 1), "mic")
+eq("cycleValue backward", cycleValue(["mic", "system", "both"], "system", -1), "mic")
+eq("cycleValue backward wraps", cycleValue(["mic", "system", "both"], "mic", -1), "both")
+eq("cycleValue unknown current, forward, takes the first", cycleValue(["mic", "system", "both"], "gone", 1), "mic")
+eq("cycleValue unknown current, backward, takes the last", cycleValue(["mic", "system", "both"], "gone", -1), "both")
+eq("cycleValue empty list", cycleValue([], "mic", 1), "mic")
+
 console.log("state.js: passed " + passed + "  failed " + failed)
 if (failed > 0) process.exit(1)

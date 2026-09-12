@@ -115,3 +115,12 @@ function ctrlHintAction(type, isCtrl, isAutoRepeat) {
   if (isCtrl) return type === "press" ? "start" : "hide"
   return type === "press" ? "hide" : "none"
 }
+
+// One key stepping through a fixed list (the popup's source key): wraps at
+// both ends, and an unknown current value starts from the matching end.
+function cycleValue(values, current, dir) {
+  if (!values || values.length === 0) return current
+  var i = values.indexOf(current)
+  if (i < 0) return dir < 0 ? values[values.length - 1] : values[0]
+  return values[(i + dir + values.length) % values.length]
+}

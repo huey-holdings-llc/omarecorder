@@ -121,9 +121,12 @@ most needs someone who knows more than its author:
   other Omarchy themes, a vertical bar, more than one monitor, or a high-DPI
   screen are all valuable. So is anything that makes a screen easier to read
   without adding controls.
-* **Accessibility.** Everything in the popup and the Library can be worked
-  from the keyboard (#70), and icon buttons carry an accessible name and their
-  shortcut. Nobody has tried it with a real screen reader yet. Contrast was
+* **Accessibility.** Every control in the popup and the Library has a keyboard
+  route (#70) except two: "Re-transcribe in shorter pieces" under a loop
+  warning, and cancelling a running transcription, which stays mouse-only on
+  purpose so a stray Enter can never stop an hour-long job. Icon buttons carry
+  an accessible name and their shortcut. Nobody has tried it with a real
+  screen reader yet. Contrast was
   measured in September 2026 across the 22 built-in themes: foreground on
   background clears 4.5:1 in all of them, but the dimmer secondary text
   (`Qt.darker(foreground, 1.55)`, the same derivation Omarchy's own panels

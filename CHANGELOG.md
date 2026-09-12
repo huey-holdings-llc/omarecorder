@@ -15,6 +15,9 @@ All notable changes to this project are documented here. Format follows
 - The popup's settings can be worked from the keyboard. With settings open,
   `Up`/`Down` (or `j`/`k`) walk the controls, an accent bar marks the one under
   the cursor, and `Enter` or `Space` works it.
+- The popup's source has a key: `c` steps through Microphone, System and Both
+  (`C` goes back). `x` dismisses an error message in the popup, and `Esc` does
+  the same in the Library before it does anything else.
 - Icon buttons give a screen reader their shortcut as the accessible
   description.
 
