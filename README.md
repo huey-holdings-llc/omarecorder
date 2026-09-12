@@ -406,7 +406,7 @@ omarecorder transcribe <id> [--model M] [--language L] [--threads N] [--from s -
                             [--chunk-s N] [--enhance|--no-enhance] [--download]
 omarecorder cancel <id> | estimate <id> --model M
 omarecorder models [--json] | model download <name> | model cancel <name>
-omarecorder play <id> [--from s] | stop-play | open <id> | folder <id>
+omarecorder play <id> [--from s] | stop-play | open <id> [--raw] | folder <id>
 omarecorder config get [key|--json] | config set <key> <value>
 omarecorder setup check [--json] | library | status [--json] | version
 ```

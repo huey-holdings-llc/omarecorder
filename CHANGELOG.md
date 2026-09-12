@@ -10,8 +10,8 @@ All notable changes to this project are documented here. Format follows
   note, `Ctrl+R` rename, `Ctrl+T` trim, `Ctrl+Shift+T` restore the original,
   `Ctrl+D` tidy or raw, `Ctrl+P` previous transcript, `Ctrl+E` open the folder
   and `Ctrl+X` cancel a model download. F2, F3 and F4 still work.
-- Hold `Ctrl` in the Library and each shortcut shows as a small badge on its
-  control, only where the control is showing.
+- Hold `Ctrl` in the Library and each shortcut shows as a small badge just
+  above its control, only where the control is showing.
 - The popup's settings can be worked from the keyboard. With settings open,
   `Up`/`Down` (or `j`/`k`) walk the controls, an accent bar marks the one under
   the cursor, and `Enter` or `Space` works it.
@@ -31,6 +31,35 @@ All notable changes to this project are documented here. Format follows
   spelling out a clone command.
 
 ### Fixed
+- A background refresh (a transcription piece finishing, a download ticking,
+  any CLI command) wiped a title or note you were in the middle of typing in
+  the Library.
+- After a trim handle had been dragged, `[` and `]` moved the trim numbers but
+  no longer the handles.
+- A refresh asked for while the list was already loading was dropped, so a
+  rename during another take's transcription could leave the transcript pane
+  blank. Each loader now runs again when it finishes.
+- A recorder or transcription worker that died without saying so kept showing
+  as running until the next command. The service now re-checks when the popup
+  or the Library opens, and every 30 seconds while something is recording or
+  working.
+- Clicking a take in the popup's Recent list opened the Library on the newest
+  take instead of the one clicked.
+- `open` and the "Transcript ready" notification opened the raw transcript.
+  They now open the tidy one, as the Library shows it; `open --raw` gives
+  whisper's own.
+- Two starts or imports in the same second could share a folder, and the one
+  that failed then deleted it. Picking an id and creating its folder is now one
+  locked step.
+- `record stop` and the reconcile signalled recorder pids from state.json
+  without checking they were still recorders. A recycled pid is now left alone.
+- An Obsidian vault whose settings put new notes in a folder outside the vault
+  (`../`) sent exports there. Such a folder is now ignored and notes go to the
+  vault root.
+- A permanent delete left whisper's saved error output, which can echo speech,
+  behind in the state folder.
+- The runtime folder (pids, the player socket) is refused if it is a symlink or
+  not owned by you.
 - `Esc` in the Library's title or note field, or in the popup's recordings
   folder field, detached the field from what it shows. Every recording
   selected afterwards kept the old text, and `Enter` in the title field then
