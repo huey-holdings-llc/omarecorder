@@ -14,9 +14,10 @@ Rectangle {
   property color background: Color.popups.background
 
   visible: shown && key.length > 0
-  // Sits on the parent's top-right corner, half outside it.
-  x: parent ? parent.width - width * 0.7 : 0
-  y: -height * 0.45
+  // Sits just above its control, centred, so it never covers the label or icon
+  // it names. Text fields place it inside their right edge instead.
+  x: parent ? (parent.width - width) / 2 : 0
+  y: -height - Style.space(1)
   z: 5
   width: Math.max(height, label.implicitWidth + Style.space(8))
   height: label.implicitHeight + Style.space(3)
