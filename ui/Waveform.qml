@@ -96,8 +96,10 @@ Item {
         anchors.fill: parent; anchors.margins: -Style.space(6)
         cursorShape: Qt.SizeHorCursor
         drag.target: fromHandle; drag.axis: Drag.XAxis; drag.minimumX: 0; drag.maximumX: toHandle.x - fromHandle.width
-        onPositionChanged: if (drag.active) { root.trimFrom = root.clampT((fromHandle.x + fromHandle.width / 2) / root.pxPerSecond) }
-        onReleased: root.rangeChanged(root.trimFrom, root.trimTo)
+        // Report, never assign: trimFrom and trimTo are the Library's, bound in,
+        // and writing them here would cut that binding for good ([ and ] would
+        // then move the numbers but not the handles).
+        onPositionChanged: if (drag.active) root.rangeChanged(root.clampT((fromHandle.x + fromHandle.width / 2) / root.pxPerSecond), root.trimTo)
       }
     }
     Rectangle {
@@ -123,8 +125,7 @@ Item {
         anchors.fill: parent; anchors.margins: -Style.space(6)
         cursorShape: Qt.SizeHorCursor
         drag.target: toHandle; drag.axis: Drag.XAxis; drag.minimumX: fromHandle.x + fromHandle.width; drag.maximumX: root.width - toHandle.width
-        onPositionChanged: if (drag.active) { root.trimTo = root.clampT((toHandle.x + toHandle.width / 2) / root.pxPerSecond) }
-        onReleased: root.rangeChanged(root.trimFrom, root.trimTo)
+        onPositionChanged: if (drag.active) root.rangeChanged(root.trimFrom, root.clampT((toHandle.x + toHandle.width / 2) / root.pxPerSecond))
       }
     }
 
