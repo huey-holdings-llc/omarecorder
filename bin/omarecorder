@@ -2148,6 +2148,8 @@ cmd_stop_play() {
   [[ -f "$PLAY_PID_FILE" ]] || { echo "not playing"; return 0; }
   local p; p=$(cat "$PLAY_PID_FILE"); rm -f "$PLAY_PID_FILE"
   if [[ "$p" =~ ^[0-9]+$ ]] && [[ "$(cat "/proc/$p/comm" 2>/dev/null)" =~ ^(mpv|pw-play)$ ]]; then kill "$p" 2>/dev/null || true; fi
+  # mpv leaves its IPC socket behind when it is signalled rather than told to quit.
+  rm -f "$RUN_DIR/mpv.sock"
   echo "stopped"
 }
 cmd_open() {

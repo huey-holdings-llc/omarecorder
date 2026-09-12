@@ -1806,9 +1806,12 @@ PP=$(cat "$RUN/play.pid")
 check "play.pid holds a live player" kill -0 "$PP"
 eq "and it really is the player" "$(cat "/proc/$PP/comm")" "mpv"
 check "the player got the audio file and the IPC socket" wait_for 5 bash -c "grep -qxF '$DP/audio.wav' '$TMP/mpv.args' && grep -q -- '--input-ipc-server=$RUN/mpv.sock' '$TMP/mpv.args'"
+# The fake player opens no socket; stand one in so stop-play has one to clear.
+touch "$RUN/mpv.sock"
 check "stop-play stops it" "$CLI" stop-play
 check "the player is gone" wait_for 5 gone "$PP"
 check "play.pid removed" bash -c "! test -e '$RUN/play.pid'"
+check "and so is its IPC socket" bash -c "! test -e '$RUN/mpv.sock'"
 eq "stop-play with nothing playing says so" "$("$CLI" stop-play)" "not playing"
 rm -f "$TMP/mpv.args"
 check "play --from passes the start position" bash -c "PATH=\"$MPV:\$PATH\" \"$CLI\" play '$IDP' --from 1.5 >/dev/null"
