@@ -256,8 +256,18 @@ Item {
   // transcription or download finishing mid-playback must not stop the sound.
   // Only a genuine move to a different id resets playback and view state.
   property string lastSelectedId: ""
+  // The title and note fields are not bound to the row: every refresh rebuilds
+  // the row objects, and a binding would put the saved text back over whatever
+  // is being typed. A new selection replaces them; a refresh of the same one
+  // only fills in a field nobody is editing.
+  function syncFields(force) {
+    var t = selected ? (selected.title || "") : "", n = selected ? (selected.notes || "") : ""
+    if (force || !titleField.activeFocus) titleField.text = t
+    if (force || !noteField.activeFocus) noteField.text = n
+  }
   onSelectedChanged: {
     var newId = selected ? selected.id : ""
+    syncFields(newId !== lastSelectedId)
     if (newId === lastSelectedId) return
     lastSelectedId = newId
     stopPlayback()
@@ -576,16 +586,13 @@ Item {
                 id: titleField
                 enabled: !root.selectedJob   // rename is refused mid-transcribe, same as notes
                 width: parent.width
-                text: root.selected ? (root.selected.title || "") : ""
                 placeholderText: root.selected && root.svc ? root.svc.displayTitle(root.selected) : ""
                 foreground: root.foreground
                 font.family: root.fontFamily
                 font.pixelSize: Style.font.subtitle
                 onAccepted: { if (root.svc && root.selected && text !== (root.selected.title || "")) root.svc.rename(root.selected.id, text); keyCatcher.forceActiveFocus() }
-                // Esc hands the field back to its binding. A plain assignment would
-                // cut it loose from the selection: the next recording would show
-                // this one's title, and Enter would rename that recording with it.
-                Keys.onEscapePressed: { text = Qt.binding(function() { return root.selected ? (root.selected.title || "") : "" }); keyCatcher.forceActiveFocus() }
+                // Esc puts the saved title back (see syncFields).
+                Keys.onEscapePressed: { text = root.selected ? (root.selected.title || "") : ""; keyCatcher.forceActiveFocus() }
                 Accessible.name: "Title"
                 Accessible.description: "Ctrl+R"
                 KeyBadge { key: "R"; shown: root.ctrlHints; fontFamily: root.fontFamily; x: parent.width - width - Style.space(6); y: (parent.height - height) / 2 }
@@ -632,14 +639,12 @@ Item {
                 // (lost-update guard), so don't offer an edit that cannot save.
                 enabled: !root.selectedJob
                 width: parent.width
-                text: root.selected ? (root.selected.notes || "") : ""
                 placeholderText: "Add a note"
                 foreground: root.dim
                 font.family: root.fontFamily
                 font.pixelSize: Style.font.caption
                 onAccepted: { if (root.svc && root.selected && text !== (root.selected.notes || "")) root.svc.setNote(root.selected.id, text); keyCatcher.forceActiveFocus() }
-                // Same as the title: restore the binding, never assign.
-                Keys.onEscapePressed: { text = Qt.binding(function() { return root.selected ? (root.selected.notes || "") : "" }); keyCatcher.forceActiveFocus() }
+                Keys.onEscapePressed: { text = root.selected ? (root.selected.notes || "") : ""; keyCatcher.forceActiveFocus() }
                 Accessible.name: "Note"
                 Accessible.description: "Ctrl+N"
                 KeyBadge { key: "N"; shown: root.ctrlHints; fontFamily: root.fontFamily; x: parent.width - width - Style.space(6); y: (parent.height - height) / 2 }
