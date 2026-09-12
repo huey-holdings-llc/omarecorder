@@ -85,5 +85,18 @@ eq("initialSelection newest", initialSelection("", rows), "2026-09-07_120000")
 eq("initialSelection empty list", initialSelection("", []), "")
 eq("initialSelection null rows", initialSelection(null, null), "")
 
+// fitHints: which legend items fit the footer. Lowest priority goes first
+// (the later one on a tie), kept items never go, order never changes.
+function hint(width, priority, keep) { return { width: width, priority: priority, keep: !!keep } }
+eq("fitHints everything fits", fitHints([hint(100, 1), hint(100, 2)], 10, 300), { shown: [0, 1], fits: true })
+eq("fitHints counts the separators", fitHints([hint(100, 1), hint(100, 2)], 10, 209), { shown: [1], fits: true })
+eq("fitHints drops the lowest priority and keeps order", fitHints([hint(100, 3), hint(100, 1), hint(100, 2)], 0, 200), { shown: [0, 2], fits: true })
+eq("fitHints on a tie drops the later item", fitHints([hint(100, 2), hint(100, 2), hint(100, 2)], 0, 200), { shown: [0, 1], fits: true })
+eq("fitHints never drops a kept item", fitHints([hint(100, 0, true), hint(100, 5)], 0, 150), { shown: [0], fits: true })
+eq("fitHints drops as many as it takes", fitHints([hint(100, 1), hint(100, 2), hint(100, 3), hint(100, 4)], 10, 210), { shown: [2, 3], fits: true })
+eq("fitHints says when even the kept items do not fit", fitHints([hint(300, 1, true), hint(100, 2)], 0, 200), { shown: [0], fits: false })
+eq("fitHints with no width measured yet shows everything", fitHints([hint(100, 1), hint(100, 2)], 10, 0), { shown: [0, 1], fits: true })
+eq("fitHints empty list", fitHints([], 10, 100), { shown: [], fits: true })
+
 console.log("state.js: passed " + passed + "  failed " + failed)
 if (failed > 0) process.exit(1)

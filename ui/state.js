@@ -75,3 +75,33 @@ function initialSelection(requestedId, rows) {
   if (requestedId) return requestedId
   return rows && rows.length > 0 ? rows[0].id : ""
 }
+
+// ---- Library.qml: the key legend ----
+
+// Which legend items fit a footer `avail` wide. Items are { width, priority,
+// keep }, with one separator between neighbours. The lowest priority goes
+// first (the later one on a tie), kept items never go, and the order never
+// changes. `fits` is false when even the kept items overflow, so the footer
+// can wrap instead of clipping. An unmeasured footer (avail <= 0) shows all.
+function fitHints(items, sepWidth, avail) {
+  items = items || []
+  var shown = []
+  for (var i = 0; i < items.length; i++) shown.push(i)
+  if (!(avail > 0)) return { shown: shown, fits: true }
+  function total() {
+    var w = 0
+    for (var k = 0; k < shown.length; k++) w += items[shown[k]].width
+    return w + Math.max(0, shown.length - 1) * sepWidth
+  }
+  while (total() > avail) {
+    var drop = -1
+    for (var j = 0; j < shown.length; j++) {
+      var it = items[shown[j]]
+      if (it.keep) continue
+      if (drop < 0 || it.priority <= items[shown[drop]].priority) drop = j
+    }
+    if (drop < 0) return { shown: shown, fits: false }
+    shown.splice(drop, 1)
+  }
+  return { shown: shown, fits: true }
+}
