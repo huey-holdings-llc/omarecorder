@@ -33,8 +33,8 @@ function downloadFinished(prevModels, models) {
 
 // ---- Library.qml: the filtered list and the selection in it ----
 
-// Title, id and date match instantly; transcript hits (matchIds) arrive later
-// from the CLI and only count when they answer the query as typed now.
+// Title, note, id and date match instantly; transcript hits (matchIds) arrive
+// later from the CLI and only count when they answer the query as typed now.
 function filterRows(all, filterText, matchIds, matchQuery) {
   all = all || []
   var trimmed = (filterText || "").trim()
@@ -44,7 +44,7 @@ function filterRows(all, filterText, matchIds, matchQuery) {
   var out = []
   for (var i = 0; i < all.length; i++) {
     var r = all[i]
-    var hay = ((r.title || "") + " " + (r.id || "") + " " + (r.created || "")).toLowerCase()
+    var hay = ((r.title || "") + " " + (r.notes || "") + " " + (r.id || "") + " " + (r.created || "")).toLowerCase()
     if (hay.indexOf(q) !== -1 || inText.indexOf(r.id) !== -1) out.push(r)
   }
   return out
@@ -165,6 +165,14 @@ function loadError(what, code, errText, unreadable) {
   return { key: "load:" + what, text: "Loading " + name + " failed: " + msg }
 }
 function errorClears(errorKey, successKey) { return !!errorKey && errorKey === successKey }
+
+// The popup's line while imports run: the first file by name, then a count.
+// A long file converts for a while with nothing else on screen to say so.
+function importingText(paths) {
+  if (!paths || paths.length === 0) return ""
+  var name = String(paths[0]).replace(/^.*\//, "")
+  return "Importing " + name + (paths.length > 1 ? " and " + (paths.length - 1) + " more" : "") + "…"
+}
 
 // After a source write finishes: "write" the newer pick if one is waiting
 // (whether this write worked or not: a failed older write used to drop it),

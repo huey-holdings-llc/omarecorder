@@ -57,6 +57,23 @@ eq("filterRows null rows", filterRows(null, "x", [], ""), [])
 eq("filterRows null rows, empty query", filterRows(null, "", [], ""), [])
 eq("filterRows null hit list", filterRows(rows, "goblin", null, "goblin"), [])
 
+// Notes count too: a note is often what you remember a take by.
+var noted = [
+  { id: "2026-09-10_100000", title: "Weekly sync", created: "2026-09-10T10:00:00-0400", notes: "Budget review with Dana" },
+  { id: "2026-09-11_100000", title: "Standup", created: "2026-09-11T10:00:00-0400" }
+]
+eq("filterRows matches a note", ids(filterRows(noted, "budget", [], "")), ["2026-09-10_100000"])
+eq("filterRows matches a note case-insensitively", ids(filterRows(noted, "DANA", [], "")), ["2026-09-10_100000"])
+eq("filterRows a row without notes still matches its title", ids(filterRows(noted, "standup", [], "")), ["2026-09-11_100000"])
+
+// importingText: the popup's line while imports run.
+eq("importingText nothing running", importingText([]), "")
+eq("importingText one file names it", importingText(["/home/me/Downloads/meeting.m4a"]), "Importing meeting.m4a…")
+eq("importingText two files", importingText(["/a/one.wav", "/b/two.mp3"]), "Importing one.wav and 1 more…")
+eq("importingText three files", importingText(["/a/one.wav", "/b/two.mp3", "/c/three.ogg"]), "Importing one.wav and 2 more…")
+eq("importingText a bare name", importingText(["meeting.m4a"]), "Importing meeting.m4a…")
+eq("importingText null", importingText(null), "")
+
 // indexOfId
 eq("indexOfId found", indexOfId(rows, "2026-09-01_090000"), 1)
 eq("indexOfId missing", indexOfId(rows, "nope"), -1)

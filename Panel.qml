@@ -415,6 +415,19 @@ Panel {
             }
           }
 
+          // Until the import finishes: converting a long file takes a while,
+          // and the popup had nothing on screen to say it was working.
+          Text {
+            visible: root.ready && root.svc.importing.length > 0
+            width: parent.width
+            text: root.ready ? State.importingText(root.svc.importing) : ""
+            textFormat: Text.PlainText
+            elide: Text.ElideMiddle
+            color: Color.accent
+            font.family: root.fontFamily
+            font.pixelSize: Style.font.caption
+          }
+
           PanelSeparator { visible: root.settingsOpen && root.ready; width: parent.width; foreground: root.foreground }
 
           SettingsSection {

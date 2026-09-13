@@ -203,7 +203,18 @@ QtObject {
   function download(model) { run(["model", "download", model]) }
   function cancelDownload(model) { run(["model", "cancel", model]) }
   function searchTranscripts(q, onDone) { run(["search", q], onDone) }
-  function importFile(path) { run(["import", path], function(code) { if (code === 0) root.refreshList() }) }
+  // Imports in flight, by path, for the popup's "Importing…" line: converting
+  // a long file takes a while with nothing else on screen to say so.
+  property var importing: []
+  function importFile(path) {
+    importing = importing.concat([path])
+    run(["import", path], function(code) {
+      var left = root.importing.slice(), i = left.indexOf(path)
+      if (i >= 0) left.splice(i, 1)
+      root.importing = left
+      if (code === 0) root.refreshList()
+    })
+  }
   function play(id) { run(["play", id]) }
   function playFrom(id, seconds) { run(["play", id, "--from", String(seconds)]) }
   function stopPlay() { run(["stop-play"]) }
