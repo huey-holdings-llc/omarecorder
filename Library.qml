@@ -272,7 +272,17 @@ Item {
   function cancelDelete() { deleteConfirmOpen = false; Qt.callLater(function() { keyCatcher.forceActiveFocus() }) }
   function stripHeader(t) { return String(t || "").replace(/^<!--[^\n]*-->\n?/, "").trim() }
 
-  onRowsChanged: ensureSelection()
+  // A re-list also hands the ListView a new model, and it scrolled back to the
+  // top: on a long list the selected row ended up out of sight. Keep it in view.
+  onRowsChanged: {
+    ensureSelection()
+    // Twice: the first pass lands on the view's estimate of rows it has not
+    // built yet, which left the selected row half off the edge; the second,
+    // once they exist, is exact.
+    Qt.callLater(function() { root.showSelectedRow(); keepSelectedInView.restart() })
+  }
+  function showSelectedRow() { if (selectedIndex >= 0) list.positionViewAtIndex(selectedIndex, ListView.Contain) }
+  Timer { id: keepSelectedInView; interval: 30; onTriggered: root.showSelectedRow() }
   // Every list refresh rebuilds the row objects, so `selected` changes
   // identity even when the selection stayed on the same recording; a
   // transcription or download finishing mid-playback must not stop the sound.
@@ -538,7 +548,10 @@ Item {
                 Text { anchors.verticalCenter: parent.verticalCenter; text: "󰍉"; color: root.dim; font.family: root.fontFamily; font.pixelSize: Style.font.icon }
                 Text {
                   anchors.verticalCenter: parent.verticalCenter
-                  text: root.filterText ? root.filterText : "Type to search titles and transcripts"
+                  // Elides inside the box: a longer placeholder ran into the count beside it.
+                  width: parent.width - x - Style.spacing.controlPaddingX
+                  elide: Text.ElideRight
+                  text: root.filterText ? root.filterText : "Search titles, notes and transcripts"
                   color: root.filterText ? root.foreground : root.dim
                   font.family: root.fontFamily
                   font.pixelSize: Style.font.body
@@ -738,11 +751,23 @@ Item {
                   id: mainButton
                   anchors.verticalCenter: parent.verticalCenter
                   visible: !root.selectedLive
-                  tooltipText: root.selectedJob ? "" : (root.selected && root.selected.has_transcript ? "Shift+Enter" : "Enter")
-                  text: root.selectedJob ? "Cancel"
+                  readonly property string label: root.selectedJob ? "Cancel"
                     : (picker.currentInstalled ? (root.selected && root.selected.has_transcript ? "Re-transcribe" : "Transcribe")
                                                : (picker.download ? root.downloadingText(picker.download) + (picker.download.then ? " will transcribe" : "")
                                                                   : "Download + transcribe"))
+                  readonly property string keyHint: root.selectedJob ? "" : (root.selected && root.selected.has_transcript ? "Shift+Enter" : "Enter")
+                  // On a row too narrow for the chips and this label together
+                  // (a long take's readout is wide) the label gives way, not
+                  // the chips: they were clipping to "Accurat". Measured from
+                  // the text, not this button's width, so it cannot loop.
+                  TextMetrics { id: mainLabelMetrics; font.family: root.fontFamily; font.pixelSize: mainButton.fontSize; text: mainButton.label }
+                  TextMetrics { id: mainIconMetrics; font.family: root.fontFamily; font.pixelSize: mainButton.iconSize; text: mainButton.iconText }
+                  readonly property bool iconOnly: picker.visible
+                    && parent.width - iconActions.width - posReadout.width - speedChip.width - parent.spacing * 4
+                       - (mainIconMetrics.width + horizontalPadding * 2 + 2 + Style.spacing.controlGap + mainLabelMetrics.width) < picker.compactWidth
+                  text: iconOnly ? "" : label
+                  tooltipText: iconOnly ? label + (keyHint ? " (" + keyHint + ")" : "") : keyHint
+                  Accessible.name: label
                   iconText: root.selectedJob ? "󰅖" : (picker.currentInstalled ? "󰗊" : "󰇚")
                   active: !!root.selectedJob
                   iconSpinning: !!root.selectedJob || !!picker.download

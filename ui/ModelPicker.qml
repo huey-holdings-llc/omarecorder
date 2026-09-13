@@ -57,6 +57,20 @@ Item {
   // Deliberately independent of `compact`, so the comparison cannot loop.
   readonly property real fullWidth: Math.ceil(fullMetrics.width)
     + 6 * Style.spacing.controlPaddingX + 2 * Style.spacing.md + 6 + Style.spacing.sm
+  // The same for the names alone: the least the chips need. The Library gives
+  // up its button's label before letting the chips clip below this.
+  TextMetrics {
+    id: compactMetrics
+    font.family: root.fontFamily
+    font.pixelSize: Style.font.body
+    text: {
+      var t = ""
+      for (var i = 0; i < root.models.length; i++) if (root.models[i].label) t += root.models[i].label
+      return t
+    }
+  }
+  readonly property real compactWidth: Math.ceil(compactMetrics.width)
+    + 6 * Style.spacing.controlPaddingX + 2 * Style.spacing.md + 6 + Style.spacing.sm
   // Chips carry the three presets; voxtype can hold more models, but the
   // catalog the picker offers is exactly the labelled ones.
   function buildOptions() {
