@@ -19,7 +19,9 @@ All notable changes to this project are documented here. Format follows
 - Lint checks that every nested Omarchy kit token the plugin uses
   (`Style.spacing.*`, `Style.font.*`, `Style.bar.*`) still exists in the
   shell. qmllint cannot see those, so a renamed one would only have failed at
-  runtime. CI has no shell and skips it, as it skips qmllint.
+  runtime. CI has no shell and skips it, as it skips qmllint, but runs the
+  parser against a fixture. Lint also checks that every `Text` sets
+  `textFormat`.
 - Every Library action has a Ctrl key, so the F-row is never needed: `Ctrl+N`
   note, `Ctrl+R` rename, `Ctrl+T` trim, `Ctrl+Shift+T` restore the original,
   `Ctrl+D` tidy or raw, `Ctrl+P` previous transcript, `Ctrl+E` open the folder
@@ -33,14 +35,20 @@ All notable changes to this project are documented here. Format follows
   (`C` goes back). `x` dismisses an error message in the popup, and `Esc` does
   the same in the Library before it does anything else.
 - Icon buttons give a screen reader their shortcut as the accessible
-  description.
+  description (for when Quickshell exposes its windows; today no reader
+  reaches them, see CONTRIBUTING).
 
 ### Changed
 - A plain `record stop` stops at once, as the README always said a script's
   stop does. The popup's `r`, the toggle and the keybinding still ask first
   past an hour (they pass `--guard`), and the popup now says so while it
   waits. `--force` is kept as the old spelling of a plain stop.
-- `config set recordingsDir` creates the folder, as record and import do.
+- `config set recordingsDir` creates the folder, as record and import do, and
+  refuses a relative path (it would land somewhere different for each caller).
+- `export` writes its temporary file exclusively (`mktemp`), so nothing planted
+  in a synced vault can redirect the note.
+- An `import --move` whose source cannot be removed (a read-only folder) still
+  completes the take and logs the leftover instead of failing halfway.
 - The Library gets out of the way when it opens the editor, the file manager
   or Obsidian; they opened underneath it.
 - A title or note being typed is saved when another take is clicked or the
@@ -60,8 +68,6 @@ All notable changes to this project are documented here. Format follows
   transcription or resume cannot start on it halfway.
 - The crash sweep only touches folders the CLI made (a `.omarecorder` marker),
   and an import converts under a temporary name until it is done.
-- Lint checks that every `Text` sets `textFormat`, and the kit-token check
-  counts braces properly and has a fixture that CI runs.
 - The Library's footer lists only the keys that are not Ctrl keys, ends with
   "hold Ctrl for shortcuts", and is measured item by item: on a narrow screen
   it drops its least useful keys first instead of cutting off mid-line.
@@ -112,8 +118,6 @@ All notable changes to this project are documented here. Format follows
 - The setup card said nothing when a model download failed.
 - Setup was not checked again after the source changed.
 - A long import could be taken for a crashed take by the recovery sweep.
-- The Library pulled a list you had scrolled back to the selection on every
-  refresh.
 - A title starting `--urgency=` or similar was read as an option by the
   notification sender.
 - A resumed take's transcript was described as trimmed.
@@ -132,6 +136,7 @@ All notable changes to this project are documented here. Format follows
   its label in the tooltip.
 - On a long list, a refresh (a note saved, a transcription finishing) scrolled
   the Library back to the top and left the selected recording out of sight.
+  It now keeps the selection in view, unless you have scrolled away from it.
 - Renaming a recording to a title whose folder already existed moved the take
   inside that folder and then failed, leaving it hidden. Rename now refuses.
 - `transcribe --language` took any value. It gets the same check as
@@ -144,14 +149,14 @@ All notable changes to this project are documented here. Format follows
   Library's button quietly went back to "Download". The Library now says so
   beside the button until the next try.
 - A second click on Transcribe (a double click, or one because nothing seemed
-  to happen) landed on Cancel and cancelled the job it had just started.
-  Cancel ignores clicks for its first second.
+  to happen) either cancelled the job it had just started, once Cancel had
+  appeared, or ran a second transcription that failed as already running.
+  Cancel ignores clicks for its first second, and a second press waits for
+  the first.
 - `c` and then `r` in quick succession recorded with the previous source, and
   two quick presses of `c` could save the wrong one. After a pick from the
   popup's Source dropdown, `c` changed the source but the dropdown kept
   showing the old one.
-- A quick second click on Transcribe, before the job had started, ran a second
-  transcription that failed as already running.
 - The popup's key legend could wrap with a dot at the start of its second line.
 - After a shell restart the Library's model chips could show Fast while
   Transcribe used the configured default, until another take was selected.
@@ -647,7 +652,7 @@ against the code.
   top-left of the transcript box, outside the scroll area, with "Copied" / "Sent"
   confirmations; the action row is compact (three presets, "Re-transcribe").
 - Clipping detection skips the first 2 s and decides on the share of samples at
-  the rail (`levels.clipped_pct` > 0.05 %). README recommends 30–40 % input for
+  the rail (`levels.clipped_pct` > 0.05 %). README recommends 30 to 40 % input for
   laptop mics.
 
 ### Fixed

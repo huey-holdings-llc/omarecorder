@@ -5,7 +5,7 @@ import Quickshell.Io
 import "ui/format.js" as Fmt
 import "ui/state.js" as State
 
-// OmaRecorder service — the single source of truth for the plugin's UI.
+// OmaRecorder service: the single source of truth for the plugin's UI.
 // Mounted once by the shell (kind "service", keepLoaded); Panel/Library
 // instances (one per monitor) read from it via bar.shell.serviceFor(id).
 //
@@ -229,7 +229,7 @@ QtObject {
   function restoreTrim(id) { run(["trim", id, "--restore"]) }
   function openTranscript(id) { Quickshell.execDetached([cli, "open", id]) }
   function openFolder(id) { Quickshell.execDetached([cli, "folder", id]) }
-  // The CLI does the copy (argv only — no shell string is ever built from a title).
+  // The CLI does the copy (argv only: no shell string is ever built from a title).
   function copyTranscript(id, raw, onDone) { run(raw ? ["copy", id, "--raw"] : ["copy", id], onDone) }
   // The CLI picks the vault/folder (config, then the open vault) and opens the note in Obsidian.
   function exportToObsidian(id, raw, onDone) { run(raw ? ["export", id, "--raw"] : ["export", id], onDone) }

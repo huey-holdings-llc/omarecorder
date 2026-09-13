@@ -10,7 +10,7 @@ import "ui/state.js" as State
 import qs.Ui
 import "ui"
 
-// OmaRecorder Library — fullscreen overlay: every recording on the left,
+// OmaRecorder Library: fullscreen overlay: every recording on the left,
 // the selected one on the right with its transcript. Summoned with
 //   omarchy-shell shell toggle io.github.huey-holdings-llc.omarecorder
 // Uses the theme's [popups] surface tokens (same chrome as the bar popup) so
@@ -115,6 +115,7 @@ Item {
   function open(payloadJson) {
     root.opened = true
     root.filterText = ""
+    root.userScrolled = false   // a scroll from the last visit must not hide the take asked for now
     root.deleteConfirmOpen = false
     var requested = ""
     try { var p = JSON.parse(payloadJson || "{}"); if (p && p.id) requested = String(p.id) } catch (e) {}
@@ -185,7 +186,7 @@ Item {
   }
 
   // Enter / the main button start a transcription. Cancelling a running job is
-  // only reachable through the explicit Cancel button (cancelSelected) — a
+  // only reachable through the explicit Cancel button (cancelSelected): a
   // stray Enter must never kill an hour-long job.
   // A second press before the job reached state.json started a second run,
   // which failed as "already running"; one start is in flight at a time.

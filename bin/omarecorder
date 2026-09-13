@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# omarecorder — record conversations and meetings, keep the audio, transcribe
+# omarecorder: record conversations and meetings, keep the audio, transcribe
 # them locally later with voxtype. This CLI is the only place logic lives; the
 # Omarchy shell plugin (Panel.qml / Library.qml / Service.qml) is a thin view
 # over it and reacts to $XDG_RUNTIME_DIR/omarecorder/state.json.
@@ -17,7 +17,7 @@ VERSION=$(jq -r '.version // "0"' "$PLUGIN_DIR/manifest.json" 2>/dev/null || ech
 # ---------------------------------------------------------------- paths -----
 XDG_CONFIG_HOME="${XDG_CONFIG_HOME:-$HOME/.config}"
 XDG_STATE_HOME="${XDG_STATE_HOME:-$HOME/.local/state}"
-# Runtime state lives in the per-user runtime dir only — never /tmp, where
+# Runtime state lives in the per-user runtime dir only: never /tmp, where
 # another local user could pre-create the directory and feed us pids/paths.
 if [[ -z "${XDG_RUNTIME_DIR:-}" ]]; then
   if [[ -d "/run/user/$(id -u)" ]]; then XDG_RUNTIME_DIR="/run/user/$(id -u)"
@@ -29,7 +29,7 @@ DICT_FILE="$CONFIG_DIR/dictionary"
 STATE_DIR="$XDG_STATE_HOME/omarecorder"
 BENCH_FILE="$STATE_DIR/bench.json"
 LOG_FILE="$STATE_DIR/omarecorder.log"
-# OMARECORDER_RUN_DIR: test hook only — lets the suite keep the real XDG_RUNTIME_DIR (so systemd --user
+# OMARECORDER_RUN_DIR: test hook only: lets the suite keep the real XDG_RUNTIME_DIR (so systemd --user
 # is reachable) while state stays in a sandbox.
 RUN_DIR="${OMARECORDER_RUN_DIR:-$XDG_RUNTIME_DIR/omarecorder}"
 STATE_FILE="$RUN_DIR/state.json"
@@ -45,7 +45,7 @@ WAVE_W=2400
 WAVE_H=128
 # Long takes are transcribed in pieces of at most this many seconds (whisper
 # drifts into repetition loops on very long inputs; the transcript also fills
-# in piece by piece). Equal pieces, seams snapped to silence — see plan_chunks.
+# in piece by piece). Equal pieces, seams snapped to silence: see plan_chunks.
 CHUNK_S="${OMARECORDER_CHUNK_S:-1800}"
 [[ "$CHUNK_S" =~ ^[1-9][0-9]*$ ]] || CHUNK_S=1800   # a bad value must not reach bash arithmetic
 # A recording at least this old asks for a second stop within 10 s (0 disables).
@@ -107,7 +107,7 @@ want_json() { case "${1:-}" in --json) return 0 ;; "") return 1 ;; *) die "unkno
 
 fmt_hms() { local s=${1%.*}; s=${s:-0}; printf '%02d:%02d:%02d' $((s / 3600)) $((s % 3600 / 60)) $((s % 60)); }
 
-# Atomic JSON write: write_json <file> <json>. An empty document is refused —
+# Atomic JSON write: write_json <file> <json>. An empty document is refused:
 # a jq filter that failed must never blank meta.json or state.json.
 write_json() {
   [[ -n "$2" ]] || { log "write_json: refusing to write empty JSON to $1"; return 1; }
@@ -162,7 +162,10 @@ cmd_config() {
       case "$key" in
         # Created if missing, as record and import would; only a path that
         # cannot be a folder, or is not writable, is refused.
-        recordingsDir) local d="${val/#\~/$HOME}"; mkdir -p -- "$d" 2>/dev/null || true
+        recordingsDir) local d="${val/#\~/$HOME}"
+          # Absolute only: a relative folder would land somewhere different for every caller.
+          [[ "$d" == /* ]] || die "recordingsDir must be an absolute path (or start with ~): $val"
+          mkdir -p -- "$d" 2>/dev/null || true
           [[ -d "$d" && -w "$d" ]] || die "recordingsDir must be a writable folder (it could not be created): $val" ;;
         obsidianVault) [[ -z "$val" || -d "${val/#\~/$HOME}" ]] || die "obsidianVault must be an existing directory (or \"\" for automatic): $val" ;;
         defaultModel) jq -e --arg m "$val" 'any(.[]; .name == $m)' <<<"$MODEL_CATALOG" >/dev/null \
@@ -379,7 +382,7 @@ pid_alive() { kill -0 "$1" 2>/dev/null; }
 # get recycled, and a stale one must never be signalled or read as a live take.
 recorder_alive() { pid_alive "$1" && [[ "$(cat "/proc/$1/comm" 2>/dev/null)" =~ ^(pw-record|pw-cat)$ ]]; }
 
-# oneshot units report "activating" while they run — treat that as alive.
+# oneshot units report "activating" while they run: treat that as alive.
 unit_active() { [[ "$(systemctl --user show -p ActiveState --value "$1" 2>/dev/null)" =~ ^(active|activating|reloading|deactivating)$ ]]; }
 
 # The locked half of reconcile: state only, no ffmpeg. Prints the folder of a
@@ -404,7 +407,9 @@ _reconcile_state() {
     [[ -z "$j" ]] && continue
     local unit age; unit=$(jq -r '.unit // empty' <<<"$j"); age=$(( now - $(jq -r '.started_at // 0' <<<"$j") ))
     # An edit claim lives exactly as long as the command that holds it.
-    if [[ $(jq -r '.type' <<<"$j") == "edit" ]] && ! pid_alive "$(jq -r '.pid // 0' <<<"$j")"; then
+    # (pid 0 would pass kill -0, being our own process group, and lock the take for good.)
+    local epid; epid=$(jq -r '.pid // 0' <<<"$j")
+    if [[ $(jq -r '.type' <<<"$j") == "edit" ]] && { [[ ! "$epid" =~ ^[1-9][0-9]*$ ]] || ! pid_alive "$epid"; }; then
       changed=1; log "reconcile: dropped the edit claim of a finished command"; continue
     fi
     # systemd-run --no-block: a unit sampled before it activates reads inactive; give it a moment
@@ -943,7 +948,7 @@ finalize_audio() {
 
 # make_waveform <dir>: audio.wav → waveform.png, the strip the Library draws
 # behind the trim handles. Mid-grey reads on light and dark themes; sqrt
-# scaling keeps quiet speech visible next to loud passages. Best effort only —
+# scaling keeps quiet speech visible next to loud passages. Best effort only:
 # a missing strip never fails a stop or an import.
 make_waveform() {
   local dir="$1"; [[ -f "$dir/audio.wav" ]] && have ffmpeg || return 0
@@ -988,7 +993,7 @@ repair_wav() {
 # analyze_levels <dir>: peak/RMS/flatness via ffmpeg astats → meta.levels.
 # A hard-clipped take sits at ~0 dBFS with many flat (saturated) runs; a
 # healthy one peaks well below that. Cheap (decode only), so run it on every
-# stop and import — it is the only way the user finds out before transcribing.
+# stop and import: it is the only way the user finds out before transcribing.
 analyze_levels() {
   local dir="$1"; local f="$dir/audio.wav"; [[ -f "$f" ]] || return 0
   # The ADC rails for the first ~0.7 s after capture starts (settling
@@ -1094,13 +1099,15 @@ cmd_import() {
   # part was promoted, and a failure in between lost the recording).
   local part="$dir/.import.part.wav"
   if [[ "$probe" == "pcm_s16le,$RATE,1" ]]; then
-    cp -- "$src" "$part" || { rm -rf "$dir"; die "could not copy $src"; }
+    cp --preserve=timestamps -- "$src" "$part" || { rm -rf "$dir"; die "could not copy $src"; }   # timestamps only: the mode stays ours (0600)
   else
     ffmpeg -v error -y -i "$src" -ar "$RATE" -ac 1 -c:a pcm_s16le "$part" || { rm -rf "$dir"; die "ffmpeg failed to convert $src"; }
   fi
   mv -f -- "$part" "$dir/audio.wav" || { rm -rf "$dir"; die "could not place the converted audio in $dir"; }
   write_initial_meta "$dir" "$id" "$title" "import" "$(date -r "$dir/audio.wav" +%FT%T%z)"
-  (( move )) && rm -f -- "$src"
+  # A source that cannot be removed (a read-only folder) is not a failed
+  # import: the take is complete, so finish it and say so in the log.
+  if (( move )) && ! rm -f -- "$src" 2>/dev/null; then log "import --move: could not remove $src"; fi
   finalize_audio "$dir"; analyze_levels "$dir"; bump_state
   log "import $src -> $dir"
   echo "$id"
@@ -1185,7 +1192,7 @@ cmd_analyze() { # analyze <id>: (re)measure levels for an existing recording
 # audio.orig.wav (later trims cut the already-trimmed take and leave that
 # original alone) unless --replace; --restore puts it back. The raw takes of a
 # "both" recording (mic.wav / system.wav) are never touched. An existing
-# transcript is flagged stale — it still describes the old audio.
+# transcript is flagged stale: it still describes the old audio.
 cmd_trim() {
   local usage="usage: trim <id> --from s --to s [--replace] | trim <id> --restore"
   local id="${1:-}" from="" to="" replace=0 restore=0; [[ -n "$id" ]] || die "$usage"; shift
@@ -1357,7 +1364,7 @@ cmd_vaults() {
 }
 
 # resolve_export_target <recdir> [--vault P] [--dir P] → "<folder>\t<vault or empty>"
-# --dir wins; then an explicit/configured vault (must exist — never silently
+# --dir wins; then an explicit/configured vault (must exist: never silently
 # another one); then the open/most recent Obsidian vault; then config exportDir;
 # and with no Obsidian at all the note sits next to the recording.
 resolve_export_target() {
@@ -1414,7 +1421,9 @@ cmd_export() {
   local src; case "$(jq -r '.source // ""' <<<"$meta")" in
     mic) src="microphone" ;; system) src="system audio" ;; both) src="mic + system audio" ;; *) src="imported" ;; esac
   local model; model=$(jq -r '.transcript.model // ""' <<<"$meta"); [[ -n "$model" ]] || model='""'
-  local tmp="$path.tmp.$$"
+  # mktemp: created exclusively, so a link planted at a guessable name inside
+  # a synced vault cannot redirect the write (a vault's contents are data).
+  local tmp; tmp=$(mktemp -- "$folder/.omarecorder.XXXXXX") || die "could not write in $folder"
   { printf -- '---\n'
     printf 'title: %s\n' "$(jq -cn --arg t "$title" '$t')"
     printf 'date: %s\n' "$created"
@@ -2109,7 +2118,7 @@ _tx_worker() {
   local acc="$dir/transcript.md.tmp" errlog="$RUN_DIR/tx-$id.err" child="" start done_audio=0
   mkdir -p "$RUN_DIR"
   # `omarecorder cancel` stops the unit with SIGTERM. Stop our own child (never
-  # the process group — inline runs share it with the caller), keep what was
+  # the process group: inline runs share it with the caller), keep what was
   # already published (transcript.md + meta already say partial=true), learn the
   # speed from the pieces that finished, and exit 0 so systemd sees no failure.
   trap '[[ -n "$child" ]] && kill -TERM "$child" 2>/dev/null

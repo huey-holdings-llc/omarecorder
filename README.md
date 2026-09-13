@@ -25,7 +25,7 @@ The rest of this README covers each step in detail: [Install](#install),
 
 OmaRecorder was built with AI assistance (Claude Code) by a hobbyist, not a
 professional developer. Every effort was made to follow good practice anyway:
-the code is reviewed by a second model on each pull request, every CLI
+the code is reviewed by a second model on larger pull requests, every CLI
 behaviour has a test, the security posture was audited and fixed before release,
 and every claim in this README was checked against the code. Please read the
 source with that in mind, and if you know better, open an issue or a pull
@@ -62,7 +62,9 @@ Local first is the rule, not a feature. Everything runs on your machine:
   inside a shell string, a `jq` filter or a unit body. whisper's stderr (which
   can echo decoded text) goes to a per-job file, not the shared log.
 * It does not edit your Hyprland, Omarchy or Obsidian configuration (Obsidian's
-  `obsidian.json` and `app.json` are only read), runs no daemon, polls nothing,
+  `obsidian.json` and `app.json` are only read), runs no daemon, runs nothing
+  while idle (a 30-second liveness check ticks only while something is
+  recording or working),
   and uploads nothing.
 * Outside a recording folder it deletes only its own state and runtime files,
   and the source file of an `import --move` once the recording has it. A whole
@@ -114,7 +116,7 @@ the plugin's privacy statement remains simple and true.
   transcript fills in piece by piece, and cancelling keeps what is done.
 * **CLI**: everything the UI does is `omarecorder <command>`, so keybindings,
   the Omarchy menu and your own scripts get the same behaviour.
-* **Local-first, no bloat**: no daemons, no polling. Recording is `pw-record`,
+* **Local-first, no bloat**: no daemons, nothing running while idle. Recording is `pw-record`,
   transcription is `voxtype transcribe` in a detached `systemd-run --user` unit,
   and the shell only watches a few small files.
 
@@ -164,8 +166,8 @@ ln -s ~/.config/omarchy/plugins/io.github.huey-holdings-llc.omarecorder/bin/omar
 
 First run: open the popup. If a requirement is missing (no whisper model yet, a
 tool not installed, no microphone while the source records one), a "Setup
-needed" card lists each one with
-the command that fixes it, and downloads the default model with one click.
+needed" card lists each one with the package that provides it (and the one
+command that adds voxtype), and downloads the default model with one click.
 
 ## Update
 
@@ -384,7 +386,7 @@ Obsidian strip it.
 | Speed measurements | `~/.local/state/omarecorder/bench.json` (per model, from takes of 60 s or more) |
 | Log | `~/.local/state/omarecorder/omarecorder.log`, rotated to `.log.1` at 1 MB |
 | whisper stderr of a failed job | `~/.local/state/omarecorder/tx-<id>.err` (kept only on failure) |
-| Runtime state | `$XDG_RUNTIME_DIR/omarecorder/`: `state.json`, `level`, `state.lock`, temporary chunks. Never `/tmp` |
+| Runtime state | `$XDG_RUNTIME_DIR/omarecorder/`: `state.json`, `state.lock`, `level`, `play.pid`, `mpv.sock`, `tx-<id>.*` while a transcription runs, `open/<id>` links for the editor. Never `/tmp` |
 
 Config keys (`omarecorder config get --json`): `recordingsDir` (`~/Recordings`),
 `defaultSource` (`mic`), `defaultModel` (`base.en`), `language` (`en`),
@@ -598,7 +600,7 @@ then:
 cd ~/projects/omarecorder
 scripts/dev-sync.sh --enable      # rsync into the plugin dir, validate, symlink the CLI, rescan plugins
 omarchy-restart-shell             # QML changes need this: rescan keeps Qt's component cache
-bash tests/cli.test.sh            # CLI tests against a throwaway XDG tree (about 3 minutes)
+bash tests/cli.test.sh            # CLI tests against a throwaway XDG tree (about 8 minutes)
 bash tests/lint.sh                # shellcheck, manifest schema, QML hygiene, README sections
 ```
 

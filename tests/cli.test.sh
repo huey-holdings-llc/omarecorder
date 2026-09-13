@@ -296,6 +296,13 @@ check "and the --move source is untouched" test -s "$TMP/movable.wav"
 check "and no half-made folder is left" bash -c "! ls -d '$OMARECORDER_DIR'/*Movable >/dev/null 2>&1"
 ID3=$("$CLI" import "$TMP/movable.wav" --move --title "Movable")
 check "a completed --move removes the source" bash -c "! test -e '$TMP/movable.wav'"
+# A --move whose source cannot be removed (read-only folder) still finishes
+# the take; the leftover is logged, not fatal. (Root can always remove, so
+# under root this only checks the take is complete.)
+RO="$TMP/ro-src"; mkdir -p "$RO"; cp "$TMP/quiet.wav" "$RO/kept.wav"; touch -d "2026-01-05 03:04:05" "$RO/kept.wav"; chmod 555 "$RO"
+ID4=$("$CLI" import "$RO/kept.wav" --move --title "Kept")
+check "the take is complete even when the source stays" bash -c "[ \"\$(jq -r .duration_s '$OMARECORDER_DIR/$ID4 Kept/meta.json')\" = 3 ] && test -s '$OMARECORDER_DIR/$ID4 Kept/waveform.png'"
+chmod 755 "$RO"; "$CLI" delete "$ID4" --yes >/dev/null
 check "and the take has its audio" test -s "$OMARECORDER_DIR/$ID3 Movable/audio.wav"
 "$CLI" delete "$ID3" --yes >/dev/null
 
@@ -445,6 +452,8 @@ R0=$("$CLI" config get recordingsDir)
 check "config set recordingsDir creates a missing folder" "$CLI" config set recordingsDir "$TMP/new-recs/sub"
 check "and the folder exists" test -d "$TMP/new-recs/sub"
 fails "config set recordingsDir refuses a path under a file" "$CLI" config set recordingsDir "$TMP/quiet.wav/sub"
+fails "config set recordingsDir refuses a relative path" "$CLI" config set recordingsDir "rel-dir"
+check "and made no folder for it" bash -c "! test -d rel-dir && ! test -d '$TMP/rel-dir'"
 "$CLI" config set recordingsDir "$R0" >/dev/null
 fails "import rejects unknown flag" "$CLI" import --bogus "$TMP/quiet.wav"
 }
@@ -485,8 +494,18 @@ sleep 60 & EP=$!
 jq -c --arg id "$IDE2" --argjson p "$EP" '.jobs += [{type:"edit", id:$id, pid:$p, started_at:0}]' "$RUN/state.json" > "$RUN/state.json.new" && mv "$RUN/state.json.new" "$RUN/state.json"
 fails "a take being edited refuses a transcription" env PATH="$STUBMODE:$PATH" VOXTYPE_MODELS_DIR="$MODELSOK" "$CLI" transcribe "$IDE2" --model base.en
 fails "and a second edit" "$CLI" rename "$IDE2" "Other"
+jq -c --arg id "$IDE2" '.last_stop = {id:$id, resumable:true, stopped_at:0}' "$RUN/state.json" > "$RUN/state.json.new" && mv "$RUN/state.json.new" "$RUN/state.json"
+fails "and a resume of it" env PATH="$FAKEPATH" "$CLI" record resume
 kill "$EP" 2>/dev/null; wait "$EP" 2>/dev/null
 check "an editor that has gone no longer holds the take" "$CLI" rename "$IDE2" "Other"
+# A claim with no usable pid (a hand-edited state) is dropped too, not kept forever.
+jq -c --arg id "$IDE2" '.jobs += [{type:"edit", id:$id, pid:0, started_at:0}]' "$RUN/state.json" > "$RUN/state.json.new" && mv "$RUN/state.json.new" "$RUN/state.json"
+check "a claim with pid 0 does not lock the take" "$CLI" rename "$IDE2" "Other again"
+# A command that fails while holding the claim releases it on the way out.
+mkdir -p "$OMARECORDER_DIR/$IDE2 Blocked"
+fails "rename onto an existing folder fails" "$CLI" rename "$IDE2" "Blocked"
+eq "and its claim is gone" "$(jq -r '[.jobs[] | select(.type=="edit")] | length' "$RUN/state.json")" "0"
+rm -rf "$OMARECORDER_DIR/$IDE2 Blocked"
 eq "and no edit job is left behind" "$(jq -r '[.jobs[] | select(.type=="edit")] | length' "$RUN/state.json")" "0"
 "$CLI" delete "$IDE2" --yes >/dev/null
 }

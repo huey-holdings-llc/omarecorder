@@ -25,7 +25,7 @@ jobs:
           # The kit-token check needs the shell's Style.qml too, so it skips here.
           LINT_EXPECT_SKIPS: "3"
         run: bash tests/lint.sh
-      - name: CLI tests (no microphone, no voxtype, no systemd here, so those blocks skip)
+      - name: CLI tests (no voxtype, no microphone, and root owns every folder here, so three blocks skip)
         env:
           OMARECORDER_TEST_ALLOW_SKIP: "1"
           # How many blocks skip in this container. A different count fails the

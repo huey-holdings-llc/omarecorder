@@ -35,7 +35,8 @@ Panel {
   // While the input clips the bar says so instead of the timer (the glyph is already urgent-coloured).
   readonly property string barLabel: recording && !vertical ? "  " + (svc.clipping ? "CLIP" : svc.elapsedText) : ""
   readonly property string stateText: !ready ? "Service unavailable"
-    : recording && svc.stopArmed ? "Long take: stop again within 10 seconds to end it"
+    // Short: the hero shows this uppercased on one line, about 44 characters.
+    : recording && svc.stopArmed ? "Stop again within 10 s to end it"
     : recording ? "Recording " + svc.elapsedText + (svc.activeRecording ? " · " + svc.sourceLabel(svc.activeRecording.source) : "") + (svc.clipping ? " · ⚠ clipping" : "")
     : transcribing ? "Transcribing " + svc.jobProgressText(svc.activeJob) + svc.transcribeElapsedText + " · " + svc.activeJobTitle
     : (svc.downloading ? "Downloading model…" : "Ready")
@@ -93,7 +94,7 @@ Panel {
   }
   function toggleRecording() { if (ready) svc.toggleRecording() }
   // Import = a path field in the popup. (A QtQuick FileDialog crashes
-  // Quickshell on Omarchy 4 — both in-shell and in its own process — so no
+  // Quickshell on Omarchy 4 (both in-shell and in its own process) so no
   // graphical picker until that is fixed upstream.)
   property bool importOpen: false
   function importAudio() {

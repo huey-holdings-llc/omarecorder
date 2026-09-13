@@ -18,7 +18,7 @@ to them is easy to merge; one that breaks them will get a conversation first.
    Quickshell and Qt) over anything else, and prefer Omarchy's own commands
    (`omarchy-notification-send`, `omarchy-launch-editor`, `omarchy-shell`) over
    generic ones where they exist.
-2. **Simplicity and efficiency over features.** No daemons, no polling, no
+2. **Simplicity and efficiency over features.** No daemons, nothing running while idle, no
    background work the user did not ask for. The shell watches a few small
    files; everything else happens in the CLI, on demand, and exits. A feature
    that costs idle CPU, a permanent process, or a second copy of the audio
@@ -50,7 +50,7 @@ to them is easy to merge; one that breaks them will get a conversation first.
 ## Practical bits
 
 * **Dev loop**: `scripts/dev-sync.sh --enable`, then `omarchy-restart-shell`
-  for QML changes. `bash tests/cli.test.sh` (about three minutes, uses the real
+  for QML changes. `bash tests/cli.test.sh` (about eight minutes, uses the real
   microphone and voxtype) and `bash tests/lint.sh` must both pass. No mic or
   voxtype on your machine? `OMARECORDER_TEST_ALLOW_SKIP=1` turns those blocks
   into counted skips; that is how CI runs the suite in an Arch container.
@@ -78,12 +78,13 @@ to them is easy to merge; one that breaks them will get a conversation first.
   could not run, and `LINT_EXPECT_SKIPS` fails the run when that count moves.
   CI sets it to 3 (qmllint, the kit-token check and omarchy-plugin-validate,
   none of which has what it needs in the container). The CLI suite does the
-  same with `OMARECORDER_TEST_EXPECT_SKIPS` (3 in CI: no microphone, voxtype or
-  systemd there). If you add a check that can skip, adjust the number in
+  same with `OMARECORDER_TEST_EXPECT_SKIPS` (3 in CI: no voxtype, no
+  microphone, and the read-only folder check, which cannot run as root;
+  systemd's block sits inside voxtype's and never counts on its own). If you add a check that can skip, adjust the number in
   `.github/workflows/ci.yml` in the same pull request.
-* **Coverage is a local, occasional check, never a gate.** `pacman -S kcov`,
+* **Coverage is a local, occasional check, never a gate.** Install the kcov package,
   then `kcov --include-path=$PWD/bin coverage/ tests/cli.test.sh` writes an
-  HTML report under `coverage/` (the suite takes its usual seven minutes;
+  HTML report under `coverage/` (the suite takes its usual eight minutes;
   kcov follows the CLI as a child process). Read it for branches no test
   reaches; do not wire it into CI or set a threshold. Two things to know
   when reading it: a line kcov marks unhit inside a multi-line `jq` or `awk`
