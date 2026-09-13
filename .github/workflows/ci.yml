@@ -22,7 +22,8 @@ jobs:
           # qmllint (no omarchy shell modules here) and omarchy-plugin-validate
           # (not packaged) are the only checks that may skip in this container.
           # Anything else going quiet is a bug, so lint fails on a different count.
-          LINT_EXPECT_SKIPS: "2"
+          # The kit-token check needs the shell's Style.qml too, so it skips here.
+          LINT_EXPECT_SKIPS: "3"
         run: bash tests/lint.sh
       - name: CLI tests (no microphone, no voxtype, no systemd here, so those blocks skip)
         env:

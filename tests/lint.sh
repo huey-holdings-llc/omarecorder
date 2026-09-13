@@ -75,6 +75,23 @@ if [[ -n "$QMLLINT" && -f "$SHELLQML/Commons/qmldir" && -f "$SHELLQML/Ui/qmldir"
   if "$QMLLINT" -i "$SHELLQML/Commons/qmldir" -i "$SHELLQML/Ui/qmldir" \
        --missing-property disable --signal-handler-parameters disable --uncreatable-type disable "${QML[@]}"; then ok "qmllint clean"; else bad "qmllint findings"; fi
 else skipped "qmllint (needs the omarchy shell's QML modules)"; fi
+# The shell's nested token groups (Style.spacing.*, Style.font.*, Style.bar.*)
+# are untyped QtObjects, which is why missing-property is off above: a token
+# Omarchy renames would only fail at runtime. Check every one the plugin uses
+# against the groups the shell's Style.qml declares.
+STYLEQML="$SHELLQML/Commons/Style.qml"
+if [[ -f "$STYLEQML" ]]; then
+  declared=$(awk '
+    /readonly property QtObject [a-z]+: QtObject \{/ { match($0, /QtObject [a-z]+:/); g = substr($0, RSTART + 9, RLENGTH - 10); depth = 1; next }
+    g != "" {
+      if ($0 ~ /\{/) depth++
+      if ($0 ~ /\}/) { depth--; if (depth == 0) { g = ""; next } }
+      if (match($0, /property [A-Za-z]+ [A-Za-z_]+/)) { split(substr($0, RSTART, RLENGTH), a, " "); print g "." a[3] }
+    }' "$STYLEQML" | sort -u)
+  unknown=$(grep -ohE 'Style\.(spacing|font|bar)\.[A-Za-z_]+' "${QML[@]}" | sed 's/^Style\.//' | sort -u | comm -23 - <(printf '%s\n' "$declared"))
+  if [[ -z "$unknown" ]]; then ok "every nested kit token the plugin uses exists in the shell's Style.qml"
+  else bad "kit tokens the shell's Style.qml does not declare: $(printf '%s ' $unknown)"; fi
+else skipped "kit tokens (needs the omarchy shell's Style.qml)"; fi
 
 step "format.js"
 # The only Qt call in format.js is Qt.formatDateTime with one format; a stub
