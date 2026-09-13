@@ -321,6 +321,13 @@ eq "id stable after rename" "$($CLI show "$ID1" --json | jq -r .id)" "$ID1"
 eq "meta title updated" "$(jq -r .title "$D1B/meta.json")" "Renamed - Title here"
 V2=$(jq -r .version "$RUN/state.json")
 check "state version bumped by mutations" test "$V2" -gt "$V1"
+# A folder already at the new name (one made by hand, a stray copy) must not
+# swallow the take: plain mv moved the take inside it and the meta write failed.
+mkdir -p "$OMARECORDER_DIR/$ID1 Taken"; echo keep > "$OMARECORDER_DIR/$ID1 Taken/mine.txt"
+fails "rename refuses a new name whose folder already exists" "$CLI" rename "$ID1" "Taken"
+check "and the take stays where it was" test -f "$D1B/meta.json"
+check "and the other folder is untouched" bash -c "[ \"\$(ls -A '$OMARECORDER_DIR/$ID1 Taken')\" = mine.txt ]"
+rm -rf "$OMARECORDER_DIR/$ID1 Taken"
 
 }
 
@@ -382,6 +389,10 @@ fails "transcribe rejects negative --from" "$CLI" transcribe "$IDE" --model base
 fails "transcribe rejects non-numeric --from" "$CLI" transcribe "$IDE" --model base.en --from abc
 fails "transcribe rejects --to <= --from" "$CLI" transcribe "$IDE" --model base.en --from 5 --to 2
 fails "transcribe rejects option-looking --to" "$CLI" transcribe "$IDE" --model base.en --to "-y"
+# --language gets the check config set gives it (auto or a two-letter code),
+# with a working engine on PATH so nothing else is what refuses it.
+fails "transcribe rejects a --language that is not auto or two letters" env PATH="$STUBMODE:$PATH" VOXTYPE_MODELS_DIR="$MODELSOK" "$CLI" transcribe "$IDE" --model base.en --language english
+fails "transcribe rejects an option-looking --language" env PATH="$STUBMODE:$PATH" VOXTYPE_MODELS_DIR="$MODELSOK" "$CLI" transcribe "$IDE" --model base.en --language "-l"
 fails "play rejects non-numeric --from" "$CLI" play "$IDE" --from "0 -y"
 eq "no job registered after rejected args" "$("$CLI" status --json | jq -r '.jobs|length')" "0"
 # meta.json survives a broken measurement
@@ -1735,6 +1746,15 @@ eq "with the transcribe command, the id and --download" "$(sed -n '/^--exec$/{n;
 check "nothing was executed from the title" bash -c "! test -e '$TMP/notify-pwn' && ! test -e '$TMP/notify-pwn2'"
 check "OMARECORDER_QUIET=1 sends nothing" bash -c "rm -rf '$NOTIFY/calls'; mkdir -p '$NOTIFY/calls'; PATH=\"$NOTIFY/bin:\$PATH\" \"$CLI\" note '$NID' quiet >/dev/null && [ \"\$(ls -A '$NOTIFY/calls' | wc -l)\" = 0 ]"
 "$CLI" delete "$NID" --yes >/dev/null
+# The daemon reads the body as markup (the headline is plain text), so a
+# title's & < > are escaped there: "Q&A <draft>" otherwise broke the body.
+rm -rf "$NOTIFY/calls"; mkdir -p "$NOTIFY/calls"
+MID=$(PATH="$NOTIFY/bin:$FAKEPATH" OMARECORDER_QUIET=0 "$CLI" record start --title 'Q&A <draft>')
+( PATH="$NOTIFY/bin:$FAKEPATH" OMARECORDER_QUIET=0 "$CLI" record stop >/dev/null 2>&1 )
+MSAVED=$(grep -l '^Recording saved' "$NOTIFY"/calls/* 2>/dev/null | head -1)
+check "a title's & and < are escaped in the notification body" grep -qF 'Q&amp;A &lt;draft&gt;' "$MSAVED"
+check "and the headline is left as plain text" bash -c "grep '^Recording saved' '$MSAVED' | grep -qv '&amp;\|&lt;'"
+"$CLI" delete "$MID" --yes >/dev/null
 }
 
 t_argcheck() {
@@ -1927,6 +1947,13 @@ done
 # transcript being assembled, an audio scratch file, a worker's err log.
 echo "== leftovers"
 check "no temp files under the recordings or the runtime dir" bash -c "! find '$OMARECORDER_DIR' '$RUN' \( -name '*.tmp.*' -o -name '*.new' -o -name 'audio.tx.*' -o -name '*.cat.tmp.*' -o -name '*.repair.wav' -o -name 'tx-*' \) 2>/dev/null | grep -q ."
+
+# A skip is not a pass: an environment that allows skips (CI, no microphone or
+# voxtype) pins how many with OMARECORDER_TEST_EXPECT_SKIPS, as lint does with
+# LINT_EXPECT_SKIPS, so a block that goes quiet fails the run.
+if [[ -n "${OMARECORDER_TEST_EXPECT_SKIPS:-}" && "$skipped" != "$OMARECORDER_TEST_EXPECT_SKIPS" ]]; then
+  echo "✗ expected $OMARECORDER_TEST_EXPECT_SKIPS skipped, got $skipped"; fail=$((fail + 1))
+fi
 
 echo
 echo "passed: $pass  failed: $fail  skipped: $skipped"

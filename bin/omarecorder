@@ -77,6 +77,10 @@ now_epoch() { date +%s; }
 notify() { # notify <headline> [description] [-- exec args...]
   [[ "${OMARECORDER_QUIET:-0}" == "1" ]] && return 0
   local head="$1" desc="${2:-}"; shift; if [[ $# -gt 0 ]]; then shift; fi
+  # The daemon reads the body as markup (the headline is plain text), so a
+  # title like "Q&A <draft>" broke it. The replacements are quoted: bash 5.2
+  # reads a bare & in one as "the matched text".
+  desc=${desc//&/"&amp;"}; desc=${desc//</"&lt;"}; desc=${desc//>/"&gt;"}
   local -a extra=()
   if [[ "${1:-}" == "--" ]]; then shift; extra=(--exec "$@"); fi
   if have omarchy-notification-send; then
@@ -1187,7 +1191,12 @@ cmd_rename() {
   # fail the title write after the move, leaving the two out of step.
   jq -e 'type == "object"' "$dir/meta.json" >/dev/null 2>&1 || die "meta.json in $dir is unreadable; not renaming"
   local new="$ROOT/$id"; [[ -n "$title" ]] && new="$ROOT/$id $title"
-  if [[ "$new" != "$dir" ]]; then mv "$dir" "$new"; fi
+  # A folder already at the new name would swallow the take: plain mv moved it
+  # inside, and the meta write below then failed on the wrong path.
+  if [[ "$new" != "$dir" ]]; then
+    [[ -e "$new" ]] && die "a folder named \"${new##*/}\" already exists; pick another title"
+    mv -T "$dir" "$new"
+  fi
   update_meta "$new" '.title = $t' --arg t "$title"
   # A standing resume offer shows the title in the popup; keep it current.
   state_set --arg id "$id" --arg t "$title" '.last_stop |= (if . != null and .id == $id then . + {title:$t} else . end)'
@@ -1683,8 +1692,11 @@ tidy_transcript() {
   # at most 28; 40 needs a genuine whisper loop.
   local lw="${OMARECORDER_LOOP_WARN_WORDS:-40}"
   [[ "$lw" =~ ^[0-9]+$ ]] || lw=40
-  { printf '<!-- omarecorder tidy: %s paragraphs, %s repeated words removed, %s loops, created=%s -->\n' "$paras" "$removed" "$loops" "$(now_iso)"; cat "$out.tmp.$$"; } > "$out"
-  rm -f "$out.tmp.$$"
+  # Built beside the file and renamed into place: written in place, a reader
+  # (list, search, the Library) could catch it half-written.
+  { printf '<!-- omarecorder tidy: %s paragraphs, %s repeated words removed, %s loops, created=%s -->\n' "$paras" "$removed" "$loops" "$(now_iso)"; cat "$out.tmp.$$"; } > "$out.new.tmp.$$" \
+    && mv -f "$out.new.tmp.$$" "$out"
+  rm -f "$out.tmp.$$" "$out.new.tmp.$$"
   update_meta "$dir" '.transcript = ((.transcript // {}) + {tidy:{paragraphs:$p, repeats_removed:$r, loops:$l, longest_run_words:$g, loop_warning:($g >= $w), dict_replacements:$dr, created:$c}})' \
     --argjson p "$paras" --argjson r "$removed" --argjson l "$loops" --argjson g "$longest" --argjson w "$lw" --argjson dr "$dreps" --arg c "$(now_iso)" || true
 }
@@ -1885,6 +1897,7 @@ cmd_transcribe() {
     esac
   done
   [[ "$enhance" == "true" ]] || enhance=false   # a hand-edited config must not reach the worker as garbage
+  [[ "$lang" =~ ^(auto|[a-z][a-z])$ ]] || die "language must be auto or a two-letter code (en, de, fr)"
   [[ -z "$from" ]] || valid_seconds "$from" || die "--from must be a non-negative number of seconds"
   [[ -z "$to" ]] || valid_seconds "$to" || die "--to must be a non-negative number of seconds"
   [[ -z "$from" || -z "$to" ]] || awk -v a="$from" -v b="$to" 'BEGIN{exit !(b > a)}' || die "--to must be greater than --from"
