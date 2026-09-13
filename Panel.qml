@@ -335,7 +335,7 @@ Panel {
             visible: root.recent.length === 0 && !root.settingsOpen
             width: parent.width
             text: !root.ready ? "Service not loaded."
-              : (root.svc.recordings.length === 0 ? "No recordings yet. Press r to start one." : "Recent list is off (recentCount is 0).")
+              : (root.svc.recordings.length === 0 ? "No recordings yet. Press r to start one." : "The Recent list is off. Raise \"Recent recordings shown in popup\" in this widget's bar settings to bring it back.")
             color: root.dim
             font.family: root.fontFamily
             font.pixelSize: Style.font.caption

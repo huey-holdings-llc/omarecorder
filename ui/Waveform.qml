@@ -141,6 +141,7 @@ Item {
     // time labels
     Text {
       anchors.left: parent.left; anchors.bottom: parent.bottom; anchors.margins: Style.spacing.xxs
+      anchors.leftMargin: Style.spacing.sm   // clear of the playhead, which sits on the left edge at 0:00
       visible: !root.trimMode   // the badges carry the times in trim mode
       text: root.trimMode ? root.fmt(root.trimFrom) : root.fmt(root.position)
       color: root.foreground; font.family: root.fontFamily; font.pixelSize: Style.font.caption

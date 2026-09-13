@@ -137,7 +137,13 @@ Item {
   // The key legend. On a narrow card the lowest-priority items drop first
   // (never "hold Ctrl" or "Esc close"), so it never clips; the Ctrl keys are
   // not listed at all, because holding Ctrl shows each one on its control.
-  readonly property var hintItems: root.trimMode
+  // While a title or note is being typed the footer says how to finish; a
+  // caption above the meta line used to, and pushed everything below it down.
+  readonly property bool editingField: titleField.activeFocus || noteField.activeFocus
+  readonly property var hintItems: root.editingField
+    ? [{ text: titleField.activeFocus ? "renaming" : "editing the note", priority: 1 },
+       { text: "Enter save", priority: 9, keep: true }, { text: "Esc cancel", priority: 9, keep: true }]
+    : root.trimMode
     ? [{ text: "Space play", priority: 3 }, { text: "←→ seek", priority: 2 }, { text: "[ ] mark start / end", priority: 4 },
        { text: "Enter trim", priority: 9, keep: true }, { text: "Esc leave trim mode", priority: 9, keep: true }]
     : [{ text: "↑↓ select", priority: 5 }, { text: "Enter open / transcribe", priority: 4 }, { text: "Space play", priority: 3 },
@@ -612,7 +618,11 @@ Item {
               Text {
                 anchors.centerIn: parent
                 visible: root.rows.length === 0
-                text: root.filterText ? "No matches." : "No recordings yet.\nStart one from the bar icon."
+                // Names the folder: after the recordings folder is changed an
+                // empty list otherwise looks like everything was lost.
+                text: root.filterText ? "No matches."
+                  : "No recordings in " + String((root.svc && root.svc.config && root.svc.config.recordingsDir) || "~/Recordings").replace(/^\/home\/[^\/]+/, "~")
+                    + " yet.\nStart one from the bar icon, or change the folder in the popup's settings."
                 color: root.dim
                 horizontalAlignment: Text.AlignHCenter
                 font.family: root.fontFamily
@@ -645,25 +655,19 @@ Item {
               }
 
               Text {
-                visible: titleField.activeFocus
-                width: parent.width
-                text: "Renaming: Enter saves, Esc cancels"
-                color: Color.accent
-                font.family: root.fontFamily
-                font.pixelSize: Style.font.caption
-              }
-
-              Text {
                 width: parent.width
                 text: root.selected && root.svc
                   ? (root.selectedLive ? "Recording now · " + root.svc.elapsedText + " · " + root.svc.sourceLabel(root.selected.source)
-                    : root.svc.fmtDate(root.selected.created) + " · " + root.svc.fmtDuration(root.selected.duration_s) + " · " + root.svc.fmtBytes(root.selected.size_bytes)
+                    // Warnings right after the length: at the end they were the
+                    // first thing the two-line elide cut off.
+                    : root.svc.fmtDate(root.selected.created) + " · " + root.svc.fmtDuration(root.selected.duration_s)
+                    + (root.svc.isClipped(root.selected) ? " · ⚠ clipped" : "")
+                    + (root.svc.isPartial(root.selected) ? " · partial transcript" : "")
+                    + " · " + root.svc.fmtBytes(root.selected.size_bytes)
                     + " · " + root.svc.sourceLabel(root.selected.source)
                     + (root.selected.transcript ? " · transcribed with " + root.selected.transcript.model : "")
                     + (root.selected.transcript && root.selected.transcript.enhanced ? " · audio cleaned up" : "")
                     + (root.selected.exported_to ? " · in Obsidian" : "")
-                    + (root.svc.isClipped(root.selected) ? " · ⚠ clipped" : "")
-                    + (root.svc.isPartial(root.selected) ? " · partial transcript" : "")
                     + (root.selected.trim ? " · trimmed" : "")
                     + (root.selected.transcript && root.selected.transcript.tidy && root.selected.transcript.tidy.repeats_removed > 0 && !root.showRaw ? " · " + root.selected.transcript.tidy.repeats_removed + (root.selected.transcript.tidy.repeats_removed === 1 ? " repeat removed" : " repeats removed") : "")
                     + (root.selected.transcript && root.selected.transcript.tidy && root.selected.transcript.tidy.dict_replacements > 0 && !root.showRaw ? " · " + root.selected.transcript.tidy.dict_replacements + (root.selected.transcript.tidy.dict_replacements === 1 ? " correction" : " corrections") : "")
@@ -686,7 +690,8 @@ Item {
                 enabled: !root.selectedJob
                 width: parent.width
                 placeholderText: "Add a note"
-                foreground: root.dim
+                // A saved note in full colour: dim, it read as the "Add a note" placeholder.
+                foreground: root.foreground
                 font.family: root.fontFamily
                 font.pixelSize: Style.font.caption
                 onAccepted: { if (root.svc && root.selected && text !== (root.selected.notes || "")) root.svc.setNote(root.selected.id, text); keyCatcher.forceActiveFocus() }
@@ -1055,36 +1060,22 @@ Item {
                   onClicked: root.showPrev = !root.showPrev
                   KeyBadge { key: "P"; shown: root.ctrlHints; fontFamily: root.fontFamily }
                 }
+                // The confirmation is a tick in the button's place: a "Copied" or
+                // "Sent" label beside it pushed the next button sideways.
                 AccessibleActionButton {
-                  iconText: "󰆏"
-                  tooltipText: "Copy transcript (Ctrl+C)"
-                  foreground: root.foreground; fontFamily: root.fontFamily
+                  iconText: copiedFlash.running ? "󰄬" : "󰆏"
+                  tooltipText: copiedFlash.running ? "Copied" : "Copy transcript (Ctrl+C)"
+                  foreground: copiedFlash.running ? Color.accent : root.foreground; fontFamily: root.fontFamily
                   onClicked: if (root.svc && root.selected) root.svc.copyTranscript(root.selected.id, root.showRaw, function(code) { if (code === 0) copiedFlash.restart() })
                   KeyBadge { key: "C"; shown: root.ctrlHints; fontFamily: root.fontFamily }
                 }
-                Text {
-                  anchors.verticalCenter: parent.verticalCenter
-                  visible: copiedFlash.running
-                  text: "Copied"
-                  color: Color.accent
-                  font.family: root.fontFamily
-                  font.pixelSize: Style.font.caption
-                }
                 Timer { id: copiedFlash; interval: 1500 }
                 AccessibleActionButton {
-                  iconText: "󰈝"
-                  tooltipText: "Send to Obsidian (Ctrl+O)"
-                  foreground: root.foreground; fontFamily: root.fontFamily
+                  iconText: sentFlash.running ? "󰄬" : "󰈝"
+                  tooltipText: sentFlash.running ? "Sent to Obsidian" : "Send to Obsidian (Ctrl+O)"
+                  foreground: sentFlash.running ? Color.accent : root.foreground; fontFamily: root.fontFamily
                   onClicked: if (root.svc && root.selected) root.svc.exportToObsidian(root.selected.id, root.showRaw, function(code) { if (code === 0) sentFlash.restart() })
                   KeyBadge { key: "O"; shown: root.ctrlHints; fontFamily: root.fontFamily }
-                }
-                Text {
-                  anchors.verticalCenter: parent.verticalCenter
-                  visible: sentFlash.running
-                  text: "Sent"
-                  color: Color.accent
-                  font.family: root.fontFamily
-                  font.pixelSize: Style.font.caption
                 }
                 Timer { id: sentFlash; interval: 1500 }
               }

@@ -14,6 +14,8 @@ Column {
   readonly property var setup: svc ? svc.setup : ({ ok: true })
   readonly property var dl: svc && setup && setup.defaultModel ? svc.downloadFor(setup.defaultModel) : null
   readonly property var dlModel: svc && setup && setup.defaultModel ? svc.modelByName(setup.defaultModel) : null
+  // The preset's name, as the rest of the UI says it ("Fast"), with the engine name after.
+  readonly property string modelName: dlModel && dlModel.label ? dlModel.label + " · " + dlModel.name : (setup && setup.defaultModel ? setup.defaultModel : "")
 
   visible: setup && setup.ok === false
   width: parent ? parent.width : Style.space(300)
@@ -38,7 +40,7 @@ Column {
   Button {
     visible: !!(root.setup && root.setup.voxtype && root.setup.defaultModel_ok === false && !root.dl)
     width: parent.width
-    text: "Download " + (root.setup ? root.setup.defaultModel : "") + (root.dlModel ? " (" + root.dlModel.size_mb + " MB)" : "")
+    text: "Download " + root.modelName + (root.dlModel ? " (" + root.dlModel.size_mb + " MB)" : "")
     iconText: "󰇚"
     foreground: root.foreground
     fontFamily: root.fontFamily
@@ -51,7 +53,7 @@ Column {
     spacing: Style.spacing.xxs
     Text {
       width: parent.width
-      text: "Downloading " + (root.dl ? root.dl.model : "") + "… " + (root.dl && root.dl.expected_bytes ? Math.min(99, Math.round(100 * (root.dl.bytes_done || 0) / root.dl.expected_bytes)) + "%" : "")
+      text: "Downloading " + root.modelName + "… " + (root.dl && root.dl.expected_bytes ? Math.min(99, Math.round(100 * (root.dl.bytes_done || 0) / root.dl.expected_bytes)) + "%" : "")
       color: root.foreground
       font.family: root.fontFamily
       font.pixelSize: Style.font.caption
@@ -79,7 +81,7 @@ Column {
     }
     if (!s.mic_ok) out.push("No microphone found. Plug one in or pick 'system' as the source")
     if (!s.recordingsDir_ok) out.push("Cannot write to " + s.recordingsDir)
-    if (s.voxtype && s.defaultModel_ok === false) out.push("Model " + s.defaultModel + " is not downloaded yet")
+    if (s.voxtype && s.defaultModel_ok === false) out.push("The " + root.modelName + " model is not downloaded yet")
     return out
   }
 }
