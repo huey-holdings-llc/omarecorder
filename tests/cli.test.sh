@@ -427,7 +427,13 @@ eq "and that runtime dir is private" "$(stat -c %a "$TMP/xdgrt/omarecorder")" "7
 check "nothing under /tmp" bash -c "! test -d /tmp/omarecorder"
 # config validation
 fails "config get unknown key fails" "$CLI" config get bogus
-fails "config set recordingsDir rejects missing dir" "$CLI" config set recordingsDir "$TMP/does-not-exist"
+# A new recordings folder is created, as record and import would; only a path
+# that cannot be a folder is refused.
+R0=$("$CLI" config get recordingsDir)
+check "config set recordingsDir creates a missing folder" "$CLI" config set recordingsDir "$TMP/new-recs/sub"
+check "and the folder exists" test -d "$TMP/new-recs/sub"
+fails "config set recordingsDir refuses a path under a file" "$CLI" config set recordingsDir "$TMP/quiet.wav/sub"
+"$CLI" config set recordingsDir "$R0" >/dev/null
 fails "import rejects unknown flag" "$CLI" import --bogus "$TMP/quiet.wav"
 }
 
@@ -459,6 +465,18 @@ mkdir -p "$TMP/runtarget"; ln -sfn "$TMP/runtarget" "$TMP/runlink"
 fails "a symlinked runtime folder is refused" env OMARECORDER_RUN_DIR="$TMP/runlink" "$CLI" status
 check "and nothing was written through it" bash -c "[ -z \"\$(ls -A '$TMP/runtarget')\" ]"
 rm -f "$TMP/runlink"
+# rename, trim, note and delete claim the take under the lock for as long as
+# they run (an "edit" job), so a transcription or resume cannot start on it
+# halfway; the old unlocked check left that window open.
+IDE2=$("$CLI" import "$TMP/quiet.wav" --title "Edit claim")
+sleep 60 & EP=$!
+jq -c --arg id "$IDE2" --argjson p "$EP" '.jobs += [{type:"edit", id:$id, pid:$p, started_at:0}]' "$RUN/state.json" > "$RUN/state.json.new" && mv "$RUN/state.json.new" "$RUN/state.json"
+fails "a take being edited refuses a transcription" env PATH="$STUBMODE:$PATH" VOXTYPE_MODELS_DIR="$MODELSOK" "$CLI" transcribe "$IDE2" --model base.en
+fails "and a second edit" "$CLI" rename "$IDE2" "Other"
+kill "$EP" 2>/dev/null; wait "$EP" 2>/dev/null
+check "an editor that has gone no longer holds the take" "$CLI" rename "$IDE2" "Other"
+eq "and no edit job is left behind" "$(jq -r '[.jobs[] | select(.type=="edit")] | length' "$RUN/state.json")" "0"
+"$CLI" delete "$IDE2" --yes >/dev/null
 }
 
 t_recovery() {
@@ -474,24 +492,33 @@ eq "recovered both take has duration" "$(jq -r .duration_s "$DB/meta.json")" "3"
 # orphan sweep: a crash between mkdir and the meta write leaves a folder with
 # no meta.json. Reconcile removes an old husk, salvages one with real audio,
 # and leaves a fresh folder alone (a recording could be starting right now).
-IDO="2026-01-06_010101"; DO_="$OMARECORDER_DIR/$IDO Husk"; mkdir -p "$DO_"
+# Every folder the CLI makes carries a .omarecorder marker from its first
+# moment; the sweep only ever touches folders that have it.
+IDO="2026-01-06_010101"; DO_="$OMARECORDER_DIR/$IDO Husk"; mkdir -p "$DO_"; : > "$DO_/.omarecorder"
 touch -d "2026-01-06 01:01:01" "$DO_"
-IDF="2026-01-07_020202"; DF="$OMARECORDER_DIR/$IDF Fresh"; mkdir -p "$DF"
-IDS="2026-01-08_030303"; DS="$OMARECORDER_DIR/$IDS Salvage"; mkdir -p "$DS"
+IDF="2026-01-07_020202"; DF="$OMARECORDER_DIR/$IDF Fresh"; mkdir -p "$DF"; : > "$DF/.omarecorder"
+IDS="2026-01-08_030303"; DS="$OMARECORDER_DIR/$IDS Salvage"; mkdir -p "$DS"; : > "$DS/.omarecorder"
 ffmpeg -v error -y -f lavfi -i "sine=frequency=330:duration=40" -ar 16000 -ac 1 "$DS/audio.wav"
 touch -d "2026-01-08 03:03:03" "$DS"
-IDM="2026-01-09_040404"; DM="$OMARECORDER_DIR/$IDM MicOnly"; mkdir -p "$DM"
+IDM="2026-01-09_040404"; DM="$OMARECORDER_DIR/$IDM MicOnly"; mkdir -p "$DM"; : > "$DM/.omarecorder"
 ffmpeg -v error -y -f lavfi -i "sine=frequency=330:duration=40" -ar 16000 -ac 1 "$DM/mic.wav"
 touch -d "2026-01-09 04:04:04" "$DM"
-IDT_SHORT="2026-01-10_050505"; DTS="$OMARECORDER_DIR/$IDT_SHORT Short"; mkdir -p "$DTS"
+IDT_SHORT="2026-01-10_050505"; DTS="$OMARECORDER_DIR/$IDT_SHORT Short"; mkdir -p "$DTS"; : > "$DTS/.omarecorder"
 ffmpeg -v error -y -f lavfi -i "sine=frequency=330:duration=2" -ar 16000 -ac 1 "$DTS/audio.wav"
 touch -d "2026-01-10 05:05:05" "$DTS"
 DX="$OMARECORDER_DIR/2026-01-11_060606 Not ours"; mkdir -p "$DX"
 echo "somebody else's data" > "$DX/notes.txt"
 touch -d "2026-01-11 06:06:06" "$DX"
-DH="$OMARECORDER_DIR/2026-01-12_070707 Header only"; mkdir -p "$DH"
+DH="$OMARECORDER_DIR/2026-01-12_070707 Header only"; mkdir -p "$DH"; : > "$DH/.omarecorder"
 head -c 44 /dev/zero > "$DH/audio.wav"
 touch -d "2026-01-12 07:07:07" "$DH"
+# Without the marker an id-shaped folder is the user's, even an empty one.
+DU="$OMARECORDER_DIR/2026-01-13_080808 My own"; mkdir -p "$DU"
+touch -d "2026-01-13 08:08:08" "$DU"
+# A long import converting under a temporary name is not a crashed take.
+DI="$OMARECORDER_DIR/2026-01-14_090909 Importing"; mkdir -p "$DI"; : > "$DI/.omarecorder"
+ffmpeg -v error -y -f lavfi -i "sine=frequency=330:duration=5" -ar 16000 -ac 1 "$DI/.import.part.wav"
+touch -d "2026-01-14 09:09:09" "$DI"
 "$CLI" status >/dev/null
 check "old empty orphan folder swept" bash -c "! test -d \"$DO_\""
 check "fresh meta-less folder left alone" test -d "$DF"
@@ -501,6 +528,13 @@ eq "salvaged take is marked recovered" "$(jq -r .source "$DS/meta.json")" "recov
 eq "salvaged take has its duration" "$(jq -r .duration_s "$DS/meta.json")" "40"
 check "lone mic track promoted to audio.wav" test -s "$DM/audio.wav"
 check "a short take is salvaged too, size is not proof of a husk" test -s "$DTS/meta.json"
+check "an id-shaped folder without the marker is the user's, left alone" test -d "$DU"
+check "a folder mid-import is left alone" bash -c "test -f '$DI/.import.part.wav' && ! test -e '$DI/meta.json'"
+rm -rf "$DU" "$DI"
+IDMK=$("$CLI" import "$TMP/quiet.wav" --title "Marked")
+check "a new take's folder carries the marker" test -f "$("$CLI" show "$IDMK" --json | jq -r .dir)/.omarecorder"
+check "and an import leaves no temporary file" bash -c "! ls -A '$("$CLI" show "$IDMK" --json | jq -r .dir)' | grep -q import.part"
+"$CLI" delete "$IDMK" --yes >/dev/null
 eq "short salvaged take has its duration" "$(jq -r .duration_s "$DTS/meta.json")" "2"
 check "a look-alike folder with foreign content is not touched" test -s "$DX/notes.txt"
 check "and gets no meta.json written into it" bash -c "! test -e \"$DX/meta.json\""
@@ -543,6 +577,7 @@ check "vaults: human output stars the open vault" bash -c "\"$CLI\" vaults | gre
 IDX=$("$CLI" import "$TMP/quiet.wav" --title "Tone: Test?"); DX=$("$CLI" show "$IDX" --json | jq -r .dir)
 fails "export without transcript fails" "$CLI" export "$IDX" --no-open
 printf '<!-- omarecorder model=base.en -->\nhello world\n' > "$DX/transcript.md"
+"$CLI" note "$IDX" 'Session recap: goblins "won"' >/dev/null
 NOTE=$("$CLI" export "$IDX" --no-open)
 eq "export lands in the open vault's new-note folder" "$NOTE" "$TMP/vaults/a/inbox/Tone- Test-.md"
 check "note written" test -s "$NOTE"
@@ -554,13 +589,22 @@ eq "frontmatter source" "$(sed -n 's/^source: //p' "$NOTE")" "imported"
 eq "frontmatter duration" "$(sed -n 's/^duration: //p' "$NOTE")" "00:00:03"
 eq "frontmatter date is meta.created" "$(sed -n 's/^date: //p' "$NOTE")" "$(jq -r .created "$DX/meta.json")"
 check "frontmatter tags" grep -qx 'tags: \[omarecorder\]' "$NOTE"
+check "the recording's note travels into the frontmatter, quoted" grep -qxF 'note: "Session recap: goblins \"won\""' "$NOTE"
 check "body has no header comment" bash -c "! grep -q '<!--' '$NOTE'"
 check "body has the transcript text" grep -qx "hello world" "$NOTE"
 eq "meta.exported_to set" "$(jq -r .exported_to "$DX/meta.json")" "$NOTE"
+eq "meta says the export went to a vault" "$(jq -r .exported_vault "$DX/meta.json")" "true"
 check "meta.exported_at set" bash -c "jq -e '.exported_at | length > 0' '$DX/meta.json'"
 eq "second export gets (2)" "$("$CLI" export "$IDX" --no-open)" "$TMP/vaults/a/inbox/Tone- Test- (2).md"
 eq "--vault picks that vault's folder" "$("$CLI" export "$IDX" --vault "$TMP/vaults/b" --no-open)" "$TMP/vaults/b/Tone- Test-.md"
 eq "--dir exports anywhere" "$("$CLI" export "$IDX" --dir "$TMP/exports" --no-open)" "$TMP/exports/Tone- Test-.md"
+eq "and meta says it did not go to a vault" "$(jq -r .exported_vault "$DX/meta.json")" "false"
+# A newline in the synced folder setting hid a "../" from the check and the
+# note landed one level above the vault.
+printf '{"newFileLocation":"folder","newFileFolderPath":"..\\nx"}' > "$TMP/vaults/a/.obsidian/app.json"
+eq "a folder setting with a newline cannot climb out of the vault" "$("$CLI" export "$IDX" --vault "$TMP/vaults/a" --no-open)" "$TMP/vaults/a/Tone- Test-.md"
+check "and nothing landed next to the vault" bash -c "! ls '$TMP/vaults' | grep -q 'Tone'"
+printf '{"newFileLocation":"folder","newFileFolderPath":"inbox"}' > "$TMP/vaults/a/.obsidian/app.json"
 fails "--vault /nonexistent fails" "$CLI" export "$IDX" --vault "$TMP/nonexistent" --no-open
 check "config set obsidianVault" "$CLI" config set obsidianVault "$TMP/vaults/b"
 eq "configured vault wins over the open one" "$("$CLI" export "$IDX" --no-open)" "$TMP/vaults/b/Tone- Test- (2).md"
@@ -582,6 +626,7 @@ check "config set exportDir" "$CLI" config set exportDir "$TMP/exports2"
 eq "exportDir used when no vault" "$("$CLI" export "$IDX" --no-open)" "$TMP/exports2/Tone- Test-.md"
 "$CLI" config set exportDir "" >/dev/null
 eq "vaults --json without obsidian.json" "$("$CLI" vaults --json | jq -c .)" "[]"
+check "vaults with none says how to get one" bash -c "\"$CLI\" vaults 2>&1 >/dev/null | grep -qi 'open a vault'"
 "$CLI" delete "$IDX" --yes >/dev/null
 
 }
@@ -643,9 +688,11 @@ check "mic.wav still untouched" cmp -s "$TMP/quiet.wav" "$DT/mic.wav"
 jq -c '.transcript = {model:"base.en"}' "$DT/meta.json" > "$DT/meta.json.t" && mv -f "$DT/meta.json.t" "$DT/meta.json"
 $CLI trim "$IDT" --from 0 --to 2 >/dev/null
 eq "trim marks the transcript stale" "$(jq -r .transcript.stale "$DT/meta.json")" "true"
+eq "and says why (the Library words its note from it)" "$(jq -r .transcript.stale_reason "$DT/meta.json")" "trim"
 check "transcribe after trim" env PATH="$STUBMODE:$PATH" VOXTYPE_MODELS_DIR="$MODELSOK" "$CLI" transcribe "$IDT" --model base.en
 eq "new transcript clears stale" "$(jq -r '.transcript.stale // "absent"' "$DT/meta.json")" "absent"
 eq "stale set again by --restore" "$($CLI trim "$IDT" --restore >/dev/null; jq -r .transcript.stale "$DT/meta.json")" "true"
+eq "with restore as the reason" "$(jq -r .transcript.stale_reason "$DT/meta.json")" "restore"
 $CLI delete "$IDT" --yes >/dev/null; $CLI delete "$IDT2" --yes >/dev/null
 
 }
@@ -1027,6 +1074,12 @@ eq "no match returns an empty array" "$("$CLI" search walrus)" "[]"
 eq "regex text is inert (fixed strings)" "$("$CLI" search '.*')" "[]"
 eq "a leading dash is a query, not an option" "$("$CLI" search '-heron')" "[]"
 check "the header line is not searched" bash -c "[ \"\$(\"$CLI\" search omarecorder)\" = '[]' ]"
+# The same fields the Library's search box matches: title and note as well.
+"$CLI" note "$SB" "otter sighting by the pier" >/dev/null
+eq "search finds a note" "$("$CLI" search OTTER)" "[\"$SB\"]"
+eq "search finds a title" "$("$CLI" search "search b")" "[\"$SB\"]"
+fails "search rejects an option instead of treating it as text" "$CLI" search --json heron
+fails "search rejects a second argument" "$CLI" search heron extra
 # Tidy is preferred once it exists: search follows what the user reads.
 printf '<!-- 1 paragraphs, 0 repeats, 0 loops, -->\na walrus instead\n' > "$SAD/transcript.tidy.md"
 eq "tidy text wins once present" "$("$CLI" search walrus)" "[\"$SA\"]"
@@ -1081,6 +1134,7 @@ eq "audio.wav really is 6 s" "$(ffprobe -v error -show_entries format=duration -
 eq "the seam offset is recorded" "$(jq -c .resume_seams "$RD/meta.json")" "[3]"
 eq "size updated after the join" "$(jq -r .size_bytes "$RD/meta.json")" "$(stat -c %s "$RD/audio.wav")"
 eq "the transcript is flagged stale" "$(jq -r .transcript.stale "$RD/meta.json")" "true"
+eq "because of the resume, not a trim" "$(jq -r .transcript.stale_reason "$RD/meta.json")" "resume"
 check "levels re-measured" bash -c "jq -e '.levels.peak_db' '$RD/meta.json'"
 check "waveform regenerated" bash -c "find '$RD' -maxdepth 1 -name waveform.png -newer '$TMP/resume.marker' | grep -q ."
 check "segment files cleaned up" bash -c "! ls '$RD'/*.seg.wav >/dev/null 2>&1"
@@ -1464,7 +1518,7 @@ src0=$("$CLI" config get defaultSource)
 "$CLI" config set defaultSource system >/dev/null
 ( PATH="$NOMIC:$STUBMODE:$PATH" VOXTYPE_MODELS_DIR="$MODELSOK" "$CLI" setup check --json > "$TMP/setup-nomic.json" 2>/dev/null || true )
 eq "no microphone, system source: the mic is not required" "$(jq -r .mic_required "$TMP/setup-nomic.json")" "false"
-eq "and setup passes" "$(jq -r '.ok' "$TMP/setup-nomic.json") $(jq -c '[.missing[].tool]' "$TMP/setup-nomic.json")" "true []"
+eq "and setup passes, with no required tool missing" "$(jq -r '"\(.ok) \([.missing[] | select(.required)] | length)"' "$TMP/setup-nomic.json")" "true 0"
 "$CLI" config set defaultSource mic >/dev/null
 ( PATH="$NOMIC:$STUBMODE:$PATH" VOXTYPE_MODELS_DIR="$MODELSOK" "$CLI" setup check --json > "$TMP/setup-nomic.json" 2>/dev/null || true )
 eq "no microphone, mic source: required, and setup fails" "$(jq -r '"\(.mic_required) \(.ok)"' "$TMP/setup-nomic.json")" "true false"
@@ -1482,17 +1536,25 @@ IDL=$(OMARECORDER_STOP_CONFIRM_S=1 PATH="$FAKEPATH" "$CLI" record start --title 
 fails "start refused while recording" env PATH="$FAKEPATH" "$CLI" record start
 fails "transcribe refused while recording" env PATH="$STUBMODE:$PATH" VOXTYPE_MODELS_DIR="$MODELSOK" "$CLI" transcribe "$IDL" --model base.en
 sleep 2
-eq "stop past the threshold asks to confirm" "$(OMARECORDER_STOP_CONFIRM_S=1 PATH="$FAKEPATH" "$CLI" record stop)" "confirm"
+# The guard is for a stray keypress (the toggle, the popup's r, which pass
+# --guard); a script's plain `record stop` means stop.
+eq "a guarded stop past the threshold asks to confirm" "$(OMARECORDER_STOP_CONFIRM_S=1 PATH="$FAKEPATH" "$CLI" record stop --guard)" "confirm"
 eq "still recording after the first stop" "$("$CLI" status --json | jq -r .recording.id)" "$IDL"
-check "second stop inside the window goes through" env OMARECORDER_STOP_CONFIRM_S=1 PATH="$FAKEPATH" "$CLI" record stop
+check "second guarded stop inside the window goes through" env OMARECORDER_STOP_CONFIRM_S=1 PATH="$FAKEPATH" "$CLI" record stop --guard
 eq "state cleared after the confirmed stop" "$($CLI status)" "idle"
 IDL2=$(OMARECORDER_STOP_CONFIRM_S=1 PATH="$FAKEPATH" "$CLI" record start --title "Long take 2")
 sleep 2
-check "stop --force skips the confirmation" env OMARECORDER_STOP_CONFIRM_S=1 PATH="$FAKEPATH" "$CLI" record stop --force
+PSTOP=$(OMARECORDER_STOP_CONFIRM_S=1 PATH="$FAKEPATH" "$CLI" record stop)
+check "a plain stop past the threshold stops at once (it reports the take, not confirm)" bash -c '[[ "$1" == "$2 "* ]]' _ "$PSTOP" "$IDL2"
+eq "state cleared after the plain stop" "$($CLI status)" "idle"
+IDL3=$(OMARECORDER_STOP_CONFIRM_S=1 PATH="$FAKEPATH" "$CLI" record start --title "Long take 3")
+sleep 2
+eq "the toggle past the threshold asks to confirm" "$(OMARECORDER_STOP_CONFIRM_S=1 PATH="$FAKEPATH" "$CLI" record toggle)" "confirm"
+check "stop --force still stops at once" env OMARECORDER_STOP_CONFIRM_S=1 PATH="$FAKEPATH" "$CLI" record stop --force
 eq "state cleared after the forced stop" "$($CLI status)" "idle"
 fails "stop rejects an unknown flag" "$CLI" record stop --bogus
 fails "stop with nothing recording fails" "$CLI" record stop
-"$CLI" delete "$IDL" --yes >/dev/null; "$CLI" delete "$IDL2" --yes >/dev/null
+"$CLI" delete "$IDL" --yes >/dev/null; "$CLI" delete "$IDL2" --yes >/dev/null; "$CLI" delete "$IDL3" --yes >/dev/null
 }
 
 t_startfail() {
@@ -1771,6 +1833,15 @@ MSAVED=$(grep -l '^Recording saved' "$NOTIFY"/calls/* 2>/dev/null | head -1)
 check "a title's & and < are escaped in the notification body" grep -qF 'Q&amp;A &lt;draft&gt;' "$MSAVED"
 check "and the headline is left as plain text" bash -c "grep '^Recording saved' '$MSAVED' | grep -qv '&amp;\|&lt;'"
 "$CLI" delete "$MID" --yes >/dev/null
+# omarchy-notification-send reads an argument that starts with --urgency= and
+# friends as an option, even in the body's slot; a title like that must not.
+rm -rf "$NOTIFY/calls"; mkdir -p "$NOTIFY/calls"
+OID=$(PATH="$NOTIFY/bin:$FAKEPATH" OMARECORDER_QUIET=0 "$CLI" record start --title '--urgency=critical')
+( PATH="$NOTIFY/bin:$FAKEPATH" OMARECORDER_QUIET=0 "$CLI" record stop >/dev/null 2>&1 )
+OSAVED=$(grep -l '^Recording saved' "$NOTIFY"/calls/* 2>/dev/null | head -1)
+check "a title that looks like an option still reaches the body as text" grep -q 'urgency=critical' "$OSAVED"
+check "and no argument after the headline starts with --urgency" bash -c "! grep -q '^--urgency' '$OSAVED'"
+"$CLI" delete "$OID" --yes >/dev/null
 }
 
 t_argcheck() {
@@ -1851,6 +1922,7 @@ fails "export rejects an unknown option" "$CLI" export "$IDS" --frob
 fails "model rejects an unknown subcommand" "$CLI" model frob
 fails "dictionary rejects an unknown subcommand" "$CLI" dictionary frob
 fails "open refuses without a transcript" "$CLI" open "$IDS"
+eq "cancel with nothing running says so instead of claiming it cancelled" "$("$CLI" cancel "$IDS")" "nothing to cancel for $IDS"
 eq "record status is idle" "$("$CLI" record status)" "idle"
 check "models lists the catalog for a terminal" bash -c "\"$CLI\" models | grep -q 'base.en'"
 check "setup check prints key: value lines" bash -c "\"$CLI\" setup check 2>/dev/null | grep -q '^version: '"
@@ -1881,13 +1953,16 @@ for tool in xdg-open omarchy-launch-editor omarchy-shell; do
 done
 eq "dictionary edit prints the file" "$(PATH="$EX:$PATH" "$CLI" dictionary edit)" "$XDG_CONFIG_HOME/omarecorder/dictionary"
 check "and hands it to xdg-open" wait_for 3 grep -qx "$XDG_CONFIG_HOME/omarecorder/dictionary" "$EX/xdg-open.args"
+# The editor gets a path through a private link named by the id: the folder's
+# title never reaches the terminal's command line.
 check "open hands the transcript to the editor" env PATH="$EX:$PATH" "$CLI" open "$IDS"
-eq "with the transcript path" "$(cat "$EX/omarchy-launch-editor.args")" "$DS/transcript.md"
+eq "through the id link, no title in it" "$(cat "$EX/omarchy-launch-editor.args")" "$RUN/open/$IDS/transcript.md"
+eq "which is the recording's transcript" "$(readlink -f "$(cat "$EX/omarchy-launch-editor.args")")" "$(readlink -f "$DS/transcript.md")"
 printf 'Hello from the tidy transcript.\n' > "$DS/transcript.tidy.md"
 check "open prefers the tidy transcript" env PATH="$EX:$PATH" "$CLI" open "$IDS"
-eq "with the tidy path" "$(cat "$EX/omarchy-launch-editor.args")" "$DS/transcript.tidy.md"
+eq "with the tidy path" "$(cat "$EX/omarchy-launch-editor.args")" "$RUN/open/$IDS/transcript.tidy.md"
 check "open --raw asks for the raw one" env PATH="$EX:$PATH" "$CLI" open "$IDS" --raw
-eq "with the raw path" "$(cat "$EX/omarchy-launch-editor.args")" "$DS/transcript.md"
+eq "with the raw path" "$(cat "$EX/omarchy-launch-editor.args")" "$RUN/open/$IDS/transcript.md"
 fails "open rejects an unknown option" env PATH="$EX:$PATH" "$CLI" open "$IDS" --frob
 rm -f "$DS/transcript.tidy.md"
 check "library toggles the overlay through omarchy-shell" env PATH="$EX:$PATH" "$CLI" library
