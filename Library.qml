@@ -99,6 +99,18 @@ Item {
   readonly property var selectedJob: svc && selected ? svc.jobFor(selected.id) : null
   readonly property string modelForRun: chosenModel || (svc ? svc.defaultModel : "base.en")
   readonly property bool selectedLive: !!(svc && selected && selected.id === svc.activeId)
+  // A job appearing turns Transcribe into Cancel under the pointer, and a
+  // double click (or a second click because nothing seemed to happen) then
+  // cancelled the job it had just started. Cancel ignores clicks for a second.
+  readonly property bool hasSelectedJob: !!selectedJob
+  onHasSelectedJobChanged: if (hasSelectedJob) cancelGuard.restart()
+  property Timer cancelGuard: Timer { interval: 1000 }
+  // Padded to two digits with a figure space, so the button (and the chips
+  // sized from what is left of the row) keep their width as it counts up.
+  function downloadingText(job) {
+    var p = State.downloadPercent(job)
+    return "Downloading" + (p >= 0 ? " " + (p < 10 ? " " : "") + p + "%" : "") + "…"
+  }
 
   function open(payloadJson) {
     root.opened = true
@@ -168,11 +180,16 @@ Item {
   // Enter / the main button start a transcription. Cancelling a running job is
   // only reachable through the explicit Cancel button (cancelSelected) — a
   // stray Enter must never kill an hour-long job.
+  // A second press before the job reached state.json started a second run,
+  // which failed as "already running"; one start is in flight at a time.
+  property bool transcribePending: false
   function transcribeSelected() {
-    if (!svc || !selected || selectedJob || selectedLive) return
+    if (!svc || !selected || selectedJob || selectedLive || transcribePending) return
     // --download makes the CLI chain the transcription onto the model download
     // when the model is missing; the intent lives on the job in state.json.
-    svc.transcribe(selected.id, modelForRun, (svc.config && svc.config.language) || "en", true)
+    transcribePending = true
+    svc.transcribe(selected.id, modelForRun, (svc.config && svc.config.language) || "en", true, undefined,
+                   function() { root.transcribePending = false })
   }
   function cancelSelected() { if (svc && selected && selectedJob) svc.cancel(selected.id) }
   // Ctrl+M walks the preset models (the ones with a label) in catalog order.
@@ -186,7 +203,6 @@ Item {
     for (var j = 0; j < presets.length; j++) if (presets[j].name === modelForRun) { cur = j; break }
     var next = cur < 0 ? (dir > 0 ? 0 : presets.length - 1) : (cur + dir + presets.length) % presets.length
     chosenModel = presets[next].name
-    picker.value = presets[next].name
   }
   function mpvSend(cmd) { if (mpvSock.connected) mpvSock.write(JSON.stringify({ command: cmd }) + "\n") }
   function stopPlayback() {
@@ -276,8 +292,12 @@ Item {
     var last = selected && selected.transcript && selected.transcript.model ? selected.transcript.model : ""
     var m = svc && last ? svc.modelByName(last) : null
     chosenModel = m ? last : ""
-    picker.value = modelForRun
   }
+  // The picker always shows the model Transcribe will use. It was assigned
+  // once per selection, so a first selection made before the config had
+  // loaded showed Fast (the fallback) while Transcribe ran the configured
+  // default, until another take was picked.
+  Binding { target: picker; property: "value"; value: root.modelForRun }
 
   // mpv's IPC socket appears shortly after the CLI starts the player; retry
   // until it does, then observe position and pause state.
@@ -530,6 +550,32 @@ Item {
 
           PanelSeparator { width: parent.width; foreground: root.foreground }
 
+          // Above the list, full width: it sat under the selected take's
+          // waveform, where a failed import read as that take's problem.
+          Row {
+            visible: !!(root.svc && root.svc.lastError.length > 0)
+            width: parent.width
+            spacing: Style.spacing.sm
+            Text {
+              width: parent.width - dismissError.width - parent.spacing
+              text: root.svc ? root.svc.lastError : ""
+              textFormat: Text.PlainText
+              color: root.urgent
+              wrapMode: Text.Wrap
+              font.family: root.fontFamily
+              font.pixelSize: Style.font.caption
+            }
+            AccessibleActionButton {
+              id: dismissError
+              anchors.verticalCenter: parent.verticalCenter
+              iconText: "󰅖"
+              tooltipText: "Dismiss this message (Esc)"
+              foreground: root.dim
+              fontFamily: root.fontFamily
+              onClicked: if (root.svc) root.svc.clearError()
+            }
+          }
+
           Row {
             width: parent.width
             height: parent.height - y - legend.height - parent.spacing
@@ -690,7 +736,7 @@ Item {
                   tooltipText: root.selectedJob ? "" : (root.selected && root.selected.has_transcript ? "Shift+Enter" : "Enter")
                   text: root.selectedJob ? "Cancel"
                     : (picker.currentInstalled ? (root.selected && root.selected.has_transcript ? "Re-transcribe" : "Transcribe")
-                                               : (picker.download ? (picker.download.then ? "Downloading… will transcribe" : "Downloading…")
+                                               : (picker.download ? root.downloadingText(picker.download) + (picker.download.then ? " will transcribe" : "")
                                                                   : "Download + transcribe"))
                   iconText: root.selectedJob ? "󰅖" : (picker.currentInstalled ? "󰗊" : "󰇚")
                   active: !!root.selectedJob
@@ -699,8 +745,11 @@ Item {
                   fontFamily: root.fontFamily
                   // Stays clickable during a download: a press re-aims the
                   // chained transcription onto the selected recording (the
-                  // CLI attach path; last press wins).
-                  onClicked: root.selectedJob ? root.cancelSelected() : root.transcribeSelected()
+                  // CLI attach path; last press wins). Cancel waits out cancelGuard.
+                  onClicked: {
+                    if (!root.selectedJob) root.transcribeSelected()
+                    else if (!root.cancelGuard.running) root.cancelSelected()
+                  }
                 }
                 Row {
                   id: iconActions
@@ -885,28 +934,33 @@ Item {
                 font.pixelSize: Style.font.caption
               }
 
-              Row {
-                visible: !!(root.svc && root.svc.lastError.length > 0)
+              // Said beside the button: a failed download used to be only a
+              // notification, and the button quietly went back to Download.
+              Text {
+                visible: !root.selectedJob && !root.selectedLive && !!root.svc && !!root.svc.downloadFailed
+                  && !!picker.current && root.svc.downloadFailed.model === picker.current.name
+                  && !picker.currentInstalled && !picker.download
                 width: parent.width
-                spacing: Style.spacing.sm
-                Text {
-                  width: parent.width - dismissError.width - parent.spacing
-                  text: root.svc ? root.svc.lastError : ""
-                  textFormat: Text.PlainText
-                  color: root.urgent
-                  wrapMode: Text.Wrap
-                  font.family: root.fontFamily
-                  font.pixelSize: Style.font.caption
-                }
-                AccessibleActionButton {
-                  id: dismissError
-                  anchors.verticalCenter: parent.verticalCenter
-                  iconText: "󰅖"
-                  tooltipText: "Dismiss this message (Esc)"
-                  foreground: root.dim
-                  fontFamily: root.fontFamily
-                  onClicked: if (root.svc) root.svc.clearError()
-                }
+                text: visible ? "The " + picker.current.label + " download failed. Check your connection and press the button to try again." : ""
+                color: root.urgent
+                wrapMode: Text.Wrap
+                font.family: root.fontFamily
+                font.pixelSize: Style.font.caption
+              }
+              // Fast and Balanced are whisper's .en models: any other language
+              // (or auto) gets an English guess with nothing saying why.
+              Text {
+                id: languageHint
+                readonly property string lang: root.svc && root.svc.config && root.svc.config.language ? root.svc.config.language : "en"
+                visible: !root.selectedJob && !root.selectedLive && !!root.selected && State.languageMismatch(root.modelForRun, languageHint.lang)
+                width: parent.width
+                text: languageHint.lang === "auto"
+                  ? "Fast and Balanced only understand English and cannot detect a language. Pick Accurate for anything else."
+                  : "Fast and Balanced only understand English, and the language setting is \"" + languageHint.lang + "\". Pick Accurate for other languages."
+                color: Color.accent
+                wrapMode: Text.Wrap
+                font.family: root.fontFamily
+                font.pixelSize: Style.font.caption
               }
 
               PanelSeparator { width: parent.width; foreground: root.foreground }

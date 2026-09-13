@@ -124,3 +124,56 @@ function cycleValue(values, current, dir) {
   if (i < 0) return dir < 0 ? values[values.length - 1] : values[0]
   return values[(i + dir + values.length) % values.length]
 }
+
+// The error banner. A failed action names itself and loses the CLI's
+// "omarecorder: " prefix; its key says which action owns the message, so an
+// unrelated success no longer wipes it before anyone has read it.
+var ACTION_NAMES = {
+  record: "Recording", "import": "Import", transcribe: "Transcription", cancel: "Cancel",
+  rename: "Rename", note: "Note", "delete": "Delete", model: "Model download",
+  play: "Playback", "stop-play": "Playback", trim: "Trim", copy: "Copy",
+  "export": "Send to Obsidian", config: "Setting", search: "Search",
+  dictionary: "Dictionary", tidy: "Tidy"
+}
+var LOADER_NAMES = {
+  list: "the recordings", models: "the models", config: "the settings",
+  vaults: "the Obsidian vaults", dictionary: "the dictionary", setup: "the setup check"
+}
+function cleanCliText(text) {
+  return String(text).trim().split("\n").map(function(l) { return l.replace(/^omarecorder: /, "") }).join("\n")
+}
+// As fine as the commands: a setting by its name, subcommands apart, so a
+// successful `c` (config set defaultSource) cannot clear a failed folder change.
+function actionKey(args) {
+  if (!args || !args.length) return ""
+  var a = String(args[0])
+  if (a === "config" && args[1] === "set" && args.length > 2) return "config set " + args[2]
+  if ((a === "model" || a === "dictionary" || a === "record") && args.length > 1) return a + " " + args[1]
+  return a
+}
+function actionError(args, code, errText, outText) {
+  var key = actionKey(args)
+  var msg = cleanCliText(errText || outText || ("exit " + code))
+  var verb = args && args.length ? String(args[0]) : ""
+  var name = ACTION_NAMES.hasOwnProperty(verb) ? ACTION_NAMES[verb] : ""
+  if (verb === "model" && args[1] === "cancel") name = "Cancel download"
+  return { key: key, text: name ? name + " failed: " + msg : msg }
+}
+function loadError(what, code, errText, unreadable) {
+  var name = LOADER_NAMES.hasOwnProperty(what) ? LOADER_NAMES[what] : what
+  var msg = unreadable ? "output this build cannot read" : cleanCliText(errText || ("exit " + code))
+  return { key: "load:" + what, text: "Loading " + name + " failed: " + msg }
+}
+function errorClears(errorKey, successKey) { return !!errorKey && errorKey === successKey }
+
+// A download job's progress for a label, capped at 99 until the job is gone
+// (the file can outgrow the catalog size); -1 when there is nothing to show.
+function downloadPercent(job) {
+  if (!job || !job.expected_bytes) return -1
+  return Math.min(99, Math.round(100 * (job.bytes_done || 0) / job.expected_bytes))
+}
+
+// whisper's .en models (Fast, Balanced) understand English and nothing else;
+// asking them for another language, or to detect one, gets an English guess.
+function englishOnly(model) { return /\.en$/.test(String(model || "")) }
+function languageMismatch(model, language) { return englishOnly(model) && !!language && language !== "en" }

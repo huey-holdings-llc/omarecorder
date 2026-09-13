@@ -119,5 +119,52 @@ eq("cycleValue unknown current, forward, takes the first", cycleValue(["mic", "s
 eq("cycleValue unknown current, backward, takes the last", cycleValue(["mic", "system", "both"], "gone", -1), "both")
 eq("cycleValue empty list", cycleValue([], "mic", 1), "mic")
 
+// actionError: what a failed CLI action puts in the error banner. The CLI's
+// "omarecorder: " prefix goes, the action is named, and the key says which
+// action owns the message (only that action's next success clears it).
+eq("actionError names the action and drops the prefix", actionError(["import", "/x.m4a"], 1, "omarecorder: file not found: /x.m4a\n", ""),
+   { key: "import", text: "Import failed: file not found: /x.m4a" })
+eq("actionError strips the prefix on every line", actionError(["rename", "id", "t"], 1, "omarecorder: one\nomarecorder: two", "").text, "Rename failed: one\ntwo")
+eq("actionError falls back to stdout", actionError(["trim", "id"], 1, "", "omarecorder: bad range").text, "Trim failed: bad range")
+eq("actionError falls back to the exit code", actionError(["delete", "id"], 3, "", "").text, "Delete failed: exit 3")
+eq("actionError tells a download from a cancel", actionError(["model", "cancel", "small.en"], 1, "omarecorder: nope", "").text, "Cancel download failed: nope")
+eq("actionError model download", actionError(["model", "download", "small.en"], 1, "omarecorder: download already running", "").text, "Model download failed: download already running")
+eq("actionError an unknown action keeps the message plain", actionError(["frobnicate"], 1, "omarecorder: huh", ""), { key: "frobnicate", text: "huh" })
+eq("actionError no args", actionError([], 1, "boom", "").key, "")
+// loadError: a loader (list, models, config...) that fails names itself.
+eq("loadError names the loader", loadError("list", 1, "omarecorder: jq: error\n"), { key: "load:list", text: "Loading the recordings failed: jq: error" })
+eq("loadError unknown loader keeps its name", loadError("widgets", 2, ""), { key: "load:widgets", text: "Loading widgets failed: exit 2" })
+eq("loadError unreadable output", loadError("config", 0, "", true), { key: "load:config", text: "Loading the settings failed: output this build cannot read" })
+// Keys are as fine as the commands: a setting by its name, subcommands apart.
+eq("actionError keys a setting by its name", actionError(["config", "set", "recordingsDir", "/x"], 1, "e", "").key, "config set recordingsDir")
+eq("actionError keys model download and cancel apart",
+   [actionError(["model", "download", "a"], 1, "", "").key, actionError(["model", "cancel", "a"], 1, "", "").key], ["model download", "model cancel"])
+eq("actionError keys record start and stop apart", actionError(["record", "stop"], 1, "", "").key, "record stop")
+eq("errorClears a different setting leaves it",
+   errorClears(actionError(["config", "set", "recordingsDir", "/x"], 1, "", "").key, actionError(["config", "set", "defaultSource", "mic"], 0, "", "").key), false)
+// errorClears: only a success of the action that failed clears its message.
+eq("errorClears same action", errorClears("import", "import"), true)
+eq("errorClears another action leaves it", errorClears("import", "rename"), false)
+eq("errorClears nothing showing", errorClears("", "rename"), false)
+
+// downloadPercent: a download job's progress for a label; -1 when unknown.
+eq("downloadPercent halfway", downloadPercent({ bytes_done: 50, expected_bytes: 100 }), 50)
+eq("downloadPercent rounds", downloadPercent({ bytes_done: 1, expected_bytes: 3 }), 33)
+eq("downloadPercent never claims 100 before the job ends", downloadPercent({ bytes_done: 120, expected_bytes: 100 }), 99)
+eq("downloadPercent no bytes yet", downloadPercent({ expected_bytes: 100 }), 0)
+eq("downloadPercent unknown size", downloadPercent({ bytes_done: 5 }), -1)
+eq("downloadPercent no job", downloadPercent(null), -1)
+
+// englishOnly: whisper's .en models understand English and nothing else.
+eq("englishOnly base.en", englishOnly("base.en"), true)
+eq("englishOnly large-v3-turbo", englishOnly("large-v3-turbo"), false)
+eq("englishOnly empty", englishOnly(""), false)
+// languageMismatch: an English-only model with any language but English (auto included).
+eq("languageMismatch en model, de", languageMismatch("small.en", "de"), true)
+eq("languageMismatch en model, auto", languageMismatch("small.en", "auto"), true)
+eq("languageMismatch en model, en", languageMismatch("small.en", "en"), false)
+eq("languageMismatch en model, unset language means en", languageMismatch("small.en", ""), false)
+eq("languageMismatch multilingual model, de", languageMismatch("large-v3-turbo", "de"), false)
+
 console.log("state.js: passed " + passed + "  failed " + failed)
 if (failed > 0) process.exit(1)

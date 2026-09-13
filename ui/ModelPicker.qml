@@ -1,6 +1,7 @@
 import QtQuick
 import qs.Commons
 import qs.Ui
+import "state.js" as State
 
 // Accuracy-vs-speed chooser: Fast / Balanced / Accurate as a row of chips,
 // each showing the time estimate for the selected take (or the download size
@@ -64,8 +65,10 @@ Item {
       var m = models[i]
       if (!m.label) continue
       var extra = m.installed ? estimateText(m) : sizeText(m)
-      if (compact) opts.push({ value: m.name, label: m.label, tooltip: m.name + (extra ? " · " + extra : "") })
-      else opts.push({ value: m.name, label: fullLabel(m), tooltip: m.name })
+      // Fast and Balanced are whisper's .en models; say so where the name is.
+      var name = m.name + (State.englishOnly(m.name) ? " · English only" : "")
+      if (compact) opts.push({ value: m.name, label: m.label, tooltip: name + (extra ? " · " + extra : "") })
+      else opts.push({ value: m.name, label: fullLabel(m), tooltip: name })
     }
     return opts
   }
