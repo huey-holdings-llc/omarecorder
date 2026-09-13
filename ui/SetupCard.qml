@@ -47,11 +47,25 @@ Column {
     onClicked: if (root.svc) root.svc.download(root.setup.defaultModel)
   }
 
+  // A failed download used to bring the button back with nothing said.
+  Text {
+    visible: !root.dl && !!root.svc && !!root.svc.downloadFailed && !!root.setup
+      && root.svc.downloadFailed.model === root.setup.defaultModel
+    width: parent.width
+    text: "The last download of " + root.modelName + " failed. Check your connection and try again."
+    textFormat: Text.PlainText
+    color: root.urgent
+    wrapMode: Text.Wrap
+    font.family: root.fontFamily
+    font.pixelSize: Style.font.caption
+  }
+
   Column {
     visible: !!root.dl
     width: parent.width
     spacing: Style.spacing.xxs
     Text {
+      textFormat: Text.PlainText
       width: parent.width
       text: "Downloading " + root.modelName + "… " + (root.dl && root.dl.expected_bytes ? Math.min(99, Math.round(100 * (root.dl.bytes_done || 0) / root.dl.expected_bytes)) + "%" : "")
       color: root.foreground
@@ -77,7 +91,7 @@ Column {
     var miss = s.missing || []
     for (var i = 0; i < miss.length; i++) {
       if (miss[i].tool === "voxtype") continue   // covered above with the Omarchy command
-      out.push(miss[i].tool + " is missing (pacman -S " + miss[i].package + ")" + (miss[i].required ? "" : ", only needed for " + miss[i]["for"]))
+      out.push(miss[i].tool + " is missing (install the " + miss[i].package + " package)" + (miss[i].required ? "" : ", only needed for " + miss[i]["for"]))
     }
     // Only a problem when the source records a microphone (mic or both).
     if (!s.mic_ok && s.mic_required !== false) out.push("No microphone found. Plug one in or pick 'system' as the source")

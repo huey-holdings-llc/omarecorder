@@ -23,6 +23,7 @@ QtObject {
   // Runtime state lives only in the per-user runtime dir (never /tmp): without
   // XDG_RUNTIME_DIR there is nothing safe to watch, so the service stays idle.
   readonly property string xdgRuntime: Quickshell.env("XDG_RUNTIME_DIR") || ""
+  readonly property string home: Quickshell.env("HOME") || ""
   readonly property string runtimeDir: xdgRuntime ? xdgRuntime + "/omarecorder" : ""
   readonly property string stateFile: runtimeDir ? runtimeDir + "/state.json" : ""
   readonly property string levelFile: runtimeDir ? runtimeDir + "/level" : ""
@@ -53,6 +54,9 @@ QtObject {
   readonly property bool recording: !!(state && state.recording)
   readonly property var activeRecording: recording ? state.recording : null
   readonly property string activeId: activeRecording ? activeRecording.id : ""
+  // A guarded stop of a long take is waiting for its second press (the CLI's
+  // 10 second window); the popup says so instead of only a notification.
+  readonly property bool stopArmed: !!(activeRecording && activeRecording.stop_armed_at && now - activeRecording.stop_armed_at <= 10)
   readonly property var jobs: (state && state.jobs) ? state.jobs : []
   readonly property bool transcribing: jobs.some(function(j) { return j.type === "transcribe" })
   readonly property bool downloading: jobs.some(function(j) { return j.type === "download" })
@@ -118,6 +122,8 @@ QtObject {
   function downloadFor(model) { for (var i = 0; i < jobs.length; i++) if (jobs[i].type === "download" && jobs[i].model === model) return jobs[i]; return null }
   function recordingById(id) { for (var i = 0; i < recordings.length; i++) if (recordings[i].id === id) return recordings[i]; return null }
   function modelByName(name) { for (var i = 0; i < models.length; i++) if (models[i].name === name) return models[i]; return null }
+  // The preset's name as the chips say it (Fast, Balanced, Accurate), else the engine's.
+  function modelLabel(name) { var m = modelByName(name); return m && m.label ? m.label : (name || "") }
   function estimateSeconds(durationS, modelName) {
     var m = modelByName(modelName); var rtf = m && m.rtf ? m.rtf : 3
     return Math.ceil((durationS || 0) / rtf)
@@ -178,9 +184,10 @@ QtObject {
     proc.running = true
   }
   function startRecording(source) { run(["record", "start", "--source", source || defaultSource]) }
-  // force skips the long-take confirmation; the popup's Stop button uses it,
-  // a button press being deliberate in a way a keybinding is not.
-  function stopRecording(force) { run(force ? ["record", "stop", "--force"] : ["record", "stop"]) }
+  // A keypress (the popup's r, the toggle) may be a stray one, so it asks
+  // before ending a long take (--guard); the Stop button is deliberate and
+  // stops at once, as a script's plain `record stop` does.
+  function stopRecording(force) { run(force ? ["record", "stop"] : ["record", "stop", "--guard"]) }
   function toggleRecording() { recording ? stopRecording() : startRecording() }
   // download defaults to true. Every surface that offers Transcribe means "and
   // fetch the model if it is missing"; the popup passed no argument at all and
@@ -226,9 +233,11 @@ QtObject {
   function copyTranscript(id, raw, onDone) { run(raw ? ["copy", id, "--raw"] : ["copy", id], onDone) }
   // The CLI picks the vault/folder (config, then the open vault) and opens the note in Obsidian.
   function exportToObsidian(id, raw, onDone) { run(raw ? ["export", id, "--raw"] : ["export", id], onDone) }
-  function setConfig(key, value) {
+  // onDone(code, out) lets a settings field show its own error in place.
+  // Setup is re-checked too: whether it passes depends on the source and folder.
+  function setConfig(key, value, onDone) {
     if (key === "defaultSource") { setSource(String(value)); return }
-    run(["config", "set", key, String(value)], function() { refreshConfig() })
+    run(["config", "set", key, String(value)], function(code, out) { root.refreshConfig(); root.refreshSetup(); if (onDone) onDone(code, out) })
   }
   // One source write at a time and the latest pick wins: two quick presses
   // ran two writes that could land in either order and save the other value.
@@ -246,6 +255,9 @@ QtObject {
       if (next === "done") root.config = Object.assign({}, root.config, { defaultSource: v })
       root.pendingSource = ""
       root.refreshConfig()
+      // Setup passes without a microphone only for system audio, so a source
+      // change can flip it either way; the cached answer would hide that.
+      root.refreshSetup()
     })
   }
   // Dictionary actions run through the CLI like everything else; add/import
@@ -267,9 +279,26 @@ QtObject {
       id: p
       property var callback: null
       property var action: []   // the CLI arguments, which name the action in the banner
+      property bool done: false
       stdout: StdioCollector { id: aOut; waitForEnd: true }
       stderr: StdioCollector { id: aErr; waitForEnd: true }
+      // A process that never starts sends no exited, so its callback never
+      // ran and anything waiting on it (the "Importing…" line) stayed up for
+      // good. Exited follows the end of a real run within milliseconds; two
+      // seconds without it means the command never ran.
+      property Timer startGuard: Timer {
+        interval: 2000
+        onTriggered: {
+          if (p.done) return
+          p.done = true
+          root.setError(State.actionError(p.action, -1, "the omarecorder command could not be started", ""))
+          if (p.callback) p.callback(-1, "")
+          p.destroy()
+        }
+      }
+      onRunningChanged: if (!running && !done) startGuard.restart()
       onExited: function(code) {
+        p.done = true
         if (code !== 0) root.setError(State.actionError(p.action, code, aErr.text, aOut.text))
         else if (State.errorClears(root.lastErrorKey, State.actionError(p.action, 0, "", "").key)) root.clearError()
         if (callback) callback(code, aOut.text)

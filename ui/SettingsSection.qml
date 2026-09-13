@@ -17,6 +17,7 @@ Item {
     || modelDrop.popupOpen || langDrop.popupOpen || vaultDrop.popupOpen
   property bool dictAddOpen: false
   property string dictStatus: ""
+  property string dirStatus: ""
   // The popup's `d` key lands here: settings open, Add row expanded, cursor
   // in the heard field.
   function focusDictAdd() { dictAddOpen = true; dictHeard.forceActiveFocus() }
@@ -100,13 +101,20 @@ Item {
       onPopupOpenChanged: if (!popupOpen) root.doneEditing()
       width: parent.width; label: "Language"
       value: root.cfg.language || "en"
-      options: [{ value: "en", label: "English" }, { value: "auto", label: "Auto-detect" }]
+      // A code set from the CLI (config set language de) is shown as it is,
+      // not as a blank the dropdown cannot match.
+      options: {
+        var o = [{ value: "en", label: "English" }, { value: "auto", label: "Auto-detect" }]
+        var l = root.cfg.language
+        if (l && l !== "en" && l !== "auto") o.push({ value: l, label: l + " (set from the CLI)" })
+        return o
+      }
       foreground: root.foreground; fontFamily: root.fontFamily
       onChanged: function(v) { if (root.svc) root.svc.setConfig("language", v) }
     }
     Column {
       width: parent.width; spacing: Style.spacing.xxs
-      Text { text: "Recordings folder"; color: Qt.darker(root.foreground, 1.4); font.family: root.fontFamily; font.pixelSize: Style.font.caption }
+      Text { textFormat: Text.PlainText; text: "Recordings folder"; color: Qt.darker(root.foreground, 1.4); font.family: root.fontFamily; font.pixelSize: Style.font.caption }
       TextField {
         id: dirField
         hasCursor: root.cursorOn(dirField)
@@ -114,9 +122,29 @@ Item {
         text: root.cfg.recordingsDir || ""
         foreground: root.foreground
         font.family: root.fontFamily
-        onAccepted: { if (root.svc && text.length) root.svc.setConfig("recordingsDir", text); focus = false; root.doneEditing() }
+        // Empty or refused, the field goes back to the saved folder and the
+        // reason shows right here: the error banner sits above the scrolled view.
+        onAccepted: {
+          var typed = text
+          if (root.svc && typed.length) root.svc.setConfig("recordingsDir", typed, function(code) {
+            if (code !== 0) { root.dirStatus = root.svc.lastError || "could not use that folder"; dirStatusClear.restart() }
+          })
+          text = Qt.binding(function() { return root.cfg.recordingsDir || "" })
+          focus = false; root.doneEditing()
+        }
         Keys.onEscapePressed: { text = Qt.binding(function() { return root.cfg.recordingsDir || "" }); focus = false; root.doneEditing() }
       }
+      Text {
+        visible: root.dirStatus.length > 0
+        width: parent.width
+        text: root.dirStatus
+        textFormat: Text.PlainText
+        color: Color.urgent
+        wrapMode: Text.Wrap
+        font.family: root.fontFamily
+        font.pixelSize: Style.font.caption
+      }
+      Timer { id: dirStatusClear; interval: 8000; onTriggered: root.dirStatus = "" }
     }
     Dropdown {
       // Only offered when Obsidian has vaults on this machine; "" = the CLI picks the open vault.
@@ -154,7 +182,7 @@ Item {
       width: parent.width
       id: enhance
       hasCursor: root.cursorOn(enhance)
-      label: "Clean up audio before transcribing"
+      label: "Clean up audio first"
       description: "Noise and level cleanup on a temporary copy; the recording itself is never altered"
       checked: root.cfg.enhanceAudio === true
       foreground: root.foreground; fontFamily: root.fontFamily
@@ -174,6 +202,7 @@ Item {
         anchors.margins: Style.spacing.sm
         spacing: Style.spacing.xxs
         Text {
+          textFormat: Text.PlainText
           width: parent.width
           // Wraps rather than clipping at the card edge on narrow panels.
           wrapMode: Text.Wrap
@@ -201,7 +230,7 @@ Item {
           }
           Button {
             id: dictPromptButton; hasCursor: root.cursorOn(dictPromptButton)
-            width: (parent.width - parent.spacing * 3) / 4; text: "Copy prompt"
+            width: (parent.width - parent.spacing * 3) / 4; text: "Prompt"
             tooltipText: "Copy a ready-made request to the clipboard; ask your LLM, then Paste entries"
             fontSize: Style.font.caption; horizontalPadding: Style.spacing.sm; verticalPadding: Style.spacing.xxs
             foreground: root.foreground; fontFamily: root.fontFamily
@@ -209,7 +238,7 @@ Item {
           }
           Button {
             id: dictPasteButton; hasCursor: root.cursorOn(dictPasteButton)
-            width: (parent.width - parent.spacing * 3) / 4; text: "Paste entries"
+            width: (parent.width - parent.spacing * 3) / 4; text: "Paste"
             tooltipText: "Merge dictionary lines from the clipboard (duplicates skipped, conflicts keep yours)"
             fontSize: Style.font.caption; horizontalPadding: Style.spacing.sm; verticalPadding: Style.spacing.xxs
             foreground: root.foreground; fontFamily: root.fontFamily

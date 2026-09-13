@@ -39,7 +39,7 @@ CursorSurface {
   readonly property string titleText: displayTitle ? displayTitle : (rec && rec.title ? rec.title : (rec && rec.id ? rec.id : ""))
   readonly property string subtitleText: live
     ? "Recording… " + elapsedText
-    : working ? "Transcribing " + (jobElapsedText ? jobElapsedText + " · " : "") + job.model
+    : working ? "Transcribing " + (jobElapsedText ? jobElapsedText + " · " : "") + (svc ? svc.modelLabel(job.model) : job.model)
     : ((untitled ? "" : dateText) + (durationText ? (untitled ? "" : " · ") + durationText : "") + (clipped ? " · ⚠ clipped" : "") + (partial ? " · partial transcript" : ""))
 
   width: parent ? parent.width : Style.space(300)
@@ -67,6 +67,7 @@ CursorSurface {
     spacing: Style.spacing.sm
 
     Text {
+      textFormat: Text.PlainText
       anchors.verticalCenter: parent.verticalCenter
       width: Style.space(18)
       text: root.statusGlyph

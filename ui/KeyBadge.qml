@@ -28,6 +28,7 @@ Rectangle {
   Accessible.ignored: true
 
   Text {
+    textFormat: Text.PlainText
     id: label
     anchors.centerIn: parent
     text: root.key

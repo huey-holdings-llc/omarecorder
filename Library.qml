@@ -123,7 +123,7 @@ Item {
     if (svc) svc.refresh()
     Qt.callLater(function() { keyCatcher.forceActiveFocus() })
   }
-  function close() { root.deleteConfirmOpen = false; root.trimConfirmOpen = false; root.trimMode = false; root.opened = false; hideCtrlHints(); stopPlayback() }
+  function close() { commitFields(); root.deleteConfirmOpen = false; root.trimConfirmOpen = false; root.trimMode = false; root.opened = false; hideCtrlHints(); stopPlayback() }
   function toggle() { root.opened ? root.close() : root.open("{}") }
 
   // Transcript matches arrive ~300 ms behind the keystrokes (the CLI greps
@@ -158,6 +158,7 @@ Item {
     i = State.clampIndex(i, rows.length)
     if (i < 0) return
     selectedId = rows[i].id
+    userScrolled = false
     list.positionViewAtIndex(i, ListView.Contain)
   }
   function setFilter(t) { filterText = t; searchDebounce.restart(); Qt.callLater(ensureSelection) }
@@ -197,7 +198,31 @@ Item {
     svc.transcribe(selected.id, modelForRun, (svc.config && svc.config.language) || "en", true, undefined,
                    function() { root.transcribePending = false })
   }
+  // What Tidy did to this take, for the Tidy button's tooltip.
+  readonly property string tidyCounts: {
+    var t = selected && selected.transcript && selected.transcript.tidy
+    if (!t) return ""
+    var parts = []
+    if (t.repeats_removed > 0) parts.push(t.repeats_removed + (t.repeats_removed === 1 ? " repeat removed" : " repeats removed"))
+    if (t.dict_replacements > 0) parts.push(t.dict_replacements + (t.dict_replacements === 1 ? " correction" : " corrections"))
+    return parts.length ? ". " + parts.join(", ") : ""
+  }
   function cancelSelected() { if (svc && selected && selectedJob) svc.cancel(selected.id) }
+  // The Library holds the keyboard as an overlay, so an editor, file manager
+  // or Obsidian window it launches opened underneath it and looked like
+  // nothing happened. It gets out of the way instead.
+  function openOutside(what) {
+    if (!svc || !selected) return
+    if (what === "folder") svc.openFolder(selected.id); else svc.openTranscript(selected.id)
+    close()
+  }
+  // Obsidian only opens for a vault export (not for exportDir or the
+  // recording's own folder), and only then is there a window to make way for.
+  function exportSelected() {
+    if (!svc || !selected) return
+    var toVault = svc.vaults.length > 0 && !(svc.config && svc.config.exportDir)
+    svc.exportToObsidian(selected.id, showRaw, function(code) { if (code === 0) { sentFlash.restart(); if (toVault) root.close() } })
+  }
   // Ctrl+M walks the preset models (the ones with a label) in catalog order.
   // Same gate as the picker's visibility: never while a job runs or the take is live.
   function cycleModel(dir) {
@@ -281,7 +306,10 @@ Item {
     // once they exist, is exact.
     Qt.callLater(function() { root.showSelectedRow(); keepSelectedInView.restart() })
   }
-  function showSelectedRow() { if (selectedIndex >= 0) list.positionViewAtIndex(selectedIndex, ListView.Contain) }
+  // Not while the user has scrolled the list away: every transcription piece
+  // re-lists, and each one pulled the view back. Choosing a row resets it.
+  property bool userScrolled: false
+  function showSelectedRow() { if (selectedIndex >= 0 && !userScrolled) list.positionViewAtIndex(selectedIndex, ListView.Contain) }
   Timer { id: keepSelectedInView; interval: 30; onTriggered: root.showSelectedRow() }
   // Every list refresh rebuilds the row objects, so `selected` changes
   // identity even when the selection stayed on the same recording; a
@@ -296,6 +324,16 @@ Item {
     var t = selected ? (selected.title || "") : "", n = selected ? (selected.notes || "") : ""
     if (force || !titleField.activeFocus) titleField.text = t
     if (force || !noteField.activeFocus) noteField.text = n
+  }
+  // A title or note being typed is saved when the selection moves or the
+  // Library closes, the way Enter saves it; only Esc throws it away. Clicking
+  // another row used to overwrite it with that row's text.
+  function commitFields() {
+    if (!svc || !selected) return
+    var typing = titleField.activeFocus || noteField.activeFocus
+    if (titleField.activeFocus && titleField.text !== (selected.title || "")) svc.rename(selected.id, titleField.text)
+    if (noteField.activeFocus && noteField.text !== (selected.notes || "")) svc.setNote(selected.id, noteField.text)
+    if (typing) keyCatcher.forceActiveFocus()
   }
   onSelectedChanged: {
     var newId = selected ? selected.id : ""
@@ -474,13 +512,13 @@ Item {
           else if ((event.modifiers & Qt.ControlModifier) && event.key === Qt.Key_T) { root.toggleTrim(); event.accepted = true }
           else if ((event.modifiers & Qt.ControlModifier) && event.key === Qt.Key_D) { root.toggleRaw(); event.accepted = true }
           else if ((event.modifiers & Qt.ControlModifier) && event.key === Qt.Key_P) { if (root.hasPrev) root.showPrev = !root.showPrev; event.accepted = true }
-          else if ((event.modifiers & Qt.ControlModifier) && event.key === Qt.Key_E) { if (root.svc && root.selected) root.svc.openFolder(root.selected.id); event.accepted = true }
+          else if ((event.modifiers & Qt.ControlModifier) && event.key === Qt.Key_E) { root.openOutside("folder"); event.accepted = true }
           else if ((event.modifiers & Qt.ControlModifier) && event.key === Qt.Key_X) { if (root.svc && picker.download) root.svc.cancelDownload(picker.value); event.accepted = true }
           else if ((event.modifiers & Qt.ControlModifier) && event.key === Qt.Key_C && root.transcriptText.length > 0) {
             root.svc.copyTranscript(root.selected.id, root.showRaw, function(code) { if (code === 0) copiedFlash.restart() }); event.accepted = true
           }
           else if ((event.modifiers & Qt.ControlModifier) && event.key === Qt.Key_O && root.transcriptText.length > 0) {
-            root.svc.exportToObsidian(root.selected.id, root.showRaw, function(code) { if (code === 0) sentFlash.restart() }); event.accepted = true
+            root.exportSelected(); event.accepted = true
           }
           else if ((event.modifiers & Qt.ControlModifier) && event.key === Qt.Key_M) {
             root.cycleModel((event.modifiers & Qt.ShiftModifier) ? -1 : 1); event.accepted = true
@@ -489,7 +527,7 @@ Item {
             root.cycleSpeed((event.modifiers & Qt.ShiftModifier) ? -1 : 1); event.accepted = true
           }
           else if (event.key === Qt.Key_Return || event.key === Qt.Key_Enter) {
-            if (root.svc && root.selected && root.selected.has_transcript && !(event.modifiers & Qt.ShiftModifier)) root.svc.openTranscript(root.selected.id)
+            if (root.svc && root.selected && root.selected.has_transcript && !(event.modifiers & Qt.ShiftModifier)) root.openOutside("transcript")
             else root.transcribeSelected()
             event.accepted = true
           }
@@ -526,6 +564,7 @@ Item {
             width: parent.width
             spacing: Style.spacing.lg
             Text {
+              textFormat: Text.PlainText
               anchors.verticalCenter: parent.verticalCenter
               text: "󰕽  OmaRecorder"   // tape reels, not the red record dot: this header is visible while idle
               color: root.foreground
@@ -545,8 +584,9 @@ Item {
                 anchors.fill: parent
                 anchors.leftMargin: Style.spacing.controlPaddingX
                 spacing: Style.spacing.sm
-                Text { anchors.verticalCenter: parent.verticalCenter; text: "󰍉"; color: root.dim; font.family: root.fontFamily; font.pixelSize: Style.font.icon }
+                Text { textFormat: Text.PlainText; anchors.verticalCenter: parent.verticalCenter; text: "󰍉"; color: root.dim; font.family: root.fontFamily; font.pixelSize: Style.font.icon }
                 Text {
+                  textFormat: Text.PlainText
                   anchors.verticalCenter: parent.verticalCenter
                   // Elides inside the box: a longer placeholder ran into the count beside it.
                   width: parent.width - x - Style.spacing.controlPaddingX
@@ -559,6 +599,7 @@ Item {
               }
             }
             Text {
+              textFormat: Text.PlainText
               anchors.verticalCenter: parent.verticalCenter
               text: root.rows.length + (root.rows.length === 1 ? " recording" : " recordings") + (root.filterText ? (root.rows.length === 1 ? " matches" : " match") : "")
               color: root.dim
@@ -612,6 +653,7 @@ Item {
                 spacing: Style.spacing.xxs
                 boundsBehavior: Flickable.StopAtBounds
                 ScrollBar.vertical: ThinScrollBar { id: listBar; foreground: root.foreground }
+                onMovementStarted: root.userScrolled = true
                 delegate: RecordingRow {
                   required property var modelData
                   required property int index
@@ -625,16 +667,20 @@ Item {
                   current: index === root.selectedIndex
                   currentFill: root.selectedBackground
                   urgent: root.urgent
-                  onClicked: root.selectAbsolute(index)
+                  onClicked: { root.commitFields(); root.selectAbsolute(index) }
                 }
               }
               Text {
                 anchors.centerIn: parent
                 visible: root.rows.length === 0
-                // Names the folder: after the recordings folder is changed an
-                // empty list otherwise looks like everything was lost.
+                // Wraps inside the list column (it ran past the card's edge),
+                // and names the folder: after the recordings folder is changed
+                // an empty list otherwise looks like everything was lost.
+                width: parent.width - Style.spacing.lg * 2
+                wrapMode: Text.Wrap
+                textFormat: Text.PlainText
                 text: root.filterText ? "No matches."
-                  : "No recordings in " + String((root.svc && root.svc.config && root.svc.config.recordingsDir) || "~/Recordings").replace(/^\/home\/[^\/]+/, "~")
+                  : "No recordings in " + Fmt.tildePath((root.svc && root.svc.config && root.svc.config.recordingsDir) || "~/Recordings", root.svc ? root.svc.home : "")
                     + " yet.\nStart one from the bar icon, or change the folder in the popup's settings."
                 color: root.dim
                 horizontalAlignment: Text.AlignHCenter
@@ -654,6 +700,7 @@ Item {
               TextField {
                 id: titleField
                 enabled: !root.selectedJob   // rename is refused mid-transcribe, same as notes
+                maximumLength: 80            // what the CLI keeps of a title
                 width: parent.width
                 placeholderText: root.selected && root.svc ? root.svc.displayTitle(root.selected) : ""
                 foreground: root.foreground
@@ -678,12 +725,10 @@ Item {
                     + (root.svc.isPartial(root.selected) ? " · partial transcript" : "")
                     + " · " + root.svc.fmtBytes(root.selected.size_bytes)
                     + " · " + root.svc.sourceLabel(root.selected.source)
-                    + (root.selected.transcript ? " · transcribed with " + root.selected.transcript.model : "")
+                    + (root.selected.transcript ? " · transcribed with " + root.svc.modelLabel(root.selected.transcript.model) : "")
                     + (root.selected.transcript && root.selected.transcript.enhanced ? " · audio cleaned up" : "")
-                    + (root.selected.exported_to ? " · in Obsidian" : "")
+                    + (root.selected.exported_to ? (root.selected.exported_vault === false ? " · exported" : " · in Obsidian") : "")
                     + (root.selected.trim ? " · trimmed" : "")
-                    + (root.selected.transcript && root.selected.transcript.tidy && root.selected.transcript.tidy.repeats_removed > 0 && !root.showRaw ? " · " + root.selected.transcript.tidy.repeats_removed + (root.selected.transcript.tidy.repeats_removed === 1 ? " repeat removed" : " repeats removed") : "")
-                    + (root.selected.transcript && root.selected.transcript.tidy && root.selected.transcript.tidy.dict_replacements > 0 && !root.showRaw ? " · " + root.selected.transcript.tidy.dict_replacements + (root.selected.transcript.tidy.dict_replacements === 1 ? " correction" : " corrections") : "")
                     + (root.playing ? " · ▶ playing" : ""))
                   : ""
                 textFormat: Text.PlainText
@@ -702,7 +747,10 @@ Item {
                 // (lost-update guard), so don't offer an edit that cannot save.
                 enabled: !root.selectedJob
                 width: parent.width
-                placeholderText: "Add a note"
+                // One line, 500 characters: the CLI keeps no more, so the field
+                // stops there instead of cutting a pasted recap silently.
+                placeholderText: "Add a note (one line, up to 500 characters)"
+                maximumLength: 500
                 // A saved note in full colour: dim, it read as the "Add a note" placeholder.
                 foreground: root.foreground
                 font.family: root.fontFamily
@@ -728,6 +776,8 @@ Item {
               Row {
                 width: parent.width
                 spacing: Style.spacing.sm
+                // What the chips and the main button share the row with.
+                readonly property real fixedWidth: iconActions.width + posReadout.width + speedChip.width + spacing * 4
                 ModelPicker {
                   id: picker
                   // The chip row takes what the main button and icon actions
@@ -735,7 +785,7 @@ Item {
                   // so the space is identical in every playback state, and
                   // when the full labels do not fit the chips go compact
                   // (names only, estimates in tooltips) instead of clipping.
-                  readonly property real rowAvail: parent.width - mainButton.width - iconActions.width - posReadout.width - speedChip.width - parent.spacing * 4
+                  readonly property real rowAvail: parent.width - mainButton.width - parent.fixedWidth
                   compact: rowAvail < fullWidth
                   width: Math.min(picker.implicitWidth, rowAvail)
                   anchors.verticalCenter: parent.verticalCenter
@@ -761,10 +811,8 @@ Item {
                   // the chips: they were clipping to "Accurat". Measured from
                   // the text, not this button's width, so it cannot loop.
                   TextMetrics { id: mainLabelMetrics; font.family: root.fontFamily; font.pixelSize: mainButton.fontSize; text: mainButton.label }
-                  TextMetrics { id: mainIconMetrics; font.family: root.fontFamily; font.pixelSize: mainButton.iconSize; text: mainButton.iconText }
                   readonly property bool iconOnly: picker.visible
-                    && parent.width - iconActions.width - posReadout.width - speedChip.width - parent.spacing * 4
-                       - (mainIconMetrics.width + horizontalPadding * 2 + 2 + Style.spacing.controlGap + mainLabelMetrics.width) < picker.compactWidth
+                    && parent.width - parent.fixedWidth - (mainIconProbe.implicitWidth + Style.spacing.controlGap + mainLabelMetrics.width) < picker.compactWidth
                   text: iconOnly ? "" : label
                   tooltipText: iconOnly ? label + (keyHint ? " (" + keyHint + ")" : "") : keyHint
                   Accessible.name: label
@@ -781,6 +829,9 @@ Item {
                     else if (!root.cancelGuard.running) root.cancelSelected()
                   }
                 }
+                // The main button as the kit sizes it with no label (its
+                // borders follow the theme), for iconOnly above; never shown.
+                Button { id: mainIconProbe; visible: false; iconText: mainButton.iconText; fontFamily: root.fontFamily }
                 Row {
                   id: iconActions
                   anchors.verticalCenter: parent.verticalCenter
@@ -834,7 +885,7 @@ Item {
                   iconText: "󰉋"
                   tooltipText: "Open folder (Ctrl+E)"
                   foreground: root.foreground; fontFamily: root.fontFamily
-                  onClicked: if (root.svc && root.selected) root.svc.openFolder(root.selected.id)
+                  onClicked: root.openOutside("folder")
                   KeyBadge { key: "E"; shown: root.ctrlHints; fontFamily: root.fontFamily }
                 }
                 AccessibleActionButton {
@@ -917,6 +968,7 @@ Item {
                 width: parent.width
                 spacing: Style.spacing.sm
                 Text {
+                  textFormat: Text.PlainText
                   anchors.verticalCenter: parent.verticalCenter
                   width: parent.width - previewButton.width - trimButton.width - cancelButton.width - parent.spacing * 3
                   text: "Keep " + wave.fmt(root.trimFrom) + " to " + wave.fmt(root.trimTo)
@@ -953,10 +1005,11 @@ Item {
               }
 
               Text {
+                textFormat: Text.PlainText
                 visible: !!root.selectedJob
                 width: parent.width
                 text: root.selectedJob && root.svc
-                  ? "Transcribing with " + root.selectedJob.model + " · " + root.svc.jobProgressText(root.selectedJob) + root.svc.fmtHms(root.svc.jobElapsed(root.selectedJob))
+                  ? "Transcribing with " + root.svc.modelLabel(root.selectedJob.model) + " · " + root.svc.jobProgressText(root.selectedJob) + root.svc.fmtHms(root.svc.jobElapsed(root.selectedJob))
                     + " elapsed · ≈ " + root.svc.fmtDuration(root.svc.estimateSeconds(root.selected.duration_s, root.selectedJob.model)) + " expected"
                   : ""
                 color: Color.accent
@@ -967,6 +1020,7 @@ Item {
               // Said beside the button: a failed download used to be only a
               // notification, and the button quietly went back to Download.
               Text {
+                textFormat: Text.PlainText
                 visible: !root.selectedJob && !root.selectedLive && !!root.svc && !!root.svc.downloadFailed
                   && !!picker.current && root.svc.downloadFailed.model === picker.current.name
                   && !picker.currentInstalled && !picker.download
@@ -980,6 +1034,7 @@ Item {
               // Fast and Balanced are whisper's .en models: any other language
               // (or auto) gets an English guess with nothing saying why.
               Text {
+                textFormat: Text.PlainText
                 id: languageHint
                 readonly property string lang: root.svc && root.svc.config && root.svc.config.language ? root.svc.config.language : "en"
                 visible: !root.selectedJob && !root.selectedLive && !!root.selected && State.languageMismatch(root.modelForRun, languageHint.lang)
@@ -996,11 +1051,16 @@ Item {
               PanelSeparator { width: parent.width; foreground: root.foreground }
 
               Text {
+                textFormat: Text.PlainText
                 visible: !root.selectedJob && root.svc && root.selected && (root.svc.isPartial(root.selected) || root.svc.isStale(root.selected))
                 width: parent.width
                 text: root.svc && root.selected && root.svc.isPartial(root.selected)
                   ? "Partial: stopped after " + root.selected.transcript.chunks_done + "/" + root.selected.transcript.chunks + " pieces. Re-transcribe to finish."
-                  : "The audio was trimmed after this transcript was made. Re-transcribe to match."
+                  : (root.selected && root.selected.transcript && root.selected.transcript.stale_reason === "resume"
+                     ? "More audio was added (a resume) after this transcript was made. Re-transcribe to match."
+                     : root.selected && root.selected.transcript && root.selected.transcript.stale_reason === "restore"
+                     ? "The untrimmed original was restored after this transcript was made. Re-transcribe to match."
+                     : "The audio was trimmed after this transcript was made. Re-transcribe to match.")
                 color: Color.accent
                 wrapMode: Text.Wrap
                 font.family: root.fontFamily
@@ -1012,6 +1072,7 @@ Item {
                 spacing: Style.spacing.xxs
                 visible: !root.selectedJob && root.svc && root.selected && root.svc.isLoopy(root.selected)
                 Text {
+                  textFormat: Text.PlainText
                   width: parent.width
                   text: "Whisper looped on this take (longest repeat "
                     + (root.selected && root.selected.transcript && root.selected.transcript.tidy && root.selected.transcript.tidy.longest_run_words != null
@@ -1049,14 +1110,16 @@ Item {
                   iconText: "󰈙"
                   tooltipText: "Open in editor (Enter)"
                   foreground: root.foreground; fontFamily: root.fontFamily
-                  onClicked: if (root.svc && root.selected) root.svc.openTranscript(root.selected.id)
+                  onClicked: root.openOutside("transcript")
                 }
                 Button {
                   visible: root.hasTidy
                   text: "Tidy"
                   active: !root.showRaw && !root.showPrev
                   fontSize: Style.font.caption; horizontalPadding: Style.spacing.sm; verticalPadding: Style.spacing.xxs
-                  tooltipText: "Paragraphs, repeated passages removed (Ctrl+D)"
+                  // The counts live here: in the meta line they made it wrap on
+                  // long takes and pushed everything below down a line.
+                  tooltipText: "Paragraphs, repeated passages removed (Ctrl+D)" + root.tidyCounts
                   Accessible.description: "Ctrl+D"
                   foreground: root.foreground; fontFamily: root.fontFamily
                   onClicked: { root.showRaw = false; root.showPrev = false }
@@ -1099,13 +1162,14 @@ Item {
                   iconText: sentFlash.running ? "󰄬" : "󰈝"
                   tooltipText: sentFlash.running ? "Sent to Obsidian" : "Send to Obsidian (Ctrl+O)"
                   foreground: sentFlash.running ? Color.accent : root.foreground; fontFamily: root.fontFamily
-                  onClicked: if (root.svc && root.selected) root.svc.exportToObsidian(root.selected.id, root.showRaw, function(code) { if (code === 0) sentFlash.restart() })
+                  onClicked: root.exportSelected()
                   KeyBadge { key: "O"; shown: root.ctrlHints; fontFamily: root.fontFamily }
                 }
                 Timer { id: sentFlash; interval: 1500 }
               }
 
               Text {
+                textFormat: Text.PlainText
                 visible: root.showPrev && root.transcriptText.length > 0
                 width: parent.width
                 text: "Previous transcript, from before the last re-transcribe. Copy and export still use the current one."
@@ -1124,6 +1188,7 @@ Item {
                 fontFamily: root.fontFamily
               }
               Text {
+                textFormat: Text.PlainText
                 // The progress line above already says "Transcribing…"; say nothing twice.
                 visible: root.transcriptText.length === 0 && !root.selectedJob
                 width: parent.width
@@ -1137,6 +1202,7 @@ Item {
             }
 
             Text {
+              textFormat: Text.PlainText
               visible: root.selected === null && root.rows.length > 0
               text: "Select a recording."
               color: root.dim

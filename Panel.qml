@@ -26,14 +26,16 @@ Panel {
   readonly property color dim: Qt.darker(foreground, 1.55)
   readonly property string fontFamily: bar ? bar.fontFamily : Style.font.family
   readonly property bool vertical: bar ? bar.vertical : false
-  readonly property int recentCount: Math.max(0, Math.min(10, parseInt(setting("recentCount", 5)) || 5))
+  // 0 is a real setting (the list off); `|| 5` read it as unset.
+  readonly property int recentCount: { var n = parseInt(setting("recentCount", 5)); return isNaN(n) ? 5 : Math.max(0, Math.min(10, n)) }
 
   // Idle shows a microphone (what the button does), recording the red record
   // glyph plus the timer, transcribing an hourglass.
-  readonly property string barGlyph: recording ? "󰑊" : (transcribing ? "󰔟" : "󰕽")
+  readonly property string barGlyph: recording ? "󰑊" : (transcribing ? "󰔟" : (ready && svc.downloading ? "󰇚" : "󰕽"))
   // While the input clips the bar says so instead of the timer (the glyph is already urgent-coloured).
   readonly property string barLabel: recording && !vertical ? "  " + (svc.clipping ? "CLIP" : svc.elapsedText) : ""
   readonly property string stateText: !ready ? "Service unavailable"
+    : recording && svc.stopArmed ? "Long take: stop again within 10 seconds to end it"
     : recording ? "Recording " + svc.elapsedText + (svc.activeRecording ? " · " + svc.sourceLabel(svc.activeRecording.source) : "") + (svc.clipping ? " · ⚠ clipping" : "")
     : transcribing ? "Transcribing " + svc.jobProgressText(svc.activeJob) + svc.transcribeElapsedText + " · " + svc.activeJobTitle
     : (svc.downloading ? "Downloading model…" : "Ready")
@@ -215,6 +217,7 @@ Panel {
             fontFamily: root.fontFamily
             iconComponent: Component {
               Text {
+                textFormat: Text.PlainText
                 text: hero.rec ? "󰑊" : (hero.busy ? "󰔟" : "󰕽")
                 color: hero.rec ? hero.recColor : (hero.busy ? Color.accent : hero.foreground)
                 font.family: hero.fontFamily
@@ -334,8 +337,14 @@ Panel {
           Text {
             visible: root.recent.length === 0 && !root.settingsOpen
             width: parent.width
+            // "Off" only when it is: during the very first recording Recent is
+            // empty too (the live take is the hero line), and said "off".
             text: !root.ready ? "Service not loaded."
-              : (root.svc.recordings.length === 0 ? "No recordings yet. Press r to start one." : "The Recent list is off. Raise \"Recent recordings shown in popup\" in this widget's bar settings to bring it back.")
+              : root.svc.recordings.length === 0 ? "No recordings yet. Press r to start one."
+              : root.recentCount === 0 ? "The Recent list is off. To show it again: omarchy bar set " + root.moduleName + " recentCount 5"
+              : "Nothing else yet."
+            textFormat: Text.PlainText
+            wrapMode: Text.Wrap
             color: root.dim
             font.family: root.fontFamily
             font.pixelSize: Style.font.caption
@@ -403,7 +412,7 @@ Panel {
             visible: root.importOpen && root.ready
             width: parent.width
             spacing: Style.spacing.xxs
-            Text { text: "Import an audio file: type a path, Enter imports, Esc cancels"; color: root.dim; font.family: root.fontFamily; font.pixelSize: Style.font.caption }
+            Text { textFormat: Text.PlainText; width: parent.width; wrapMode: Text.Wrap; text: "Import an audio file: type a path, Enter imports, Esc cancels"; color: root.dim; font.family: root.fontFamily; font.pixelSize: Style.font.caption }
             TextField {
               id: importField
               width: parent.width
@@ -447,6 +456,7 @@ Panel {
       // The key legend is pinned below the scroll area, so it stays visible
       // while the settings (or a long Recent list) scroll above it.
       Text {
+        textFormat: Text.PlainText
         id: keyLegend
         anchors.left: parent.left
         anchors.right: parent.right
@@ -458,7 +468,7 @@ Panel {
         // between "d" and "dictionary", and no line starts with a dot.
         wrapMode: Text.Wrap
         text: root.settingsOpen ? "↑↓ move · Enter change · d dictionary · s settings · Esc close"
-              : "r record · " + (root.ready && root.svc.resumable && !root.recording ? "u resume · " : "")
+              : "r record · " + (!root.settingsOpen && root.recent.length ? "↑↓ Enter recent · " : "") + (root.ready && root.svc.resumable && !root.recording ? "u resume · " : "")
               + (root.ready && !root.recording ? "c source · " : "") + "l library · i import · s settings · d dictionary · "
               + (root.ready && root.svc.lastError.length > 0 ? "x dismiss · " : "") + "Esc close"
         color: root.dim

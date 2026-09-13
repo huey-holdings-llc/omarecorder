@@ -34,6 +34,14 @@ function fmtDate(iso) {
 function fileUrl(p) {
   return "file://" + encodeURI(p).replace(/#/g, "%23").replace(/\?/g, "%3F")
 }
+// "/home/me/Recordings" -> "~/Recordings" for the user's own home only: a
+// pattern on /home/<anything> turned /home/shared/Recordings into ~/Recordings.
+function tildePath(p, home) {
+  p = String(p || "")
+  if (!home) return p
+  if (p === home) return "~"
+  return p.indexOf(home + "/") === 0 ? "~" + p.slice(home.length) : p
+}
 // 1.2 GB / 466 MB / 12 KB
 function fmtBytes(b) {
   b = b || 0

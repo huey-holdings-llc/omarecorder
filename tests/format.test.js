@@ -67,5 +67,14 @@ eq("fmtDate null", fmtDate(null), "")
 eq("fmtDate unparseable falls back to a trimmed string", fmtDate("not a date"), "not a date")
 eq("fmtDate odd but sliceable string", fmtDate("2026-13-45T99:99:99+0000"), "2026-13-45 99:99")
 
+// tildePath: the home folder shown as ~, and only the home folder: a regex on
+// /home/<anything> turned /home/shared/Recordings into ~/Recordings.
+eq("tildePath inside home", tildePath("/home/me/Recordings", "/home/me"), "~/Recordings")
+eq("tildePath home itself", tildePath("/home/me", "/home/me"), "~")
+eq("tildePath another user's home is left alone", tildePath("/home/shared/Recordings", "/home/me"), "/home/shared/Recordings")
+eq("tildePath a prefix that is not a folder boundary", tildePath("/home/meg/x", "/home/me"), "/home/meg/x")
+eq("tildePath outside home", tildePath("/mnt/data/rec", "/home/me"), "/mnt/data/rec")
+eq("tildePath no home known", tildePath("/home/me/x", ""), "/home/me/x")
+
 console.log("format.js: passed " + passed + "  failed " + failed)
 if (failed > 0) process.exit(1)
