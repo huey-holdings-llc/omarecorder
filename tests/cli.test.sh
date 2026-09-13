@@ -853,6 +853,9 @@ set_state
 ( PATH="$STUBFAIL:$PATH" VOXTYPE_MODELS_DIR="$DLM" "$CLI" transcribe "$IDD" --model small.en --download >/dev/null 2>&1 )
 eq "failed chain leaves no jobs" "$(jq -r '.jobs|length' "$RUN/state.json")" "0"
 check "and no transcript" bash -c "! test -f \"$DD/transcript.md\""
+# The Library has nothing but state.json to learn of it (the notification is
+# easy to miss), so the failure stays in the state until the next attempt.
+eq "a failed download is kept in the state" "$(jq -r '.download_failed.model // "none"' "$RUN/state.json")" "small.en"
 
 # The full chain: download lands, transcription follows on its own, with the
 # requested range replayed.
@@ -862,6 +865,7 @@ check "chained transcript written" bash -c "grep -q 'chained stub text' \"$DD/tr
 eq "chained transcript records the model" "$(jq -r .transcript.model "$DD/meta.json")" "small.en"
 check "chained transcript keeps the range" bash -c "head -1 \"$DD/transcript.md\" | grep -q 'range=0-2'"
 eq "raw state holds no jobs afterwards" "$(jq -r '.jobs|length' "$RUN/state.json")" "0"
+eq "a new download of that model clears the failure" "$(jq -r '.download_failed // "none"' "$RUN/state.json")" "none"
 
 # A chain whose recording is gone: model still lands, no transcribe job, logged.
 jq -cn --argjson t "$(date +%s)" \
@@ -888,6 +892,19 @@ set_state
 eq "chunk override run exits 0" "$(cat "$TMP/rc")" "0"
 check "1 s pieces split the 3 s clip in three" bash -c "head -1 \"$DD/transcript.md\" | grep -q 'chunks=3'"
 eq "meta records the chunk length used" "$(jq -r .transcript.chunk_s "$DD/meta.json")" "1"
+
+# Fast and Balanced (base.en, small.en) only understand English: say so when
+# another language (auto included) is asked of them, and still run.
+set_state
+WARN=$(PATH="$STUB:$PATH" VOXTYPE_MODELS_DIR="$DLM" "$CLI" transcribe "$IDD" --model small.en --language de 2>&1 >/dev/null; echo "rc=$?")
+check "an English-only model asked for German warns" bash -c 'grep -q "only understands English" <<<"$1"' _ "$WARN"
+check "and still transcribes" bash -c 'grep -q "rc=0" <<<"$1"' _ "$WARN"
+set_state
+WARN=$(PATH="$STUB:$PATH" VOXTYPE_MODELS_DIR="$DLM" "$CLI" transcribe "$IDD" --model small.en --language auto 2>&1 >/dev/null)
+check "auto warns too (an .en model cannot detect)" bash -c 'grep -q "only understands English" <<<"$1"' _ "$WARN"
+set_state
+WARN=$(PATH="$STUB:$PATH" VOXTYPE_MODELS_DIR="$DLM" "$CLI" transcribe "$IDD" --model small.en --language en 2>&1 >/dev/null)
+check "English does not warn" bash -c '! grep -q "only understands English" <<<"$1"' _ "$WARN"
 mkdir -p "$TMP/dlm3"
 ( PATH="$STUBSNAP:$PATH" VOXTYPE_MODELS_DIR="$TMP/dlm3" "$CLI" transcribe "$IDD" --model small.en --chunk-s 7 --download >/dev/null 2>&1 )
 eq "then carries chunk_s" "$(jq -r '.jobs[0]."then".chunk_s' "$TMP/state.mid")" "7"

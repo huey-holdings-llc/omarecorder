@@ -171,10 +171,10 @@ cmd_config() {
 }
 
 # ----------------------------------------------------------------- state ----
-EMPTY_STATE='{"recording":null,"jobs":[],"version":0,"last_stop":null}'
-read_state() { # always normalized to {recording, jobs, version, last_stop}
+EMPTY_STATE='{"recording":null,"jobs":[],"version":0,"last_stop":null,"download_failed":null}'
+read_state() { # always normalized to {recording, jobs, version, last_stop, download_failed}
   { [[ -f "$STATE_FILE" ]] && cat "$STATE_FILE" 2>/dev/null || echo "$EMPTY_STATE"; } \
-    | jq -c '{recording: (.recording // null), jobs: (.jobs // []), version: (.version // 0), last_stop: (.last_stop // null)}' 2>/dev/null || echo "$EMPTY_STATE"
+    | jq -c '{recording: (.recording // null), jobs: (.jobs // []), version: (.version // 0), last_stop: (.last_stop // null), download_failed: (.download_failed // null)}' 2>/dev/null || echo "$EMPTY_STATE"
 }
 # save_state <json>: bumps version and writes atomically (callers hold the lock)
 save_state() { write_json "$STATE_FILE" "$(jq -c '.version = ((.version // 0) + 1)' <<<"$1")"; }
@@ -263,6 +263,8 @@ _claim_dl() {
       '.jobs |= map(if .type=="download" and .model==$m then ."then"=$th else . end)' <<<"$st")"
     return 2
   fi
+  # A fresh attempt replaces this model's last failure (the Library shows it until then).
+  st=$(jq -c --arg m "$model" 'if .download_failed.model == $m then .download_failed = null else . end' <<<"$st")
   if [[ -n "$then_json" ]]; then
     save_state "$(jq -c --arg m "$model" --arg u "$unit" --argjson t "$(now_epoch)" --argjson b "$bytes" --argjson th "$then_json" \
       '.jobs += [{type:"download", model:$m, unit:$u, started_at:$t, expected_bytes:$b, "then":$th}]' <<<"$st")"
@@ -1844,6 +1846,9 @@ _dl_worker() {
       notify "Model ready · $(model_label "$name")" "You can pick it in the Library now"
     fi
   else
+    # The notification is easy to miss; the Library reads this and says so
+    # beside the button until the next attempt.
+    state_set --arg m "$name" --argjson t "$(now_epoch)" '.download_failed = {model:$m, at:$t}' || true
     notify "Model download failed · $name" "Check your connection and try again (details: $LOG_FILE)"; log "download FAILED $name"
   fi
   bump_state
@@ -1889,6 +1894,13 @@ cmd_transcribe() {
   have voxtype || die "voxtype not installed"
   require_idle "$id"
   [[ $(jq -r '.duration_s // 0' "$dir/meta.json") == "0" ]] && die "$id has no audio yet"
+  # Fast and Balanced are whisper's .en models: another language (or auto)
+  # gets an English guess. Said once the run is really going ahead: printed
+  # earlier it led every later failure's message, and a chained download's
+  # notification (first stderr line only) showed it instead of the error.
+  local langwarn=""
+  [[ "$model" == *.en && -n "$lang" && "$lang" != "en" ]] \
+    && langwarn="omarecorder: warning: $model only understands English, so language $lang has no effect; Accurate (large-v3-turbo) handles other languages"
   if ! model_installed "$model"; then
     if (( dl )); then
       # All the recording validations above already passed, so the intent is
@@ -1897,6 +1909,7 @@ cmd_transcribe() {
         '{id:$id, language:$l, threads:$th, from:$f, to:$t, chunk_s:$c, enhance:$e}')
       start_download "$model" "$then_json"
       log "transcribe $id deferred until $model finishes downloading"
+      if [[ -n "$langwarn" ]]; then echo "$langwarn" >&2; fi
       echo "will transcribe $id when $model is ready"
       return 0
     fi
@@ -1922,6 +1935,7 @@ cmd_transcribe() {
     state_set --arg id "$id" '.jobs |= map(select(.id != $id))'
     die "could not start transcription job"
   fi
+  if [[ -n "$langwarn" ]]; then echo "$langwarn" >&2; fi
   echo "transcribing $id with $model"
 }
 
