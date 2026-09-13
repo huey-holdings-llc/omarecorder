@@ -49,7 +49,7 @@ to them is easy to merge; one that breaks them will get a conversation first.
 
 ## Practical bits
 
-* **Dev loop**: `scripts/dev-install.sh --enable`, then `omarchy-restart-shell`
+* **Dev loop**: `scripts/dev-sync.sh --enable`, then `omarchy-restart-shell`
   for QML changes. `bash tests/cli.test.sh` (about three minutes, uses the real
   microphone and voxtype) and `bash tests/lint.sh` must both pass. No mic or
   voxtype on your machine? `OMARECORDER_TEST_ALLOW_SKIP=1` turns those blocks

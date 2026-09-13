@@ -81,10 +81,6 @@ Obsidian vault after Send to Obsidian, with the tools of his choosing. That
 step is a personal workflow outside this plugin, and it stays outside so that
 the plugin's privacy statement remains simple and true.
 
-Should there be real demand for AI-assisted clean-up, the author is open to
-revisiting this decision, most likely as a separate, clearly labelled edition
-rather than a change to this one. Open an issue if that matters to you.
-
 ## Prior art and thanks
 
 * [Samurai Scribe](https://samuraiscribe.com/), a local transcription app for
@@ -328,12 +324,14 @@ Delete whichever of these you no longer want.
   touched. Recordings made before 1.0 get their waveform drawn the first time
   the Library lists them.
 * **Send to Obsidian**: the button above the transcript writes a Markdown note
-  (YAML frontmatter with title, date, duration, source, model, recording id and
-  `tags: [omarecorder]`) into the folder where Obsidian itself files new notes
-  (it reads the vault's `.obsidian/app.json`), then opens it via `obsidian://`.
-  The open vault is used unless Settings picks one. With no Obsidian at all the
-  note lands next to the recording. The Library meta line says "in Obsidian"
-  afterwards.
+  (YAML frontmatter with title, date, duration, source, model, the recording's
+  note, its id and `tags: [omarecorder]`) into the folder where Obsidian itself
+  files new notes (it reads the vault's `.obsidian/app.json`), then opens it via
+  `obsidian://`. The open vault is used unless Settings picks one. With no
+  Obsidian at all the note lands next to the recording. The Library meta line
+  says "in Obsidian" afterwards, or "exported" when no vault was involved.
+  Sending again writes a new note (`Title (2).md`) and never touches one you
+  may have edited since.
 * **Import**: press `i` in the popup and type a path (`~/Downloads/meeting.m4a`),
   or run `omarecorder import <file>`. Anything ffmpeg reads is converted to
   16 kHz mono, and the id comes from the file's modification time. The popup
@@ -352,7 +350,8 @@ while talking:
 | System audio | A clean digital copy of what the computer plays. No room, no mic, none of you. | Well. |
 | Mic + system audio | Both tracks kept (`mic.wav`, `system.wav`) and mixed into `audio.wav`. On speakers the mix carries the video twice, once clean and once through the mic. | Your voice was fine; the parts where the video was playing were not. |
 
-So: for a call or a video, **System audio**. For your own voice, **Microphone**.
+So: for a webinar or a video you only listen to, **System audio** (it records
+none of you). For your own voice, **Microphone**.
 For a conversation where you talk and the computer plays the other side,
 **Mic + system audio**, and wear headphones: then the mic only hears you, the
 monitor only carries them, and the mix is clean. Headphones are the single
@@ -367,7 +366,7 @@ stay in the folder, so a bad mix can be redone by hand with ffmpeg.
     ├── audio.wav                       16 kHz mono s16 (whisper-native, about 115 MB per hour)
     ├── audio.orig.wav                  only after a trim (unless --replace)
     ├── waveform.png                    2400x128 strip, redrawn on stop, import, trim and analyze
-    ├── meta.json                       title, note, source, duration, levels, transcript, trim, resume_seams, exported_to
+    ├── meta.json                       title, notes, source, duration, levels, transcript, trim, resume_seams, exported_to
     ├── transcript.md                   header line + plain text, exactly as whisper wrote it
     ├── transcript.tidy.md              paragraphs, repeated passages removed (what the Library shows)
     ├── transcript.prev.md              the previous transcript, kept when you transcribe again
@@ -428,10 +427,10 @@ says so when the language setting and the chosen preset disagree, and
 ```
 omarecorder record start [--source mic|system|both] [--title T]   start a recording
 omarecorder record resume                                          continue the last stopped recording
-omarecorder record stop [--force] | toggle | status [--json]        control / inspect
+omarecorder record stop [--guard] | toggle | status [--json]        control / inspect
 omarecorder import <file> [--move] [--title T]                     bring an existing audio file in
 omarecorder list [--json] | show <id> [--json] | analyze <id>      browse / measure levels
-omarecorder search <text>                                          ids whose transcript contains the text
+omarecorder search <text>                                          ids whose title, note or transcript contains the text
 omarecorder rename <id> <title>                                    retitle (empty title clears it)
 omarecorder delete <id> [--yes] [--permanent]                      remove (trash unless --permanent)
 omarecorder note <id> <text>                                       set a note on a recording (empty text clears it)
@@ -444,7 +443,7 @@ omarecorder export <id> [--vault P | --dir P] [--no-open] [--raw]   transcript t
 omarecorder vaults [--json]                                        Obsidian vaults on this machine (* = open)
 omarecorder transcribe <id> [--model M] [--language L] [--threads N] [--from s --to s]
                             [--chunk-s N] [--enhance|--no-enhance] [--download]
-omarecorder cancel <id> | estimate <id> --model M
+omarecorder cancel <id> | estimate <id> [--model M]
 omarecorder models [--json] | model download <name> | model cancel <name>
 omarecorder play <id> [--from s] | stop-play | open <id> [--raw] | folder <id>
 omarecorder config get [key|--json] | config set <key> <value>
@@ -458,6 +457,10 @@ the folder a failed start or import has just made). Without a terminal it needs 
 returns `tools[]` and `missing[]` with the package for each tool, and exits
 non-zero until everything needed is there. `version` is read from
 `manifest.json`.
+
+`transcribe` returns as soon as the job is queued. A script that needs the
+text waits for it: poll `omarecorder status --json` until `.jobs` no longer
+lists the id, then read it with `omarecorder copy <id> --print`.
 
 Every flag that takes a value has to be given one, and every command that
 accepts `--json` rejects anything else in that position rather than quietly
@@ -484,8 +487,9 @@ The plugin never edits these files for you.
 
 One guard on long takes: once a recording passes an hour, the toggle (the
 keybinding, the bar right-click, `r`) asks before stopping; stop again within
-10 seconds to confirm. The popup's Stop button still stops in one click, and
-`record stop --force` does the same from a script.
+10 seconds to confirm, and the popup says so while it waits. The popup's Stop
+button still stops in one click, and so does `omarecorder record stop` from a
+script; `record stop --guard` asks first, the way the toggle does.
 `OMARECORDER_STOP_CONFIRM_S` moves the threshold (0 turns the guard off).
 
 ## FAQ
@@ -592,7 +596,7 @@ then:
 
 ```bash
 cd ~/projects/omarecorder
-scripts/dev-install.sh --enable   # rsync into the plugin dir, validate, symlink the CLI, rescan plugins
+scripts/dev-sync.sh --enable      # rsync into the plugin dir, validate, symlink the CLI, rescan plugins
 omarchy-restart-shell             # QML changes need this: rescan keeps Qt's component cache
 bash tests/cli.test.sh            # CLI tests against a throwaway XDG tree (about 3 minutes)
 bash tests/lint.sh                # shellcheck, manifest schema, QML hygiene, README sections

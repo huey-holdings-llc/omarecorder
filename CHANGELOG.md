@@ -6,6 +6,12 @@ All notable changes to this project are documented here. Format follows
 ## [Unreleased]
 
 ### Added
+- The Obsidian export carries the recording's note as a `note:` property; the
+  README always said it did.
+- CLI `search` matches titles and notes as well as transcripts, as the
+  Library's search box does, and refuses an option instead of searching for it.
+- `record stop --guard` asks before stopping a long take, as the toggle does.
+- `vaults` with no vaults says how to get one.
 - Notes are searchable: the Library's search matches a recording's note as
   well as its title, date and transcript.
 - While an import runs, the popup says so ("Importing meeting.m4a…"). A long
@@ -30,6 +36,32 @@ All notable changes to this project are documented here. Format follows
   description.
 
 ### Changed
+- A plain `record stop` stops at once, as the README always said a script's
+  stop does. The popup's `r`, the toggle and the keybinding still ask first
+  past an hour (they pass `--guard`), and the popup now says so while it
+  waits. `--force` is kept as the old spelling of a plain stop.
+- `config set recordingsDir` creates the folder, as record and import do.
+- The Library gets out of the way when it opens the editor, the file manager
+  or Obsidian; they opened underneath it.
+- A title or note being typed is saved when another take is clicked or the
+  Library closes, the way Enter saves it; `Esc` still cancels.
+- Models are named as the chips name them (Fast, Balanced, Accurate) in the
+  meta line, the progress line and the rows.
+- Tidy's counts moved into the Tidy button's tooltip, so the meta line no
+  longer wraps on long takes and moves everything below it.
+- Setting labels fit: "Clean up audio first", and the dictionary's "Prompt"
+  and "Paste". The popup's legend lists the Recent keys.
+- Install hints name the package instead of a `pacman -S` command, and
+  `scripts/dev-install.sh` is now `scripts/dev-sync.sh`: the marketplace read
+  both as capabilities a reviewer has to accept. Lint keeps them out.
+- `open` hands the editor a path through a private link named by the id, so a
+  title never reaches a terminal's command line.
+- rename, trim, note and delete claim the take for as long as they run, so a
+  transcription or resume cannot start on it halfway.
+- The crash sweep only touches folders the CLI made (a `.omarecorder` marker),
+  and an import converts under a temporary name until it is done.
+- Lint checks that every `Text` sets `textFormat`, and the kit-token check
+  counts braces properly and has a fixture that CI runs.
 - The Library's footer lists only the keys that are not Ctrl keys, ends with
   "hold Ctrl for shortcuts", and is measured item by item: on a narrow screen
   it drops its least useful keys first instead of cutting off mid-line.
@@ -70,6 +102,29 @@ All notable changes to this project are documented here. Format follows
   did for lint, so a block that goes quiet fails the run.
 
 ### Fixed
+- A newline in a synced vault's new-note folder setting could send an export
+  one folder above the vault.
+- The empty Library's message ran out of its column. It wraps, and names the
+  folder with your real home folder.
+- The popup's Recent list could not be turned off (0 read as 5), and said it
+  was off during the very first recording.
+- A rejected recordings folder showed its error out of view and left the bad
+  path in the field; the reason now shows under the field.
+- The setup card said nothing when a model download failed.
+- Setup was not checked again after the source changed.
+- A long import could be taken for a crashed take by the recovery sweep.
+- The Library pulled a list you had scrolled back to the selection on every
+  refresh.
+- A title starting `--urgency=` or similar was read as an option by the
+  notification sender.
+- A resumed take's transcript was described as trimmed.
+- The Library said "in Obsidian" for an export that went somewhere else.
+- `cancel` said "cancelled" when nothing was running.
+- An action whose command never started left what waited on it (an
+  "Importing…" line) up for good.
+- The Language setting showed a blank for a code set from the CLI.
+- The bar shows a download glyph while a model downloads.
+- The note field stops at the 500 characters the CLI keeps, the title at 80.
 - A machine with no microphone stayed on "Setup needed" even with System audio
   as the source. A microphone is now required only when the source records
   one, and `setup check --json` says whether it is (`mic_required`).
