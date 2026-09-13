@@ -52,6 +52,16 @@ if grep -nE '(^|[^A-Za-z])/tmp(/|\b)' -- "${QML[@]}" bin/omarecorder | grep -vE 
 for f in "${QML[@]}"; do [[ -s "$f" ]] || bad "$f empty"; done
 # User strings render as plain text: the hardening pass set PlainText everywhere and nothing may undo it.
 if grep -nE 'textFormat: *(Text|TextEdit)\.(RichText|StyledText|AutoText)' -- "${QML[@]}"; then bad "rich text format on a Text element"; else ok "no RichText/StyledText/AutoText"; fi
+# And every Text says so: left unset a Text is AutoText, which renders a title
+# or note containing "<b>" as markup. A title is data, not formatting.
+missing_fmt=$(awk '
+  FNR == 1 { blk = 0 }
+  !blk && /(^|[^A-Za-z.])Text[[:space:]]*\{/ { blk = 1; start = FNR; body = ""; depth = 0 }
+  blk {
+    body = body $0 "\n"; o = gsub(/\{/, "{"); c = gsub(/\}/, "}"); depth += o - c
+    if (depth <= 0) { if (body !~ /textFormat:/) print FILENAME ":" start; blk = 0 }
+  }' "${QML[@]}")
+if [[ -n "$missing_fmt" ]]; then printf '  %s\n' $missing_fmt; bad "Text elements without textFormat (add textFormat: Text.PlainText)"; else ok "every Text sets textFormat"; fi
 # Theme tokens only (Color.*, Style.*): no colour literals, no hand-picked pixel sizes.
 if grep -nE '"#[0-9a-fA-F]{3,8}"|Qt\.rgba\(' -- "${QML[@]}"; then bad "colour literal in QML (use Color.* tokens)"; else ok "no colour literals"; fi
 # Commands are argv arrays; a string here would be a shell line.
@@ -79,15 +89,29 @@ else skipped "qmllint (needs the omarchy shell's QML modules)"; fi
 # are untyped QtObjects, which is why missing-property is off above: a token
 # Omarchy renames would only fail at runtime. Check every one the plugin uses
 # against the groups the shell's Style.qml declares.
+# style_tokens <Style.qml>: "group.name" for every property declared directly
+# in a nested group. Braces are counted per character and // comments dropped,
+# so a "}}" or a commented-out property cannot throw the grouping off; the
+# fixture proves it in CI too, where the shell itself is absent.
+style_tokens() {
+  awk '
+    {
+      line = $0; sub(/\/\/.*/, "", line)
+      if (g == "" && match(line, /readonly property QtObject [a-z]+: QtObject \{/)) {
+        s = substr(line, RSTART, RLENGTH); sub(/^readonly property QtObject /, "", s); sub(/:.*/, "", s)
+        g = s; depth = 1; line = substr(line, RSTART + RLENGTH)
+      }
+      if (g == "") next
+      if (depth == 1 && match(line, /property [A-Za-z]+ [A-Za-z_]+/)) { split(substr(line, RSTART, RLENGTH), a, " "); print g "." a[3] }
+      o = gsub(/\{/, "{", line); c = gsub(/\}/, "}", line); depth += o - c
+      if (depth <= 0) g = ""
+    }' "$1" | sort -u
+}
+got=$(style_tokens tests/fixtures/Style.qml | paste -sd' ')
+[[ "$got" == "font.body font.caption spacing.nested spacing.sm spacing.xs" ]] && ok "kit-token parser reads its fixture right" || bad "kit-token parser misread its fixture: $got"
 STYLEQML="$SHELLQML/Commons/Style.qml"
 if [[ -f "$STYLEQML" ]]; then
-  declared=$(awk '
-    /readonly property QtObject [a-z]+: QtObject \{/ { match($0, /QtObject [a-z]+:/); g = substr($0, RSTART + 9, RLENGTH - 10); depth = 1; next }
-    g != "" {
-      if ($0 ~ /\{/) depth++
-      if ($0 ~ /\}/) { depth--; if (depth == 0) { g = ""; next } }
-      if (match($0, /property [A-Za-z]+ [A-Za-z_]+/)) { split(substr($0, RSTART, RLENGTH), a, " "); print g "." a[3] }
-    }' "$STYLEQML" | sort -u)
+  declared=$(style_tokens "$STYLEQML")
   unknown=$(grep -ohE 'Style\.(spacing|font|bar)\.[A-Za-z_]+' "${QML[@]}" | sed 's/^Style\.//' | sort -u | comm -23 - <(printf '%s\n' "$declared"))
   if [[ -z "$unknown" ]]; then ok "every nested kit token the plugin uses exists in the shell's Style.qml"
   else bad "kit tokens the shell's Style.qml does not declare: $(printf '%s ' $unknown)"; fi
@@ -113,6 +137,11 @@ step "marketplace scan"
 # OmaRecorder needs neither: the setup hint names the package, the README says
 # where the source lives. Keep it that way.
 if git grep -nIE '\b(sudo|pkexec) +[a-z]|git clone +[a-z]+://' -- . ':!tests/lint.sh'; then bad "privilege or remote-clone command in the tree"; else ok "no privilege or remote-clone commands"; fi
+# It also counts an install command spelled out in code (pacman -S ...) as
+# package management, and any file named *install* or *setup* as an
+# installer. The hints name the package instead; the dev script is dev-sync.sh.
+if git grep -nIE '\b(pacman|paru|yay|apt|apt-get|dnf|zypper|apk) +(-[A-Za-z]*[SRU]|install|remove|upgrade|add|del)\b' -- bin ui '*.qml' scripts; then bad "package-manager command in the code (name the package instead)"; else ok "no package-manager commands in the code"; fi
+if git ls-files | sed 's#.*/##' | grep -iE '(^|[-_])(install|installer|setup|uninstall)([-_.]|$)'; then bad "a file name the marketplace reads as an installer"; else ok "no installer-looking file names"; fi
 
 step "docs"
 grep -q '## Remove' README.md && ok "README has a Remove section" || bad "README lacks Remove"
