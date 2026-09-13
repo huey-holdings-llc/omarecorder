@@ -10,7 +10,7 @@ import "ui/state.js" as State
 import qs.Ui
 import "ui"
 
-// OmaRecorder Library — fullscreen overlay: every recording on the left,
+// OmaRecorder Library: fullscreen overlay: every recording on the left,
 // the selected one on the right with its transcript. Summoned with
 //   omarchy-shell shell toggle io.github.huey-holdings-llc.omarecorder
 // Uses the theme's [popups] surface tokens (same chrome as the bar popup) so
@@ -99,10 +99,23 @@ Item {
   readonly property var selectedJob: svc && selected ? svc.jobFor(selected.id) : null
   readonly property string modelForRun: chosenModel || (svc ? svc.defaultModel : "base.en")
   readonly property bool selectedLive: !!(svc && selected && selected.id === svc.activeId)
+  // A job appearing turns Transcribe into Cancel under the pointer, and a
+  // double click (or a second click because nothing seemed to happen) then
+  // cancelled the job it had just started. Cancel ignores clicks for a second.
+  readonly property bool hasSelectedJob: !!selectedJob
+  onHasSelectedJobChanged: if (hasSelectedJob) cancelGuard.restart()
+  property Timer cancelGuard: Timer { interval: 1000 }
+  // Padded to two digits with a figure space, so the button (and the chips
+  // sized from what is left of the row) keep their width as it counts up.
+  function downloadingText(job) {
+    var p = State.downloadPercent(job)
+    return "Downloading" + (p >= 0 ? " " + (p < 10 ? " " : "") + p + "%" : "") + "…"
+  }
 
   function open(payloadJson) {
     root.opened = true
     root.filterText = ""
+    root.userScrolled = false   // a scroll from the last visit must not hide the take asked for now
     root.deleteConfirmOpen = false
     var requested = ""
     try { var p = JSON.parse(payloadJson || "{}"); if (p && p.id) requested = String(p.id) } catch (e) {}
@@ -111,7 +124,7 @@ Item {
     if (svc) svc.refresh()
     Qt.callLater(function() { keyCatcher.forceActiveFocus() })
   }
-  function close() { root.deleteConfirmOpen = false; root.trimConfirmOpen = false; root.trimMode = false; root.opened = false; stopPlayback() }
+  function close() { commitFields(); root.deleteConfirmOpen = false; root.trimConfirmOpen = false; root.trimMode = false; root.opened = false; hideCtrlHints(); stopPlayback() }
   function toggle() { root.opened ? root.close() : root.open("{}") }
 
   // Transcript matches arrive ~300 ms behind the keystrokes (the CLI greps
@@ -122,14 +135,31 @@ Item {
   function filteredRows() { return State.filterRows(svc ? svc.recordings : [], filterText, transcriptMatchIds, transcriptMatchQuery) }
   function indexOfId(id) { return State.indexOfId(rows, id) }
   function ensureSelection() { if (selectedIndex < 0 && rows.length > 0) selectedId = rows[0].id }
-  readonly property string hintsText: root.trimMode
-    ? "Space play   ←→ seek   [ ] mark start / end   Enter trim   Esc leave trim mode"
-    : "↑↓ select   Enter open / transcribe   Ctrl+M model   Space play   Ctrl+S speed   ←→ seek   F2 rename   F3 trim   F4 raw   Del delete   Esc close"
+  // The key legend. On a narrow card the lowest-priority items drop first
+  // (never "hold Ctrl" or "Esc close"), so it never clips; the Ctrl keys are
+  // not listed at all, because holding Ctrl shows each one on its control.
+  // While a title or note is being typed the footer says how to finish; a
+  // caption above the meta line used to, and pushed everything below it down.
+  readonly property bool editingField: titleField.activeFocus || noteField.activeFocus
+  readonly property var hintItems: root.editingField
+    ? [{ text: titleField.activeFocus ? "renaming" : "editing the note", priority: 1 },
+       { text: "Enter save", priority: 9, keep: true }, { text: "Esc cancel", priority: 9, keep: true }]
+    : root.trimMode
+    ? [{ text: "Space play", priority: 3 }, { text: "←→ seek", priority: 2 }, { text: "[ ] mark start / end", priority: 4 },
+       { text: "Enter trim", priority: 9, keep: true }, { text: "Esc leave trim mode", priority: 9, keep: true }]
+    : [{ text: "↑↓ select", priority: 5 }, { text: "Enter open / transcribe", priority: 4 }, { text: "Space play", priority: 3 },
+       { text: "←→ seek", priority: 1 }, { text: "Del delete", priority: 2 },
+       { text: "hold Ctrl for shortcuts", priority: 9, keep: true }, { text: "Esc close", priority: 9, keep: true }]
+  // Hold Ctrl for a beat and every Ctrl key shows as a badge on its control.
+  property bool ctrlHints: false
+  function hideCtrlHints() { ctrlReveal.stop(); ctrlHints = false }
+  Timer { id: ctrlReveal; interval: 350; onTriggered: root.ctrlHints = true }
   function select(delta) { selectAbsolute(State.stepIndex(selectedIndex, delta, rows.length)) }
   function selectAbsolute(i) {
     i = State.clampIndex(i, rows.length)
     if (i < 0) return
     selectedId = rows[i].id
+    userScrolled = false
     list.positionViewAtIndex(i, ListView.Contain)
   }
   function setFilter(t) { filterText = t; searchDebounce.restart(); Qt.callLater(ensureSelection) }
@@ -156,15 +186,44 @@ Item {
   }
 
   // Enter / the main button start a transcription. Cancelling a running job is
-  // only reachable through the explicit Cancel button (cancelSelected) — a
+  // only reachable through the explicit Cancel button (cancelSelected): a
   // stray Enter must never kill an hour-long job.
+  // A second press before the job reached state.json started a second run,
+  // which failed as "already running"; one start is in flight at a time.
+  property bool transcribePending: false
   function transcribeSelected() {
-    if (!svc || !selected || selectedJob || selectedLive) return
+    if (!svc || !selected || selectedJob || selectedLive || transcribePending) return
     // --download makes the CLI chain the transcription onto the model download
     // when the model is missing; the intent lives on the job in state.json.
-    svc.transcribe(selected.id, modelForRun, (svc.config && svc.config.language) || "en", true)
+    transcribePending = true
+    svc.transcribe(selected.id, modelForRun, (svc.config && svc.config.language) || "en", true, undefined,
+                   function() { root.transcribePending = false })
+  }
+  // What Tidy did to this take, for the Tidy button's tooltip.
+  readonly property string tidyCounts: {
+    var t = selected && selected.transcript && selected.transcript.tidy
+    if (!t) return ""
+    var parts = []
+    if (t.repeats_removed > 0) parts.push(t.repeats_removed + (t.repeats_removed === 1 ? " repeat removed" : " repeats removed"))
+    if (t.dict_replacements > 0) parts.push(t.dict_replacements + (t.dict_replacements === 1 ? " correction" : " corrections"))
+    return parts.length ? ". " + parts.join(", ") : ""
   }
   function cancelSelected() { if (svc && selected && selectedJob) svc.cancel(selected.id) }
+  // The Library holds the keyboard as an overlay, so an editor, file manager
+  // or Obsidian window it launches opened underneath it and looked like
+  // nothing happened. It gets out of the way instead.
+  function openOutside(what) {
+    if (!svc || !selected) return
+    if (what === "folder") svc.openFolder(selected.id); else svc.openTranscript(selected.id)
+    close()
+  }
+  // Obsidian only opens for a vault export (not for exportDir or the
+  // recording's own folder), and only then is there a window to make way for.
+  function exportSelected() {
+    if (!svc || !selected) return
+    var toVault = State.exportOpensObsidian(svc.config, svc.vaults.length)
+    svc.exportToObsidian(selected.id, showRaw, function(code) { if (code === 0) { sentFlash.restart(); if (toVault) root.close() } })
+  }
   // Ctrl+M walks the preset models (the ones with a label) in catalog order.
   // Same gate as the picker's visibility: never while a job runs or the take is live.
   function cycleModel(dir) {
@@ -176,7 +235,6 @@ Item {
     for (var j = 0; j < presets.length; j++) if (presets[j].name === modelForRun) { cur = j; break }
     var next = cur < 0 ? (dir > 0 ? 0 : presets.length - 1) : (cur + dir + presets.length) % presets.length
     chosenModel = presets[next].name
-    picker.value = presets[next].name
   }
   function mpvSend(cmd) { if (mpvSock.connected) mpvSock.write(JSON.stringify({ command: cmd }) + "\n") }
   function stopPlayback() {
@@ -211,6 +269,10 @@ Item {
     if (!selected || selectedLive || selectedJob || !selected.waveform) return
     trimFrom = 0; trimTo = selected.duration_s || 0; trimMode = true
   }
+  // One path each for the key, its Ctrl alias and the button.
+  function toggleTrim() { if (trimMode) trimMode = false; else startTrim() }
+  function toggleRaw() { if (hasTidy) { showRaw = !showRaw; showPrev = false } }
+  function restoreOriginal() { if (svc && selected && selected.has_orig) { stopPlayback(); svc.restoreTrim(selected.id) } }
   function previewRange() {
     if (previewing) { mpvSend(["set_property", "pause", true]); previewing = false; return }
     previewing = true
@@ -236,14 +298,47 @@ Item {
   function cancelDelete() { deleteConfirmOpen = false; Qt.callLater(function() { keyCatcher.forceActiveFocus() }) }
   function stripHeader(t) { return String(t || "").replace(/^<!--[^\n]*-->\n?/, "").trim() }
 
-  onRowsChanged: ensureSelection()
+  // A re-list also hands the ListView a new model, and it scrolled back to the
+  // top: on a long list the selected row ended up out of sight. Keep it in view.
+  onRowsChanged: {
+    ensureSelection()
+    // Twice: the first pass lands on the view's estimate of rows it has not
+    // built yet, which left the selected row half off the edge; the second,
+    // once they exist, is exact.
+    Qt.callLater(function() { root.showSelectedRow(); keepSelectedInView.restart() })
+  }
+  // Not while the user has scrolled the list away: every transcription piece
+  // re-lists, and each one pulled the view back. Choosing a row resets it.
+  property bool userScrolled: false
+  function showSelectedRow() { if (selectedIndex >= 0 && !userScrolled) list.positionViewAtIndex(selectedIndex, ListView.Contain) }
+  Timer { id: keepSelectedInView; interval: 30; onTriggered: root.showSelectedRow() }
   // Every list refresh rebuilds the row objects, so `selected` changes
   // identity even when the selection stayed on the same recording; a
   // transcription or download finishing mid-playback must not stop the sound.
   // Only a genuine move to a different id resets playback and view state.
   property string lastSelectedId: ""
+  // The title and note fields are not bound to the row: every refresh rebuilds
+  // the row objects, and a binding would put the saved text back over whatever
+  // is being typed. A new selection replaces them; a refresh of the same one
+  // only fills in a field nobody is editing.
+  function syncFields(force) {
+    var t = selected ? (selected.title || "") : "", n = selected ? (selected.notes || "") : ""
+    if (force || !titleField.activeFocus) titleField.text = t
+    if (force || !noteField.activeFocus) noteField.text = n
+  }
+  // A title or note being typed is saved when the selection moves or the
+  // Library closes, the way Enter saves it; only Esc throws it away. Clicking
+  // another row used to overwrite it with that row's text.
+  function commitFields() {
+    if (!svc || !selected) return
+    var typing = titleField.activeFocus || noteField.activeFocus
+    if (titleField.activeFocus && titleField.text !== (selected.title || "")) svc.rename(selected.id, titleField.text)
+    if (noteField.activeFocus && noteField.text !== (selected.notes || "")) svc.setNote(selected.id, noteField.text)
+    if (typing) keyCatcher.forceActiveFocus()
+  }
   onSelectedChanged: {
     var newId = selected ? selected.id : ""
+    syncFields(newId !== lastSelectedId)
     if (newId === lastSelectedId) return
     lastSelectedId = newId
     stopPlayback()
@@ -252,8 +347,12 @@ Item {
     var last = selected && selected.transcript && selected.transcript.model ? selected.transcript.model : ""
     var m = svc && last ? svc.modelByName(last) : null
     chosenModel = m ? last : ""
-    picker.value = modelForRun
   }
+  // The picker always shows the model Transcribe will use. It was assigned
+  // once per selection, so a first selection made before the config had
+  // loaded showed Fast (the fallback) while Transcribe ran the configured
+  // default, until another take was picked.
+  Binding { target: picker; property: "value"; value: root.modelForRun }
 
   // mpv's IPC socket appears shortly after the CLI starts the player; retry
   // until it does, then observe position and pause state.
@@ -373,11 +472,23 @@ Item {
         anchors.rightMargin: card.contentRightInset
         focus: true
         Keys.priority: Keys.BeforeItem
+        // Holding Ctrl reveals the badges after a beat. Letting go, any other key
+        // (a chord under way) or focus moving into a field hides them again, so a
+        // quick Ctrl+C never flashes them.
+        Keys.onReleased: function(event) {
+          if (State.ctrlHintAction("release", event.key === Qt.Key_Control, event.isAutoRepeat) === "hide") root.hideCtrlHints()
+        }
+        onActiveFocusChanged: if (!activeFocus) root.hideCtrlHints()
         Keys.onPressed: function(event) {
+          var hint = State.ctrlHintAction("press", event.key === Qt.Key_Control, event.isAutoRepeat)
+          if (hint === "start" && keyCatcher.activeFocus && !root.deleteConfirmOpen && !root.trimConfirmOpen) ctrlReveal.restart()
+          else if (hint === "hide") root.hideCtrlHints()
+          if (event.key === Qt.Key_Control) return
           if (root.deleteConfirmOpen) { if (deleteConfirm.handleKey(event)) event.accepted = true; return }
           if (root.trimConfirmOpen) { if (trimConfirm.handleKey(event)) event.accepted = true; return }
           if (titleField.activeFocus || noteField.activeFocus) return
-          if (event.key === Qt.Key_Escape) { if (root.trimMode) { root.trimMode = false; root.previewing = false } else if (root.filterText) root.setFilter(""); else root.close(); event.accepted = true }
+          // Esc peels one layer at a time: an error message, trim mode, the search, then the Library.
+          if (event.key === Qt.Key_Escape) { if (root.svc && root.svc.lastError.length > 0) root.svc.clearError(); else if (root.trimMode) { root.trimMode = false; root.previewing = false } else if (root.filterText) root.setFilter(""); else root.close(); event.accepted = true }
           else if (Util.editsFilter(event, root.filterText)) { root.setFilter(Util.editedFilter(event, root.filterText)); event.accepted = true }
           else if (event.key === Qt.Key_Up) { root.select(-1); event.accepted = true }
           else if (event.key === Qt.Key_Down) { root.select(1); event.accepted = true }
@@ -389,17 +500,26 @@ Item {
           else if (event.key === Qt.Key_Left && !root.filterText) { root.seekTo(root.positionS - 5); event.accepted = true }
           else if (event.key === Qt.Key_Right && !root.filterText) { root.seekTo(root.positionS + 5); event.accepted = true }
           else if (event.key === Qt.Key_F2) { titleField.forceActiveFocus(); titleField.selectAll(); event.accepted = true }
-          else if (event.key === Qt.Key_F3) { if (root.trimMode) root.trimMode = false; else root.startTrim(); event.accepted = true }
+          else if (event.key === Qt.Key_F3) { root.toggleTrim(); event.accepted = true }
           else if (root.trimMode && event.key === Qt.Key_BracketLeft) { root.markStart(); event.accepted = true }
           else if (root.trimMode && event.key === Qt.Key_BracketRight) { root.markEnd(); event.accepted = true }
           else if (event.key === Qt.Key_Space) { if (root.filterText) root.setFilter(root.filterText + " "); else root.togglePlay(); event.accepted = true }
           else if (root.trimMode && (event.key === Qt.Key_Return || event.key === Qt.Key_Enter)) { root.requestTrim(); event.accepted = true }
-          else if (event.key === Qt.Key_F4) { if (root.hasTidy) { root.showRaw = !root.showRaw; root.showPrev = false } event.accepted = true }
+          else if (event.key === Qt.Key_F4) { root.toggleRaw(); event.accepted = true }
+          // Ctrl aliases for everything, so the F-row is never required (F2, F3 and F4 still work).
+          else if ((event.modifiers & Qt.ControlModifier) && event.key === Qt.Key_N) { if (noteField.visible && noteField.enabled) { noteField.forceActiveFocus(); noteField.cursorPosition = noteField.text.length } event.accepted = true }
+          else if ((event.modifiers & Qt.ControlModifier) && event.key === Qt.Key_R) { if (titleField.enabled) { titleField.forceActiveFocus(); titleField.selectAll() } event.accepted = true }
+          else if ((event.modifiers & Qt.ControlModifier) && (event.modifiers & Qt.ShiftModifier) && event.key === Qt.Key_T) { root.restoreOriginal(); event.accepted = true }
+          else if ((event.modifiers & Qt.ControlModifier) && event.key === Qt.Key_T) { root.toggleTrim(); event.accepted = true }
+          else if ((event.modifiers & Qt.ControlModifier) && event.key === Qt.Key_D) { root.toggleRaw(); event.accepted = true }
+          else if ((event.modifiers & Qt.ControlModifier) && event.key === Qt.Key_P) { if (root.hasPrev) root.showPrev = !root.showPrev; event.accepted = true }
+          else if ((event.modifiers & Qt.ControlModifier) && event.key === Qt.Key_E) { root.openOutside("folder"); event.accepted = true }
+          else if ((event.modifiers & Qt.ControlModifier) && event.key === Qt.Key_X) { if (root.svc && picker.download) root.svc.cancelDownload(picker.value); event.accepted = true }
           else if ((event.modifiers & Qt.ControlModifier) && event.key === Qt.Key_C && root.transcriptText.length > 0) {
             root.svc.copyTranscript(root.selected.id, root.showRaw, function(code) { if (code === 0) copiedFlash.restart() }); event.accepted = true
           }
           else if ((event.modifiers & Qt.ControlModifier) && event.key === Qt.Key_O && root.transcriptText.length > 0) {
-            root.svc.exportToObsidian(root.selected.id, root.showRaw, function(code) { if (code === 0) sentFlash.restart() }); event.accepted = true
+            root.exportSelected(); event.accepted = true
           }
           else if ((event.modifiers & Qt.ControlModifier) && event.key === Qt.Key_M) {
             root.cycleModel((event.modifiers & Qt.ShiftModifier) ? -1 : 1); event.accepted = true
@@ -408,7 +528,7 @@ Item {
             root.cycleSpeed((event.modifiers & Qt.ShiftModifier) ? -1 : 1); event.accepted = true
           }
           else if (event.key === Qt.Key_Return || event.key === Qt.Key_Enter) {
-            if (root.svc && root.selected && root.selected.has_transcript && !(event.modifiers & Qt.ShiftModifier)) root.svc.openTranscript(root.selected.id)
+            if (root.svc && root.selected && root.selected.has_transcript && !(event.modifiers & Qt.ShiftModifier)) root.openOutside("transcript")
             else root.transcribeSelected()
             event.accepted = true
           }
@@ -445,6 +565,7 @@ Item {
             width: parent.width
             spacing: Style.spacing.lg
             Text {
+              textFormat: Text.PlainText
               anchors.verticalCenter: parent.verticalCenter
               text: "󰕽  OmaRecorder"   // tape reels, not the red record dot: this header is visible while idle
               color: root.foreground
@@ -464,10 +585,14 @@ Item {
                 anchors.fill: parent
                 anchors.leftMargin: Style.spacing.controlPaddingX
                 spacing: Style.spacing.sm
-                Text { anchors.verticalCenter: parent.verticalCenter; text: "󰍉"; color: root.dim; font.family: root.fontFamily; font.pixelSize: Style.font.icon }
+                Text { textFormat: Text.PlainText; anchors.verticalCenter: parent.verticalCenter; text: "󰍉"; color: root.dim; font.family: root.fontFamily; font.pixelSize: Style.font.icon }
                 Text {
+                  textFormat: Text.PlainText
                   anchors.verticalCenter: parent.verticalCenter
-                  text: root.filterText ? root.filterText : "Type to search titles and transcripts"
+                  // Elides inside the box: a longer placeholder ran into the count beside it.
+                  width: parent.width - x - Style.spacing.controlPaddingX
+                  elide: Text.ElideRight
+                  text: root.filterText ? root.filterText : "Search titles, notes and transcripts"
                   color: root.filterText ? root.foreground : root.dim
                   font.family: root.fontFamily
                   font.pixelSize: Style.font.body
@@ -475,6 +600,7 @@ Item {
               }
             }
             Text {
+              textFormat: Text.PlainText
               anchors.verticalCenter: parent.verticalCenter
               text: root.rows.length + (root.rows.length === 1 ? " recording" : " recordings") + (root.filterText ? (root.rows.length === 1 ? " matches" : " match") : "")
               color: root.dim
@@ -485,9 +611,35 @@ Item {
 
           PanelSeparator { width: parent.width; foreground: root.foreground }
 
+          // Above the list, full width: it sat under the selected take's
+          // waveform, where a failed import read as that take's problem.
+          Row {
+            visible: !!(root.svc && root.svc.lastError.length > 0)
+            width: parent.width
+            spacing: Style.spacing.sm
+            Text {
+              width: parent.width - dismissError.width - parent.spacing
+              text: root.svc ? root.svc.lastError : ""
+              textFormat: Text.PlainText
+              color: root.urgent
+              wrapMode: Text.Wrap
+              font.family: root.fontFamily
+              font.pixelSize: Style.font.caption
+            }
+            AccessibleActionButton {
+              id: dismissError
+              anchors.verticalCenter: parent.verticalCenter
+              iconText: "󰅖"
+              tooltipText: "Dismiss this message (Esc)"
+              foreground: root.dim
+              fontFamily: root.fontFamily
+              onClicked: if (root.svc) root.svc.clearError()
+            }
+          }
+
           Row {
             width: parent.width
-            height: parent.height - y - Style.space(28)
+            height: parent.height - y - legend.height - parent.spacing
             spacing: Style.spacing.lg
 
             // ---- list ----
@@ -502,6 +654,7 @@ Item {
                 spacing: Style.spacing.xxs
                 boundsBehavior: Flickable.StopAtBounds
                 ScrollBar.vertical: ThinScrollBar { id: listBar; foreground: root.foreground }
+                onMovementStarted: root.userScrolled = true
                 delegate: RecordingRow {
                   required property var modelData
                   required property int index
@@ -515,13 +668,21 @@ Item {
                   current: index === root.selectedIndex
                   currentFill: root.selectedBackground
                   urgent: root.urgent
-                  onClicked: root.selectAbsolute(index)
+                  onClicked: { root.commitFields(); root.selectAbsolute(index) }
                 }
               }
               Text {
                 anchors.centerIn: parent
                 visible: root.rows.length === 0
-                text: root.filterText ? "No matches." : "No recordings yet.\nStart one from the bar icon."
+                // Wraps inside the list column (it ran past the card's edge),
+                // and names the folder: after the recordings folder is changed
+                // an empty list otherwise looks like everything was lost.
+                width: parent.width - Style.spacing.lg * 2
+                wrapMode: Text.Wrap
+                textFormat: Text.PlainText
+                text: root.filterText ? "No matches."
+                  : "No recordings in " + Fmt.tildePath((root.svc && root.svc.config && root.svc.config.recordingsDir) || "~/Recordings", root.svc ? root.svc.home : "")
+                    + " yet.\nStart one from the bar icon, or change the folder in the popup's settings."
                 color: root.dim
                 horizontalAlignment: Text.AlignHCenter
                 font.family: root.fontFamily
@@ -540,39 +701,35 @@ Item {
               TextField {
                 id: titleField
                 enabled: !root.selectedJob   // rename is refused mid-transcribe, same as notes
+                maximumLength: 80            // what the CLI keeps of a title
                 width: parent.width
-                text: root.selected ? (root.selected.title || "") : ""
                 placeholderText: root.selected && root.svc ? root.svc.displayTitle(root.selected) : ""
                 foreground: root.foreground
                 font.family: root.fontFamily
                 font.pixelSize: Style.font.subtitle
                 onAccepted: { if (root.svc && root.selected && text !== (root.selected.title || "")) root.svc.rename(root.selected.id, text); keyCatcher.forceActiveFocus() }
+                // Esc puts the saved title back (see syncFields).
                 Keys.onEscapePressed: { text = root.selected ? (root.selected.title || "") : ""; keyCatcher.forceActiveFocus() }
-              }
-
-              Text {
-                visible: titleField.activeFocus
-                width: parent.width
-                text: "Renaming: Enter saves, Esc cancels"
-                color: Color.accent
-                font.family: root.fontFamily
-                font.pixelSize: Style.font.caption
+                Accessible.name: "Title"
+                Accessible.description: "Ctrl+R"
+                KeyBadge { key: "R"; shown: root.ctrlHints; fontFamily: root.fontFamily; x: parent.width - width - Style.space(6); y: (parent.height - height) / 2 }
               }
 
               Text {
                 width: parent.width
                 text: root.selected && root.svc
                   ? (root.selectedLive ? "Recording now · " + root.svc.elapsedText + " · " + root.svc.sourceLabel(root.selected.source)
-                    : root.svc.fmtDate(root.selected.created) + " · " + root.svc.fmtDuration(root.selected.duration_s) + " · " + root.svc.fmtBytes(root.selected.size_bytes)
-                    + " · " + root.svc.sourceLabel(root.selected.source)
-                    + (root.selected.transcript ? " · transcribed with " + root.selected.transcript.model : "")
-                    + (root.selected.transcript && root.selected.transcript.enhanced ? " · audio cleaned up" : "")
-                    + (root.selected.exported_to ? " · in Obsidian" : "")
+                    // Warnings right after the length: at the end they were the
+                    // first thing the two-line elide cut off.
+                    : root.svc.fmtDate(root.selected.created) + " · " + root.svc.fmtDuration(root.selected.duration_s)
                     + (root.svc.isClipped(root.selected) ? " · ⚠ clipped" : "")
                     + (root.svc.isPartial(root.selected) ? " · partial transcript" : "")
+                    + " · " + root.svc.fmtBytes(root.selected.size_bytes)
+                    + " · " + root.svc.sourceLabel(root.selected.source)
+                    + (root.selected.transcript ? " · transcribed with " + root.svc.modelLabel(root.selected.transcript.model) : "")
+                    + (root.selected.transcript && root.selected.transcript.enhanced ? " · audio cleaned up" : "")
+                    + (root.selected.exported_to ? (root.selected.exported_vault === false ? " · exported" : " · in Obsidian") : "")
                     + (root.selected.trim ? " · trimmed" : "")
-                    + (root.selected.transcript && root.selected.transcript.tidy && root.selected.transcript.tidy.repeats_removed > 0 && !root.showRaw ? " · " + root.selected.transcript.tidy.repeats_removed + (root.selected.transcript.tidy.repeats_removed === 1 ? " repeat removed" : " repeats removed") : "")
-                    + (root.selected.transcript && root.selected.transcript.tidy && root.selected.transcript.tidy.dict_replacements > 0 && !root.showRaw ? " · " + root.selected.transcript.tidy.dict_replacements + (root.selected.transcript.tidy.dict_replacements === 1 ? " correction" : " corrections") : "")
                     + (root.playing ? " · ▶ playing" : ""))
                   : ""
                 textFormat: Text.PlainText
@@ -591,13 +748,19 @@ Item {
                 // (lost-update guard), so don't offer an edit that cannot save.
                 enabled: !root.selectedJob
                 width: parent.width
-                text: root.selected ? (root.selected.notes || "") : ""
-                placeholderText: "Add a note"
-                foreground: root.dim
+                // One line, 500 characters: the CLI keeps no more, so the field
+                // stops there instead of cutting a pasted recap silently.
+                placeholderText: "Add a note (one line, up to 500 characters)"
+                maximumLength: 500
+                // A saved note in full colour: dim, it read as the "Add a note" placeholder.
+                foreground: root.foreground
                 font.family: root.fontFamily
                 font.pixelSize: Style.font.caption
                 onAccepted: { if (root.svc && root.selected && text !== (root.selected.notes || "")) root.svc.setNote(root.selected.id, text); keyCatcher.forceActiveFocus() }
                 Keys.onEscapePressed: { text = root.selected ? (root.selected.notes || "") : ""; keyCatcher.forceActiveFocus() }
+                Accessible.name: "Note"
+                Accessible.description: "Ctrl+N"
+                KeyBadge { key: "N"; shown: root.ctrlHints; fontFamily: root.fontFamily; x: parent.width - width - Style.space(6); y: (parent.height - height) / 2 }
               }
 
               LevelMeter {
@@ -614,6 +777,8 @@ Item {
               Row {
                 width: parent.width
                 spacing: Style.spacing.sm
+                // What the chips and the main button share the row with.
+                readonly property real fixedWidth: iconActions.width + posReadout.width + speedChip.width + spacing * 4
                 ModelPicker {
                   id: picker
                   // The chip row takes what the main button and icon actions
@@ -621,7 +786,7 @@ Item {
                   // so the space is identical in every playback state, and
                   // when the full labels do not fit the chips go compact
                   // (names only, estimates in tooltips) instead of clipping.
-                  readonly property real rowAvail: parent.width - mainButton.width - iconActions.width - posReadout.width - speedChip.width - parent.spacing * 4
+                  readonly property real rowAvail: parent.width - mainButton.width - parent.fixedWidth
                   compact: rowAvail < fullWidth
                   width: Math.min(picker.implicitWidth, rowAvail)
                   anchors.verticalCenter: parent.verticalCenter
@@ -631,16 +796,27 @@ Item {
                   fontFamily: root.fontFamily
                   visible: !root.selectedJob && !root.selectedLive
                   onChanged: function(m) { root.chosenModel = m }
+                  KeyBadge { key: "M"; shown: root.ctrlHints; fontFamily: root.fontFamily }
                 }
                 Button {
                   id: mainButton
                   anchors.verticalCenter: parent.verticalCenter
                   visible: !root.selectedLive
-                  tooltipText: root.selectedJob ? "" : (root.selected && root.selected.has_transcript ? "Shift+Enter" : "Enter")
-                  text: root.selectedJob ? "Cancel"
+                  readonly property string label: root.selectedJob ? "Cancel"
                     : (picker.currentInstalled ? (root.selected && root.selected.has_transcript ? "Re-transcribe" : "Transcribe")
-                                               : (picker.download ? (picker.download.then ? "Downloading… will transcribe" : "Downloading…")
+                                               : (picker.download ? root.downloadingText(picker.download) + (picker.download.then ? " will transcribe" : "")
                                                                   : "Download + transcribe"))
+                  readonly property string keyHint: root.selectedJob ? "" : (root.selected && root.selected.has_transcript ? "Shift+Enter" : "Enter")
+                  // On a row too narrow for the chips and this label together
+                  // (a long take's readout is wide) the label gives way, not
+                  // the chips: they were clipping to "Accurat". Measured from
+                  // the text, not this button's width, so it cannot loop.
+                  TextMetrics { id: mainLabelMetrics; font.family: root.fontFamily; font.pixelSize: mainButton.fontSize; text: mainButton.label }
+                  readonly property bool iconOnly: picker.visible
+                    && parent.width - parent.fixedWidth - (mainIconProbe.implicitWidth + Style.spacing.controlGap + mainLabelMetrics.width) < picker.compactWidth
+                  text: iconOnly ? "" : label
+                  tooltipText: iconOnly ? label + (keyHint ? " (" + keyHint + ")" : "") : keyHint
+                  Accessible.name: label
                   iconText: root.selectedJob ? "󰅖" : (picker.currentInstalled ? "󰗊" : "󰇚")
                   active: !!root.selectedJob
                   iconSpinning: !!root.selectedJob || !!picker.download
@@ -648,9 +824,15 @@ Item {
                   fontFamily: root.fontFamily
                   // Stays clickable during a download: a press re-aims the
                   // chained transcription onto the selected recording (the
-                  // CLI attach path; last press wins).
-                  onClicked: root.selectedJob ? root.cancelSelected() : root.transcribeSelected()
+                  // CLI attach path; last press wins). Cancel waits out cancelGuard.
+                  onClicked: {
+                    if (!root.selectedJob) root.transcribeSelected()
+                    else if (!root.cancelGuard.running) root.cancelSelected()
+                  }
                 }
+                // The main button as the kit sizes it with no label (its
+                // borders follow the theme), for iconOnly above; never shown.
+                Button { id: mainIconProbe; visible: false; iconText: mainButton.iconText; fontFamily: root.fontFamily }
                 Row {
                   id: iconActions
                   anchors.verticalCenter: parent.verticalCenter
@@ -667,11 +849,12 @@ Item {
                 AccessibleActionButton {
                   anchors.verticalCenter: parent.verticalCenter
                   iconText: "󰆐"
-                  tooltipText: "Trim (F3)"
+                  tooltipText: "Trim (Ctrl+T)"
                   enabled: !!(root.selected && root.selected.waveform && !root.selectedLive && !root.selectedJob)
                   opacity: enabled ? 1 : 0.4
                   foreground: root.trimMode ? Color.accent : root.foreground; fontFamily: root.fontFamily
-                  onClicked: root.trimMode ? (root.trimMode = false) : root.startTrim()
+                  onClicked: root.toggleTrim()
+                  KeyBadge { key: "T"; shown: root.ctrlHints; fontFamily: root.fontFamily }
                 }
                 AccessibleActionButton {
                   anchors.verticalCenter: parent.verticalCenter
@@ -679,9 +862,10 @@ Item {
                   enabled: !!(root.selected && root.selected.has_orig)
                   opacity: enabled ? 1 : 0
                   iconText: "󰕌"
-                  tooltipText: "Restore the untrimmed original"
+                  tooltipText: "Restore the untrimmed original (Ctrl+Shift+T)"
                   foreground: root.foreground; fontFamily: root.fontFamily
-                  onClicked: if (root.svc && root.selected) { root.stopPlayback(); root.svc.restoreTrim(root.selected.id) }
+                  onClicked: root.restoreOriginal()
+                  KeyBadge { key: "⇧T"; shown: root.ctrlHints; fontFamily: root.fontFamily }
                 }
                 AccessibleActionButton {
                   anchors.verticalCenter: parent.verticalCenter
@@ -691,17 +875,19 @@ Item {
                   enabled: !!picker.download
                   opacity: enabled ? 1 : 0
                   iconText: "󰜺"
-                  tooltipText: "Cancel this model download"
+                  tooltipText: "Cancel this model download (Ctrl+X)"
                   hoverColor: root.urgent
                   foreground: root.foreground; fontFamily: root.fontFamily
                   onClicked: if (root.svc) root.svc.cancelDownload(picker.value)
+                  KeyBadge { key: "X"; shown: root.ctrlHints; fontFamily: root.fontFamily }
                 }
                 AccessibleActionButton {
                   anchors.verticalCenter: parent.verticalCenter
                   iconText: "󰉋"
-                  tooltipText: "Open folder"
+                  tooltipText: "Open folder (Ctrl+E)"
                   foreground: root.foreground; fontFamily: root.fontFamily
-                  onClicked: if (root.svc && root.selected) root.svc.openFolder(root.selected.id)
+                  onClicked: root.openOutside("folder")
+                  KeyBadge { key: "E"; shown: root.ctrlHints; fontFamily: root.fontFamily }
                 }
                 AccessibleActionButton {
                   anchors.verticalCenter: parent.verticalCenter
@@ -758,6 +944,8 @@ Item {
                   width: Math.ceil(speedMetrics.width) + Style.spacing.sm * 2 + 2
                   TextMetrics { id: speedMetrics; font.family: root.fontFamily; font.pixelSize: Style.font.caption; text: "1.25x" }
                   onClicked: root.cycleSpeed(1)
+                  Accessible.description: "Ctrl+S"
+                  KeyBadge { key: "S"; shown: root.ctrlHints; fontFamily: root.fontFamily }
                 }
               }
 
@@ -781,6 +969,7 @@ Item {
                 width: parent.width
                 spacing: Style.spacing.sm
                 Text {
+                  textFormat: Text.PlainText
                   anchors.verticalCenter: parent.verticalCenter
                   width: parent.width - previewButton.width - trimButton.width - cancelButton.width - parent.spacing * 3
                   text: "Keep " + wave.fmt(root.trimFrom) + " to " + wave.fmt(root.trimTo)
@@ -817,10 +1006,11 @@ Item {
               }
 
               Text {
+                textFormat: Text.PlainText
                 visible: !!root.selectedJob
                 width: parent.width
                 text: root.selectedJob && root.svc
-                  ? "Transcribing with " + root.selectedJob.model + " · " + root.svc.jobProgressText(root.selectedJob) + root.svc.fmtHms(root.svc.jobElapsed(root.selectedJob))
+                  ? "Transcribing with " + root.svc.modelLabel(root.selectedJob.model) + " · " + root.svc.jobProgressText(root.selectedJob) + root.svc.fmtHms(root.svc.jobElapsed(root.selectedJob))
                     + " elapsed · ≈ " + root.svc.fmtDuration(root.svc.estimateSeconds(root.selected.duration_s, root.selectedJob.model)) + " expected"
                   : ""
                 color: Color.accent
@@ -828,38 +1018,50 @@ Item {
                 font.pixelSize: Style.font.caption
               }
 
-              Row {
-                visible: !!(root.svc && root.svc.lastError.length > 0)
+              // Said beside the button: a failed download used to be only a
+              // notification, and the button quietly went back to Download.
+              Text {
+                textFormat: Text.PlainText
+                visible: !root.selectedJob && !root.selectedLive && !!root.svc && !!root.svc.downloadFailed
+                  && !!picker.current && root.svc.downloadFailed.model === picker.current.name
+                  && !picker.currentInstalled && !picker.download
                 width: parent.width
-                spacing: Style.spacing.sm
-                Text {
-                  width: parent.width - dismissError.width - parent.spacing
-                  text: root.svc ? root.svc.lastError : ""
-                  textFormat: Text.PlainText
-                  color: root.urgent
-                  wrapMode: Text.Wrap
-                  font.family: root.fontFamily
-                  font.pixelSize: Style.font.caption
-                }
-                AccessibleActionButton {
-                  id: dismissError
-                  anchors.verticalCenter: parent.verticalCenter
-                  iconText: "󰅖"
-                  tooltipText: "Dismiss this message"
-                  foreground: root.dim
-                  fontFamily: root.fontFamily
-                  onClicked: if (root.svc) root.svc.clearError()
-                }
+                text: visible ? "The " + picker.current.label + " download failed. Check your connection and press the button to try again." : ""
+                color: root.urgent
+                wrapMode: Text.Wrap
+                font.family: root.fontFamily
+                font.pixelSize: Style.font.caption
+              }
+              // Fast and Balanced are whisper's .en models: any other language
+              // (or auto) gets an English guess with nothing saying why.
+              Text {
+                textFormat: Text.PlainText
+                id: languageHint
+                readonly property string lang: root.svc && root.svc.config && root.svc.config.language ? root.svc.config.language : "en"
+                visible: !root.selectedJob && !root.selectedLive && !!root.selected && State.languageMismatch(root.modelForRun, languageHint.lang)
+                width: parent.width
+                text: languageHint.lang === "auto"
+                  ? "Fast and Balanced only understand English and cannot detect a language. Pick Accurate for anything else."
+                  : "Fast and Balanced only understand English, and the language setting is \"" + languageHint.lang + "\". Pick Accurate for other languages."
+                color: Color.accent
+                wrapMode: Text.Wrap
+                font.family: root.fontFamily
+                font.pixelSize: Style.font.caption
               }
 
               PanelSeparator { width: parent.width; foreground: root.foreground }
 
               Text {
+                textFormat: Text.PlainText
                 visible: !root.selectedJob && root.svc && root.selected && (root.svc.isPartial(root.selected) || root.svc.isStale(root.selected))
                 width: parent.width
                 text: root.svc && root.selected && root.svc.isPartial(root.selected)
                   ? "Partial: stopped after " + root.selected.transcript.chunks_done + "/" + root.selected.transcript.chunks + " pieces. Re-transcribe to finish."
-                  : "The audio was trimmed after this transcript was made. Re-transcribe to match."
+                  : (root.selected && root.selected.transcript && root.selected.transcript.stale_reason === "resume"
+                     ? "More audio was added (a resume) after this transcript was made. Re-transcribe to match."
+                     : root.selected && root.selected.transcript && root.selected.transcript.stale_reason === "restore"
+                     ? "The untrimmed original was restored after this transcript was made. Re-transcribe to match."
+                     : "The audio was trimmed after this transcript was made. Re-transcribe to match.")
                 color: Color.accent
                 wrapMode: Text.Wrap
                 font.family: root.fontFamily
@@ -871,6 +1073,7 @@ Item {
                 spacing: Style.spacing.xxs
                 visible: !root.selectedJob && root.svc && root.selected && root.svc.isLoopy(root.selected)
                 Text {
+                  textFormat: Text.PlainText
                   width: parent.width
                   text: "Whisper looped on this take (longest repeat "
                     + (root.selected && root.selected.transcript && root.selected.transcript.tidy && root.selected.transcript.tidy.longest_run_words != null
@@ -908,14 +1111,17 @@ Item {
                   iconText: "󰈙"
                   tooltipText: "Open in editor (Enter)"
                   foreground: root.foreground; fontFamily: root.fontFamily
-                  onClicked: if (root.svc && root.selected) root.svc.openTranscript(root.selected.id)
+                  onClicked: root.openOutside("transcript")
                 }
                 Button {
                   visible: root.hasTidy
                   text: "Tidy"
                   active: !root.showRaw && !root.showPrev
                   fontSize: Style.font.caption; horizontalPadding: Style.spacing.sm; verticalPadding: Style.spacing.xxs
-                  tooltipText: "Paragraphs, repeated passages removed (F4)"
+                  // The counts live here: in the meta line they made it wrap on
+                  // long takes and pushed everything below down a line.
+                  tooltipText: "Paragraphs, repeated passages removed (Ctrl+D)" + root.tidyCounts
+                  Accessible.description: "Ctrl+D"
                   foreground: root.foreground; fontFamily: root.fontFamily
                   onClicked: { root.showRaw = false; root.showPrev = false }
                 }
@@ -924,9 +1130,11 @@ Item {
                   text: "Raw"
                   active: root.showRaw && !root.showPrev
                   fontSize: Style.font.caption; horizontalPadding: Style.spacing.sm; verticalPadding: Style.spacing.xxs
-                  tooltipText: "Exactly as whisper wrote it (F4)"
+                  tooltipText: "Exactly as whisper wrote it (Ctrl+D)"
+                  Accessible.description: "Ctrl+D"
                   foreground: root.foreground; fontFamily: root.fontFamily
                   onClicked: { root.showRaw = true; root.showPrev = false }
+                  KeyBadge { key: "D"; shown: root.ctrlHints; fontFamily: root.fontFamily }
                 }
                 Button {
                   // Toggles, so the old text stays reachable even when there is
@@ -935,43 +1143,34 @@ Item {
                   text: "Previous"
                   active: root.showPrev
                   fontSize: Style.font.caption; horizontalPadding: Style.spacing.sm; verticalPadding: Style.spacing.xxs
-                  tooltipText: "The transcript the last re-transcribe replaced"
+                  tooltipText: "The transcript the last re-transcribe replaced (Ctrl+P)"
+                  Accessible.description: "Ctrl+P"
                   foreground: root.foreground; fontFamily: root.fontFamily
                   onClicked: root.showPrev = !root.showPrev
+                  KeyBadge { key: "P"; shown: root.ctrlHints; fontFamily: root.fontFamily }
                 }
+                // The confirmation is a tick in the button's place: a "Copied" or
+                // "Sent" label beside it pushed the next button sideways.
                 AccessibleActionButton {
-                  iconText: "󰆏"
-                  tooltipText: "Copy transcript (Ctrl+C)"
-                  foreground: root.foreground; fontFamily: root.fontFamily
+                  iconText: copiedFlash.running ? "󰄬" : "󰆏"
+                  tooltipText: copiedFlash.running ? "Copied" : "Copy transcript (Ctrl+C)"
+                  foreground: copiedFlash.running ? Color.accent : root.foreground; fontFamily: root.fontFamily
                   onClicked: if (root.svc && root.selected) root.svc.copyTranscript(root.selected.id, root.showRaw, function(code) { if (code === 0) copiedFlash.restart() })
-                }
-                Text {
-                  anchors.verticalCenter: parent.verticalCenter
-                  visible: copiedFlash.running
-                  text: "Copied"
-                  color: Color.accent
-                  font.family: root.fontFamily
-                  font.pixelSize: Style.font.caption
+                  KeyBadge { key: "C"; shown: root.ctrlHints; fontFamily: root.fontFamily }
                 }
                 Timer { id: copiedFlash; interval: 1500 }
                 AccessibleActionButton {
-                  iconText: "󰈝"
-                  tooltipText: "Send to Obsidian (Ctrl+O)"
-                  foreground: root.foreground; fontFamily: root.fontFamily
-                  onClicked: if (root.svc && root.selected) root.svc.exportToObsidian(root.selected.id, root.showRaw, function(code) { if (code === 0) sentFlash.restart() })
-                }
-                Text {
-                  anchors.verticalCenter: parent.verticalCenter
-                  visible: sentFlash.running
-                  text: "Sent"
-                  color: Color.accent
-                  font.family: root.fontFamily
-                  font.pixelSize: Style.font.caption
+                  iconText: sentFlash.running ? "󰄬" : "󰈝"
+                  tooltipText: sentFlash.running ? "Sent to Obsidian" : "Send to Obsidian (Ctrl+O)"
+                  foreground: sentFlash.running ? Color.accent : root.foreground; fontFamily: root.fontFamily
+                  onClicked: root.exportSelected()
+                  KeyBadge { key: "O"; shown: root.ctrlHints; fontFamily: root.fontFamily }
                 }
                 Timer { id: sentFlash; interval: 1500 }
               }
 
               Text {
+                textFormat: Text.PlainText
                 visible: root.showPrev && root.transcriptText.length > 0
                 width: parent.width
                 text: "Previous transcript, from before the last re-transcribe. Copy and export still use the current one."
@@ -990,6 +1189,7 @@ Item {
                 fontFamily: root.fontFamily
               }
               Text {
+                textFormat: Text.PlainText
                 // The progress line above already says "Transcribing…"; say nothing twice.
                 visible: root.transcriptText.length === 0 && !root.selectedJob
                 width: parent.width
@@ -1003,6 +1203,7 @@ Item {
             }
 
             Text {
+              textFormat: Text.PlainText
               visible: root.selected === null && root.rows.length > 0
               text: "Select a recording."
               color: root.dim
@@ -1012,14 +1213,30 @@ Item {
           }
 
           // ---- footer: key hints ----
-          Text {
+          // Measured item by item, so a narrow card drops the least useful keys
+          // instead of cutting the line off; State.fitHints picks which. Each
+          // item's spaces are non-breaking, so a wrap can only fall between items.
+          Item {
+            id: legend
             width: parent.width
-            text: root.hintsText
-            color: root.dim
-            font.family: root.fontFamily
-            font.pixelSize: Style.font.caption
-            horizontalAlignment: Text.AlignHCenter
-            elide: Text.ElideRight
+            height: legendText.implicitHeight
+            readonly property string sep: "   "
+            readonly property var labels: root.hintItems.map(function(h) { return h.text.replace(/ /g, " ") })
+            readonly property var fit: State.fitHints(root.hintItems.map(function(h, i) {
+              return { width: legendFont.advanceWidth(legend.labels[i]), priority: h.priority, keep: !!h.keep }
+            }), legendFont.advanceWidth(sep), width)
+            FontMetrics { id: legendFont; font.family: root.fontFamily; font.pixelSize: Style.font.caption }
+            Text {
+              id: legendText
+              width: parent.width
+              text: legend.fit.shown.map(function(i) { return legend.labels[i] }).join(legend.sep)
+              textFormat: Text.PlainText
+              color: root.dim
+              font.family: root.fontFamily
+              font.pixelSize: Style.font.caption
+              horizontalAlignment: Text.AlignHCenter
+              wrapMode: Text.Wrap
+            }
           }
         }
       }

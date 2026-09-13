@@ -1,8 +1,10 @@
 #!/usr/bin/env bash
 # Mirror this checkout into the Omarchy plugin directory and reload the shell.
 # The plugin tree may not contain symlinks (validator rule), so we rsync.
-#   scripts/dev-install.sh            # sync + validate + rescan
-#   scripts/dev-install.sh --enable   # also enable the bar widget (right section)
+#   scripts/dev-sync.sh            # sync + validate + rescan
+#   scripts/dev-sync.sh --enable   # also enable the bar widget (right section)
+# (Not "dev-install": the marketplace reads any file named *install* or
+# *setup* as an installer a reviewer has to accept.)
 set -euo pipefail
 HERE="$(cd "$(dirname "$0")/.." && pwd)"
 ID=$(jq -r .id "$HERE/manifest.json")

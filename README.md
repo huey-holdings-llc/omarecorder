@@ -7,11 +7,25 @@ recording, and a note in Obsidian when you want one. Nothing leaves your machine
 
 ![OmaRecorder](preview.png)
 
+## Quick start
+
+1. Install it: `omarchy plugin add https://github.com/huey-holdings-llc/omarecorder --enable`
+2. Click the OmaRecorder icon in the bar. If anything is missing, a "Setup
+   needed" card says what, and downloads a transcription model with one click.
+3. Press `r` (or Start recording) to record, and `r` again to stop. For a
+   call, press `c` first until the source is Mic + system audio, and wear
+   headphones; [Which source to pick](#which-source-to-pick) says why.
+4. Press `l` for the Library, pick the recording, and press `Enter` to
+   transcribe it.
+
+The rest of this README covers each step in detail: [Install](#install),
+[Use](#use), and [Privacy and security](#privacy-and-security).
+
 ## About this project
 
 OmaRecorder was built with AI assistance (Claude Code) by a hobbyist, not a
 professional developer. Every effort was made to follow good practice anyway:
-the code is reviewed by a second model on each pull request, every CLI
+the code is reviewed by a second model on larger pull requests, every CLI
 behaviour has a test, the security posture was audited and fixed before release,
 and every claim in this README was checked against the code. Please read the
 source with that in mind, and if you know better, open an issue or a pull
@@ -33,7 +47,7 @@ work. OmaRecorder exists because nothing like it fit an Omarchy desktop.
 
 ## Privacy and security
 
-Local first is the rule, not a feature. Everything in 1.0 runs on your machine:
+Local first is the rule, not a feature. Everything runs on your machine:
 
 * Audio and transcripts stay on disk. Transcription runs on your CPU or GPU via
   voxtype. The only network activity is voxtype's model download, and only when
@@ -48,9 +62,14 @@ Local first is the rule, not a feature. Everything in 1.0 runs on your machine:
   inside a shell string, a `jq` filter or a unit body. whisper's stderr (which
   can echo decoded text) goes to a per-job file, not the shared log.
 * It does not edit your Hyprland, Omarchy or Obsidian configuration (Obsidian's
-  `obsidian.json` and `app.json` are only read), does not delete anything
-  outside a recording folder, never `rm -rf`s a recording without
-  `--permanent`, runs no daemon, polls nothing, and uploads nothing.
+  `obsidian.json` and `app.json` are only read), runs no daemon, runs nothing
+  while idle (a 30-second liveness check ticks only while something is
+  recording or working),
+  and uploads nothing.
+* Outside a recording folder it deletes only its own state and runtime files,
+  and the source file of an `import --move` once the recording has it. A whole
+  recording folder goes with `rm -rf` in two cases only: `delete --permanent`,
+  and the folder a failed start or import has just made.
 
 **Local only, by design.** OmaRecorder does everything with tools that ship
 with Omarchy and sends nothing anywhere. That includes the transcript
@@ -63,10 +82,6 @@ The author does use AI to polish transcripts further, but does so inside the
 Obsidian vault after Send to Obsidian, with the tools of his choosing. That
 step is a personal workflow outside this plugin, and it stays outside so that
 the plugin's privacy statement remains simple and true.
-
-Should there be real demand for AI-assisted clean-up, the author is open to
-revisiting this decision, most likely as a separate, clearly labelled edition
-rather than a change to this one. Open an issue if that matters to you.
 
 ## Prior art and thanks
 
@@ -101,7 +116,7 @@ rather than a change to this one. Open an issue if that matters to you.
   transcript fills in piece by piece, and cancelling keeps what is done.
 * **CLI**: everything the UI does is `omarecorder <command>`, so keybindings,
   the Omarchy menu and your own scripts get the same behaviour.
-* **Local-first, no bloat**: no daemons, no polling. Recording is `pw-record`,
+* **Local-first, no bloat**: no daemons, nothing running while idle. Recording is `pw-record`,
   transcription is `voxtype transcribe` in a detached `systemd-run --user` unit,
   and the shell only watches a few small files.
 
@@ -141,22 +156,28 @@ omarchy plugin add https://github.com/huey-holdings-llc/omarecorder --enable
 Pick a bar section when asked, or later with
 `omarchy bar move io.github.huey-holdings-llc.omarecorder --section right`.
 
-Optional, and only needed for keybindings, the menu and scripts. The widget and
-the Library call the CLI by its own path and work without this:
+Needed for the `omarecorder` commands in this README, and for keybindings, the
+menu and scripts. The widget and the Library call the CLI by its own path and
+work without it:
 
 ```bash
 ln -s ~/.config/omarchy/plugins/io.github.huey-holdings-llc.omarecorder/bin/omarecorder ~/.local/bin/omarecorder
 ```
 
 First run: open the popup. If a requirement is missing (no whisper model yet, a
-tool not installed, no microphone), a "Setup needed" card lists each one with
-the command that fixes it, and downloads the default model with one click.
+tool not installed, no microphone while the source records one), a "Setup
+needed" card lists each one with the package that provides it (and the one
+command that adds voxtype), and downloads the default model with one click.
 
 ## Update
 
 ```bash
 omarchy plugin update io.github.huey-holdings-llc.omarecorder
+omarchy-restart-shell
 ```
+
+Restart the shell after an update: until it restarts it keeps running the old
+version's QML from its cache.
 
 ## Remove
 
@@ -166,7 +187,14 @@ rm -f ~/.local/bin/omarecorder   # if you made the symlink
 ```
 
 Your recordings in `~/Recordings` and your config in `~/.config/omarecorder`
-are left untouched.
+are left untouched, and so are:
+
+* the log, measured model speeds and any saved engine errors, in
+  `~/.local/state/omarecorder`;
+* the whisper models, in `~/.local/share/voxtype/models`. voxtype's own
+  dictation uses the same folder, so keep any model it still needs.
+
+Delete whichever of these you no longer want.
 
 ## Use
 
@@ -175,9 +203,13 @@ are left untouched.
   a running `HH:MM:SS`, replaced by CLIP while the input is on the rails. An
   hourglass means a transcription is running.
 * **Popup keys**: `r` record/stop, `u` resume the last take (when offered),
-  `l` library, `i` import, `s` settings, `d` add a dictionary entry
-  (the Recent list folds away while settings are open), `Up`/`Down` and `Enter`
-  on recent rows, `Esc`.
+  `c` cycle the source (`C` goes back), `l` library, `i` import, `s` settings,
+  `d` add a dictionary entry, `x` dismiss an error message, `Up`/`Down` (or
+  `j`/`k`) and `Enter` on recent rows, `Esc`. With settings
+  open the Recent list folds away and the same keys walk the settings: an
+  accent bar marks the control under the cursor, and `Enter` or `Space` opens
+  a dropdown, flips a toggle, presses a button or starts editing the folder
+  field (`Enter` saves, `Esc` cancels, and the keys come back either way).
 * **Resume after a break**: stopping a recording arms a resume offer. While
   it stands, a "Resume last recording · stopped 12m ago" button sits under
   Record in the popup (the take's title is in its tooltip), and `omarecorder
@@ -194,27 +226,47 @@ are left untouched.
   recorder dies mid-resume, the original take is untouched and the segment is
   joined by the normal crash recovery on the next command. This is
   deliberately not general editing; there is no appending to older takes.
-* **Library keys**: type to search titles and transcript text (transcript
-  matches join the list a beat later). `Up`/`Down`, `PgUp`/`PgDn`, `Home`/`End`
-  select. `Enter` opens the transcript, or transcribes if there is none
-  (`Shift+Enter` transcribes again). `Space` plays or pauses. The speed chip
-next to the time readout (or `Ctrl+S`; `Ctrl+Shift+S` backwards) cycles the
-playback speed (1x, 1.25x, 1.5x, 2x) for the rest of the session.
-`Left`/`Right`
-  seek 5 seconds when the search box is empty. `Ctrl+M` cycles the model
-  preset (`Ctrl+Shift+M` backwards). `F2` renames, `F3` trims (then
-  `[` and `]` mark start and end at the playhead), `Del` moves to the trash
-  (confirmed, defaults to Cancel). `Esc` leaves trim mode, then clears the
-  search, then closes.
+* **Library keys**: type to search titles, notes and transcript text (transcript
+  matches join the list a beat later; `Ctrl+U` clears the search, as in every
+  Omarchy panel). `Up`/`Down`, `PgUp`/`PgDn`, `Home`/`End` select. `Enter`
+  opens the transcript, or transcribes if there is none (`Shift+Enter`
+  transcribes again). `Space` plays or pauses, and `Left`/`Right` seek 5
+  seconds when the search box is empty. `Del` moves to the trash (confirmed,
+  defaults to Cancel). `Esc` dismisses an error message, then leaves trim
+  mode, then clears the search, then closes.
+* **Hold Ctrl for the rest**: hold `Ctrl` for a moment and every shortcut
+  shows as a small badge on its control, so the footer only lists the keys
+  above. The F-row is never needed; the F-keys that exist still work.
+
+  | Key | Does | Also |
+  |---|---|---|
+  | `Ctrl+R` | rename | `F2` |
+  | `Ctrl+N` | edit the note | |
+  | `Ctrl+T` | trim mode (`[` and `]` mark start and end at the playhead) | `F3` |
+  | `Ctrl+Shift+T` | restore the untrimmed original | |
+  | `Ctrl+D` | switch between the tidy and raw transcript | `F4` |
+  | `Ctrl+P` | show the previous transcript, after a re-transcribe | |
+  | `Ctrl+M` | next model preset (`Ctrl+Shift+M` goes back) | |
+  | `Ctrl+S` | playback speed, 1x to 2x, kept for the session (`Ctrl+Shift+S` back) | speed chip |
+  | `Ctrl+C` | copy the transcript | |
+  | `Ctrl+O` | send the transcript to Obsidian | |
+  | `Ctrl+E` | open the take's folder | |
+  | `Ctrl+X` | cancel a model download | |
+
+  On a narrow screen the footer drops its least useful keys first, so it never
+  cuts off mid-line.
 * **Notes**: every recording has a free-text note, shown as an "Add a note" box
   under the transcript in the Library and set from the CLI with `omarecorder
   note <id> <text>` (empty text clears it). It is stored in the take's
-  `meta.json` and travels into the Obsidian note on export. The box is
-  click-to-edit; there is no key for it yet.
-* **When something fails**: the popup and the Library show the error in red
-  above the content, with a × to dismiss it. A read that fails (the recordings
-  list, the model catalogue) names itself there rather than leaving a surface
-  looking merely empty.
+  `meta.json` and travels into the Obsidian note on export. `Ctrl+N` puts the
+  cursor in the box (`Enter` saves, `Esc` cancels).
+* **When something fails**: the error shows in red, above the content in the
+  popup and above the list in the Library, and names what failed ("Import
+  failed: file not found: ..."). A × dismisses it (`x` in the popup, `Esc` in
+  the Library); otherwise it stays until that same action succeeds. A read
+  that fails (the recordings list, the model catalogue) names itself there
+  rather than leaving a surface looking merely empty, and a model download that
+  fails is also said beside the Library's button until the next try.
 * **Notifications**: "Recording saved" is clickable and transcribes with your
   default model. "Transcript ready" is clickable and opens the text. A take
   whose recorder died (power loss, shell killed) is repaired and reported as
@@ -229,7 +281,9 @@ playback speed (1x, 1.25x, 1.5x, 2x) for the rest of the session.
   microphones commonly ship far too hot. 30 to 40 percent is a normal starting
   point, and whisper copes with quiet audio much better than with distorted audio.
 * **Transcribing**: Fast, Balanced or Accurate. A preset you do not have yet
-  shows "N MB download" and fetches in the background with a progress bar. Takes
+  shows its size on its chip (`1.6 GB ↓`) and fetches in the background, with
+  the percentage on the Library's button. Fast and Balanced understand English
+  only (see Models). Takes
   over 30 minutes (`OMARECORDER_CHUNK_S`, default 1800) are cut into equal
   pieces with the seams snapped to the nearest silence, then transcribed one
   after another inside one `systemd-run --user` unit. The Library shows "2/4"
@@ -262,25 +316,28 @@ playback speed (1x, 1.25x, 1.5x, 2x) for the rest of the session.
   seek, `Space` to play or pause. Playback runs in mpv, driven over its IPC
   socket and started only while something plays; `omarecorder play` uses the
   same player from the CLI. The
-  scissors button (or `F3`) enters trim mode: two drag handles with start and
+  scissors button (or `Ctrl+T`, or `F3`) enters trim mode: two drag handles with start and
   end badges, or play and press `[` and `]` to mark the range at the playhead.
   Preview plays the range, Trim asks once ("Keep 00:12 to 24:36 and cut the
   rest?") and cuts losslessly (`-c copy`). The first original is kept as
-  `audio.orig.wav` and a restore button appears while it exists. The meta line
+  `audio.orig.wav` and a restore button (`Ctrl+Shift+T`) appears while it exists. The meta line
   says "trimmed", an existing transcript is flagged stale until you transcribe
   again, and the raw `mic.wav` and `system.wav` of a "both" take are never
   touched. Recordings made before 1.0 get their waveform drawn the first time
   the Library lists them.
 * **Send to Obsidian**: the button above the transcript writes a Markdown note
-  (YAML frontmatter with title, date, duration, source, model, recording id and
-  `tags: [omarecorder]`) into the folder where Obsidian itself files new notes
-  (it reads the vault's `.obsidian/app.json`), then opens it via `obsidian://`.
-  The open vault is used unless Settings picks one. With no Obsidian at all the
-  note lands next to the recording. The Library meta line says "in Obsidian"
-  afterwards.
+  (YAML frontmatter with title, date, duration, source, model, the recording's
+  note, its id and `tags: [omarecorder]`) into the folder where Obsidian itself
+  files new notes (it reads the vault's `.obsidian/app.json`), then opens it via
+  `obsidian://`. The open vault is used unless Settings picks one. With no
+  Obsidian at all the note lands next to the recording. The Library meta line
+  says "in Obsidian" afterwards, or "exported" when no vault was involved.
+  Sending again writes a new note (`Title (2).md`) and never touches one you
+  may have edited since.
 * **Import**: press `i` in the popup and type a path (`~/Downloads/meeting.m4a`),
   or run `omarecorder import <file>`. Anything ffmpeg reads is converted to
-  16 kHz mono, and the id comes from the file's modification time. There is
+  16 kHz mono, and the id comes from the file's modification time. The popup
+  shows "Importing meeting.m4a…" until it is done. There is
   deliberately no graphical file picker: a QtQuick FileDialog crashes Quickshell
   on Omarchy 4.
 
@@ -295,7 +352,8 @@ while talking:
 | System audio | A clean digital copy of what the computer plays. No room, no mic, none of you. | Well. |
 | Mic + system audio | Both tracks kept (`mic.wav`, `system.wav`) and mixed into `audio.wav`. On speakers the mix carries the video twice, once clean and once through the mic. | Your voice was fine; the parts where the video was playing were not. |
 
-So: for a call or a video, **System audio**. For your own voice, **Microphone**.
+So: for a webinar or a video you only listen to, **System audio** (it records
+none of you). For your own voice, **Microphone**.
 For a conversation where you talk and the computer plays the other side,
 **Mic + system audio**, and wear headphones: then the mic only hears you, the
 monitor only carries them, and the mix is clean. Headphones are the single
@@ -310,7 +368,7 @@ stay in the folder, so a bad mix can be redone by hand with ffmpeg.
     ├── audio.wav                       16 kHz mono s16 (whisper-native, about 115 MB per hour)
     ├── audio.orig.wav                  only after a trim (unless --replace)
     ├── waveform.png                    2400x128 strip, redrawn on stop, import, trim and analyze
-    ├── meta.json                       title, note, source, duration, levels, transcript, trim, resume_seams, exported_to
+    ├── meta.json                       title, notes, source, duration, levels, transcript, trim, resume_seams, exported_to
     ├── transcript.md                   header line + plain text, exactly as whisper wrote it
     ├── transcript.tidy.md              paragraphs, repeated passages removed (what the Library shows)
     ├── transcript.prev.md              the previous transcript, kept when you transcribe again
@@ -328,7 +386,7 @@ Obsidian strip it.
 | Speed measurements | `~/.local/state/omarecorder/bench.json` (per model, from takes of 60 s or more) |
 | Log | `~/.local/state/omarecorder/omarecorder.log`, rotated to `.log.1` at 1 MB |
 | whisper stderr of a failed job | `~/.local/state/omarecorder/tx-<id>.err` (kept only on failure) |
-| Runtime state | `$XDG_RUNTIME_DIR/omarecorder/`: `state.json`, `level`, `state.lock`, temporary chunks. Never `/tmp` |
+| Runtime state | `$XDG_RUNTIME_DIR/omarecorder/`: `state.json`, `state.lock`, `level`, `play.pid`, `mpv.sock`, `tx-<id>.*` while a transcription runs, `open/<id>` links for the editor. Never `/tmp` |
 
 Config keys (`omarecorder config get --json`): `recordingsDir` (`~/Recordings`),
 `defaultSource` (`mic`), `defaultModel` (`base.en`), `language` (`en`),
@@ -361,15 +419,20 @@ run `voxtype setup --download` in a `systemd-run --user` unit. Estimates start
 from a default speed and are replaced by what your machine measured the first
 time each model transcribes a take of 60 seconds or more.
 
+Fast and Balanced are English-only models (the `.en` in their names). For any
+other language, or with `language` set to `auto`, use Accurate. The Library
+says so when the language setting and the chosen preset disagree, and
+`transcribe` prints a warning.
+
 ### CLI
 
 ```
 omarecorder record start [--source mic|system|both] [--title T]   start a recording
 omarecorder record resume                                          continue the last stopped recording
-omarecorder record stop [--force] | toggle | status [--json]        control / inspect
+omarecorder record stop [--guard] | toggle | status [--json]        control / inspect
 omarecorder import <file> [--move] [--title T]                     bring an existing audio file in
 omarecorder list [--json] | show <id> [--json] | analyze <id>      browse / measure levels
-omarecorder search <text>                                          ids whose transcript contains the text
+omarecorder search <text>                                          ids whose title, note or transcript contains the text
 omarecorder rename <id> <title>                                    retitle (empty title clears it)
 omarecorder delete <id> [--yes] [--permanent]                      remove (trash unless --permanent)
 omarecorder note <id> <text>                                       set a note on a recording (empty text clears it)
@@ -382,19 +445,24 @@ omarecorder export <id> [--vault P | --dir P] [--no-open] [--raw]   transcript t
 omarecorder vaults [--json]                                        Obsidian vaults on this machine (* = open)
 omarecorder transcribe <id> [--model M] [--language L] [--threads N] [--from s --to s]
                             [--chunk-s N] [--enhance|--no-enhance] [--download]
-omarecorder cancel <id> | estimate <id> --model M
+omarecorder cancel <id> | estimate <id> [--model M]
 omarecorder models [--json] | model download <name> | model cancel <name>
-omarecorder play <id> [--from s] | stop-play | open <id> | folder <id>
+omarecorder play <id> [--from s] | stop-play | open <id> [--raw] | folder <id>
 omarecorder config get [key|--json] | config set <key> <value>
 omarecorder setup check [--json] | library | status [--json] | version
 ```
 
 `delete` moves the folder to the trash with `gio` and refuses if it cannot, and
-says `trashed <id>` when it did; `--permanent` is the only path to `rm -rf`, and
-says `deleted <id>`. Without a terminal it needs `--yes`. `setup check --json`
+says `trashed <id>` when it did; `--permanent` is the only command that
+`rm -rf`s a recording, and says `deleted <id>` (the only other `rm -rf` removes
+the folder a failed start or import has just made). Without a terminal it needs `--yes`. `setup check --json`
 returns `tools[]` and `missing[]` with the package for each tool, and exits
 non-zero until everything needed is there. `version` is read from
 `manifest.json`.
+
+`transcribe` returns as soon as the job is queued. A script that needs the
+text waits for it: poll `omarecorder status --json` until `.jobs` no longer
+lists the id, then read it with `omarecorder copy <id> --print`.
 
 Every flag that takes a value has to be given one, and every command that
 accepts `--json` rejects anything else in that position rather than quietly
@@ -421,8 +489,9 @@ The plugin never edits these files for you.
 
 One guard on long takes: once a recording passes an hour, the toggle (the
 keybinding, the bar right-click, `r`) asks before stopping; stop again within
-10 seconds to confirm. The popup's Stop button still stops in one click, and
-`record stop --force` does the same from a script.
+10 seconds to confirm, and the popup says so while it waits. The popup's Stop
+button still stops in one click, and so does `omarecorder record stop` from a
+script; `record stop --guard` asks first, the way the toggle does.
 `OMARECORDER_STOP_CONFIRM_S` moves the threshold (0 turns the guard off).
 
 ## FAQ
@@ -508,6 +577,11 @@ there, so those stay as they are.
   this case.
 * **Something missing?** `omarecorder setup check` lists every tool with its
   package and whether a microphone and the recordings folder are usable.
+* **The popup says "Service unavailable"**: since Omarchy 4.0.3 only the
+  built-in bar hands a plugin its own service. A third-party replacement bar
+  gets a restricted handle with no services, so the bar widget cannot reach the
+  recorder there. Use the built-in bar, or record with `omarecorder record
+  toggle` on a keybinding (see Keybinding and menu above).
 * **A transcription looks stuck**: `systemctl --user status omarecorder-tx-<id>`
   (downloads: `omarecorder-dl-<model>`, dots replaced by dashes). `omarecorder
   status` drops finished units from the state on its own; `omarecorder cancel
@@ -519,12 +593,14 @@ there, so those stay as they are.
 
 ## Development
 
+Put a copy of this repository (or your fork of it) in `~/projects/omarecorder`,
+then:
+
 ```bash
-git clone https://github.com/huey-holdings-llc/omarecorder ~/projects/omarecorder
 cd ~/projects/omarecorder
-scripts/dev-install.sh --enable   # rsync into the plugin dir, validate, symlink the CLI, rescan plugins
+scripts/dev-sync.sh --enable      # rsync into the plugin dir, validate, symlink the CLI, rescan plugins
 omarchy-restart-shell             # QML changes need this: rescan keeps Qt's component cache
-bash tests/cli.test.sh            # CLI tests against a throwaway XDG tree (about 3 minutes)
+bash tests/cli.test.sh            # CLI tests against a throwaway XDG tree (about 8 minutes)
 bash tests/lint.sh                # shellcheck, manifest schema, QML hygiene, README sections
 ```
 

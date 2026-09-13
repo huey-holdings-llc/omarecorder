@@ -117,7 +117,7 @@ Behaviours:
 ### Integration & lifecycle
 
 * Install: `omarchy plugin add https://github.com/huey-holdings-llc/omarecorder --enable` (section chooser) · remove: `omarchy plugin remove io.github.huey-holdings-llc.omarecorder` (leaves `~/Recordings` untouched; README says so).
-* Dev loop: repo in `~/projects/omarecorder`; `scripts/dev-install.sh` = `rsync -a --delete --exclude .git` into `~/.config/omarchy/plugins/<id>/` + `omarchy-shell shell rescanPlugins` (symlinks are rejected by validate, so no symlink). `omarchy plugin validate .` in CI/tests.
+* Dev loop: repo in `~/projects/omarecorder`; `scripts/dev-sync.sh` (was dev-install.sh) = `rsync -a --delete --exclude .git` into `~/.config/omarchy/plugins/<id>/` + `omarchy-shell shell rescanPlugins` (symlinks are rejected by validate, so no symlink). `omarchy plugin validate .` in CI/tests.
 * CLI on PATH: README documents `ln -s ~/.config/omarchy/plugins/<id>/bin/omarecorder ~/.local/bin/` (or the panel's setup card offers to do it) so keybinds/menu work: Hyprland `o.bind("SUPER + ALT + R", "Record audio", "omarecorder record toggle")`; menu snippet for `~/.config/omarchy/extensions/omarchy-menu.jsonc` (`trigger.record`). Plugin never writes user config without consent.
 * Retire `dnd-record`: `omarecorder import ~/recording/*.wav` (or move), remove the `dnd-record` command module from `shell.json` and the script; update hp-laptop-config allowlist accordingly.
 * Performance: no idle processes; one `FileView` watch; list scan on demand (jq over meta.json files; fine for hundreds of recordings); overlay not keepLoaded; heavy work never in QML.

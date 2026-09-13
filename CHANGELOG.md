@@ -3,6 +3,205 @@
 All notable changes to this project are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow SemVer.
 
+## [1.5.0] - 2026-09-13
+
+### Added
+- The Obsidian export carries the recording's note as a `note:` property; the
+  README always said it did.
+- CLI `search` matches titles and notes as well as transcripts, as the
+  Library's search box does, and refuses an option instead of searching for it.
+- `record stop --guard` asks before stopping a long take, as the toggle does.
+- `vaults` with no vaults says how to get one.
+- Notes are searchable: the Library's search matches a recording's note as
+  well as its title, date and transcript.
+- While an import runs, the popup says so ("Importing meeting.m4a…"). A long
+  file converts for a while, and nothing on screen said it was working.
+- Lint checks that every nested Omarchy kit token the plugin uses
+  (`Style.spacing.*`, `Style.font.*`, `Style.bar.*`) still exists in the
+  shell. qmllint cannot see those, so a renamed one would only have failed at
+  runtime. CI has no shell and skips it, as it skips qmllint, but runs the
+  parser against a fixture. Lint also checks that every `Text` sets
+  `textFormat`.
+- Every Library action has a Ctrl key, so the F-row is never needed: `Ctrl+N`
+  note, `Ctrl+R` rename, `Ctrl+T` trim, `Ctrl+Shift+T` restore the original,
+  `Ctrl+D` tidy or raw, `Ctrl+P` previous transcript, `Ctrl+E` open the folder
+  and `Ctrl+X` cancel a model download. F2, F3 and F4 still work.
+- Hold `Ctrl` in the Library and each shortcut shows as a small badge just
+  above its control, only where the control is showing.
+- The popup's settings can be worked from the keyboard. With settings open,
+  `Up`/`Down` (or `j`/`k`) walk the controls, an accent bar marks the one under
+  the cursor, and `Enter` or `Space` works it.
+- The popup's source has a key: `c` steps through Microphone, System and Both
+  (`C` goes back). `x` dismisses an error message in the popup, and `Esc` does
+  the same in the Library before it does anything else.
+- Icon buttons give a screen reader their shortcut as the accessible
+  description (for when Quickshell exposes its windows; today no reader
+  reaches them, see CONTRIBUTING).
+
+### Changed
+- A plain `record stop` stops at once, as the README always said a script's
+  stop does. The popup's `r`, the toggle and the keybinding still ask first
+  past an hour (they pass `--guard`), and the popup now says so while it
+  waits. `--force` is kept as the old spelling of a plain stop.
+- `config set recordingsDir` creates the folder, as record and import do, and
+  refuses a relative path (it would land somewhere different for each caller).
+- `export` writes its temporary file exclusively (`mktemp`), so nothing planted
+  in a synced vault can redirect the note.
+- An `import --move` whose source cannot be removed (a read-only folder) still
+  completes the take and logs the leftover instead of failing halfway.
+- The Library gets out of the way when it opens the editor, the file manager
+  or Obsidian; they opened underneath it.
+- A title or note being typed is saved when another take is clicked or the
+  Library closes, the way Enter saves it; `Esc` still cancels.
+- Models are named as the chips name them (Fast, Balanced, Accurate) in the
+  meta line, the progress line and the rows.
+- Tidy's counts moved into the Tidy button's tooltip, so the meta line no
+  longer wraps on long takes and moves everything below it.
+- Setting labels fit: "Clean up audio first", and the dictionary's "Prompt"
+  and "Paste". The popup's legend lists the Recent keys.
+- Install hints name the package instead of a `pacman -S` command, and
+  `scripts/dev-install.sh` is now `scripts/dev-sync.sh`: the marketplace read
+  both as capabilities a reviewer has to accept. Lint keeps them out.
+- `open` hands the editor a path through a private link named by the id, so a
+  title never reaches a terminal's command line.
+- rename, trim, note and delete claim the take for as long as they run, so a
+  transcription or resume cannot start on it halfway.
+- The crash sweep only touches folders the CLI made (a `.omarecorder` marker),
+  and an import converts under a temporary name until it is done.
+- The Library's footer lists only the keys that are not Ctrl keys, ends with
+  "hold Ctrl for shortcuts", and is measured item by item: on a narrow screen
+  it drops its least useful keys first instead of cutting off mid-line.
+- The setup card names the package to install ("install the X package"), the
+  way the CLI's own hints do, instead of printing a `sudo` command.
+- The README's development section says where to put the source instead of
+  spelling out a clone command.
+- An error names the action that failed ("Import failed: ...") without the
+  CLI's `omarecorder:` prefix, sits above the Library's list instead of under
+  the selected take, and stays until it is dismissed or that same action
+  succeeds. Any success used to clear it, often before it could be read.
+- While a model downloads, the Library's button shows the percentage.
+- Fast and Balanced say they understand English only: in the chip tooltip, in
+  a note in the Library when the language setting is not English, as a warning
+  from `transcribe`, and in the README.
+- README: Update says to restart the shell; the CLI symlink is described as
+  what the README's commands need; Remove lists what stays behind; the privacy
+  notes (and SECURITY.md) say exactly what gets deleted, including the source
+  of an `import --move`.
+- The Library's copy and Send to Obsidian buttons confirm with a tick in the
+  icon's place. The "Copied" and "Sent" labels pushed the next button sideways.
+- While a title or note is being typed, the footer says how to finish
+  (`Enter` save, `Esc` cancel). The caption that appeared above the meta line
+  instead, shifting everything below it, is gone.
+- A recording that is not transcribed yet shows an empty circle in the lists.
+  It was a microphone, which read as "recording".
+- The Library's meta line puts warnings (clipped, partial transcript) right
+  after the length, so they are no longer the first thing cut off.
+- A saved note shows in full colour instead of the placeholder's dim grey.
+- The setup card names the default model the way the rest of the UI does
+  ("Fast · base.en").
+- An empty Library names the folder it is looking in, so a changed recordings
+  folder does not look like lost recordings.
+- The popup's note for a switched-off Recent list names the setting to change.
+- The README opens with a quick start.
+- CI pins how many CLI test blocks may skip in its container, as it already
+  did for lint, so a block that goes quiet fails the run.
+
+### Fixed
+- A newline in a synced vault's new-note folder setting could send an export
+  one folder above the vault.
+- The empty Library's message ran out of its column. It wraps, and names the
+  folder with your real home folder.
+- The popup's Recent list could not be turned off (0 read as 5), and said it
+  was off during the very first recording.
+- A rejected recordings folder showed its error out of view and left the bad
+  path in the field; the reason now shows under the field.
+- The setup card said nothing when a model download failed.
+- Setup was not checked again after the source changed.
+- A long import could be taken for a crashed take by the recovery sweep.
+- A title starting `--urgency=` or similar was read as an option by the
+  notification sender.
+- A resumed take's transcript was described as trimmed.
+- The Library said "in Obsidian" for an export that went somewhere else.
+- `cancel` said "cancelled" when nothing was running.
+- An action whose command never started left what waited on it (an
+  "Importing…" line) up for good.
+- The Language setting showed a blank for a code set from the CLI.
+- The bar shows a download glyph while a model downloads.
+- The note field stops at the 500 characters the CLI keeps, the title at 80.
+- A machine with no microphone stayed on "Setup needed" even with System audio
+  as the source. A microphone is now required only when the source records
+  one, and `setup check --json` says whether it is (`mic_required`).
+- On a long recording the Library's model chips were cut off ("Accurat") by
+  the wider time readout. The main button now drops to its icon first, with
+  its label in the tooltip.
+- On a long list, a refresh (a note saved, a transcription finishing) scrolled
+  the Library back to the top and left the selected recording out of sight.
+  It now keeps the selection in view, unless you have scrolled away from it.
+- Renaming a recording to a title whose folder already existed moved the take
+  inside that folder and then failed, leaving it hidden. Rename now refuses.
+- `transcribe --language` took any value. It gets the same check as
+  `config set language`.
+- A title with `&` or `<` in it could break the notification it appeared in.
+- The tidy transcript was rewritten in place, so anything reading it at that
+  moment could get half a file. It is now written beside it and renamed in.
+- The waveform's start time sat on top of the playhead.
+- A model download that failed was only a desktop notification, and the
+  Library's button quietly went back to "Download". The Library now says so
+  beside the button until the next try.
+- A second click on Transcribe (a double click, or one because nothing seemed
+  to happen) either cancelled the job it had just started, once Cancel had
+  appeared, or ran a second transcription that failed as already running.
+  Cancel ignores clicks for its first second, and a second press waits for
+  the first.
+- `c` and then `r` in quick succession recorded with the previous source, and
+  two quick presses of `c` could save the wrong one. After a pick from the
+  popup's Source dropdown, `c` changed the source but the dropdown kept
+  showing the old one.
+- The popup's key legend could wrap with a dot at the start of its second line.
+- After a shell restart the Library's model chips could show Fast while
+  Transcribe used the configured default, until another take was selected.
+  The chips now always show the model Transcribe will use.
+- A background refresh (a transcription piece finishing, a download ticking,
+  any CLI command) wiped a title or note you were in the middle of typing in
+  the Library.
+- After a trim handle had been dragged, `[` and `]` moved the trim numbers but
+  no longer the handles.
+- A refresh asked for while the list was already loading was dropped, so a
+  rename during another take's transcription could leave the transcript pane
+  blank. Each loader now runs again when it finishes.
+- A recorder or transcription worker that died without saying so kept showing
+  as running until the next command. The service now re-checks when the popup
+  or the Library opens, and every 30 seconds while something is recording or
+  working.
+- Clicking a take in the popup's Recent list opened the Library on the newest
+  take instead of the one clicked.
+- `open` and the "Transcript ready" notification opened the raw transcript.
+  They now open the tidy one, as the Library shows it; `open --raw` gives
+  whisper's own.
+- Two starts or imports in the same second could share a folder, and the one
+  that failed then deleted it. Picking an id and creating its folder is now one
+  locked step.
+- `record stop` and the reconcile signalled recorder pids from state.json
+  without checking they were still recorders. A recycled pid is now left alone.
+- An Obsidian vault whose settings put new notes in a folder outside the vault
+  (`../`) sent exports there. Such a folder is now ignored and notes go to the
+  vault root.
+- A permanent delete left whisper's saved error output, which can echo speech,
+  behind in the state folder.
+- The runtime folder (pids, the player socket) is refused if it is a symlink or
+  not owned by you.
+- `Esc` in the Library's title or note field, or in the popup's recordings
+  folder field, detached the field from what it shows. Every recording
+  selected afterwards kept the old text, and `Enter` in the title field then
+  renamed that recording with the old name. It had been there since 1.4.1;
+  the new `Ctrl+R` and `Ctrl+N` made it easy to hit.
+- Saving or cancelling a settings field, or adding a dictionary entry, in the
+  popup let go of the keyboard with nothing to take it back, so the popup's
+  keys did nothing until it was reopened.
+- `stop-play` left mpv's IPC socket behind in the runtime directory.
+- The shell logged a missing `state.json` on every start after a boot, before
+  the CLI had first run.
+
 ## [1.4.1] - 2026-09-08
 
 ### Fixed
@@ -453,7 +652,7 @@ against the code.
   top-left of the transcript box, outside the scroll area, with "Copied" / "Sent"
   confirmations; the action row is compact (three presets, "Re-transcribe").
 - Clipping detection skips the first 2 s and decides on the share of samples at
-  the rail (`levels.clipped_pct` > 0.05 %). README recommends 30–40 % input for
+  the rail (`levels.clipped_pct` > 0.05 %). README recommends 30 to 40 % input for
   laptop mics.
 
 ### Fixed

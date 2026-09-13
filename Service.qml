@@ -5,7 +5,7 @@ import Quickshell.Io
 import "ui/format.js" as Fmt
 import "ui/state.js" as State
 
-// OmaRecorder service — the single source of truth for the plugin's UI.
+// OmaRecorder service: the single source of truth for the plugin's UI.
 // Mounted once by the shell (kind "service", keepLoaded); Panel/Library
 // instances (one per monitor) read from it via bar.shell.serviceFor(id).
 //
@@ -23,6 +23,7 @@ QtObject {
   // Runtime state lives only in the per-user runtime dir (never /tmp): without
   // XDG_RUNTIME_DIR there is nothing safe to watch, so the service stays idle.
   readonly property string xdgRuntime: Quickshell.env("XDG_RUNTIME_DIR") || ""
+  readonly property string home: Quickshell.env("HOME") || ""
   readonly property string runtimeDir: xdgRuntime ? xdgRuntime + "/omarecorder" : ""
   readonly property string stateFile: runtimeDir ? runtimeDir + "/state.json" : ""
   readonly property string levelFile: runtimeDir ? runtimeDir + "/level" : ""
@@ -36,10 +37,14 @@ QtObject {
   property var dictionary: ({ count: 0, entries: [] })
   property var setup: ({ ok: true })
   property string lastError: ""
-  // The banner used to clear only on the next successful action, and refresh()
-  // does not go through run(), so one failure stayed on screen through
-  // selection changes, closes and reopens. Both surfaces can dismiss it now.
-  function clearError() { root.lastError = "" }
+  // Which action owns the message (State.actionError's key, "load:<what>" for
+  // a loader). Only that action's next success clears it: any success used
+  // to, so an unrelated one could wipe a failure before anyone read it.
+  property string lastErrorKey: ""
+  function setError(e) { root.lastError = e.text; root.lastErrorKey = e.key }
+  // refresh() does not go through run(), so a failure could stay on screen
+  // through selection changes, closes and reopens. Both surfaces can dismiss it.
+  function clearError() { root.lastError = ""; root.lastErrorKey = "" }
   property var level: null            // {peak_db, clip, t} while recording (watched file)
   readonly property bool clipping: !!(level && level.clip)
   readonly property real peakDb: level && typeof level.peak_db === "number" ? level.peak_db : -99
@@ -49,6 +54,9 @@ QtObject {
   readonly property bool recording: !!(state && state.recording)
   readonly property var activeRecording: recording ? state.recording : null
   readonly property string activeId: activeRecording ? activeRecording.id : ""
+  // A guarded stop of a long take is waiting for its second press (the CLI's
+  // 10 second window); the popup says so instead of only a notification.
+  readonly property bool stopArmed: !!(activeRecording && activeRecording.stop_armed_at && now - activeRecording.stop_armed_at <= 10)
   readonly property var jobs: (state && state.jobs) ? state.jobs : []
   readonly property bool transcribing: jobs.some(function(j) { return j.type === "transcribe" })
   readonly property bool downloading: jobs.some(function(j) { return j.type === "download" })
@@ -66,7 +74,14 @@ QtObject {
   function isLoopy(rec) { return !!(rec && rec.transcript && rec.transcript.tidy && rec.transcript.tidy.loop_warning) }
   readonly property string activeJobTitle: activeJob ? (recordingById(activeJob.id) ? displayTitle(recordingById(activeJob.id)) : activeJob.id) : ""
   readonly property string defaultModel: config && config.defaultModel ? config.defaultModel : "base.en"
-  readonly property string defaultSource: config && config.defaultSource ? config.defaultSource : "mic"
+  // A source picked with `c` or the dropdown counts at once. The config write
+  // and reload behind it take a moment, and `c` then `r` inside that moment
+  // used to record with the old source (and a second `c` stepped from it).
+  property string pendingSource: ""
+  readonly property string defaultSource: pendingSource || (config && config.defaultSource ? config.defaultSource : "mic")
+  // A model download that failed, until the next attempt ({model, at}); the
+  // Library says so beside the button instead of only in a notification.
+  readonly property var downloadFailed: (state && state.download_failed) ? state.download_failed : null
 
   // Resume offer: the CLI arms state.last_stop on a clean stop and withdraws
   // it on a new start, trim or delete; there is no time limit. This only
@@ -107,19 +122,27 @@ QtObject {
   function downloadFor(model) { for (var i = 0; i < jobs.length; i++) if (jobs[i].type === "download" && jobs[i].model === model) return jobs[i]; return null }
   function recordingById(id) { for (var i = 0; i < recordings.length; i++) if (recordings[i].id === id) return recordings[i]; return null }
   function modelByName(name) { for (var i = 0; i < models.length; i++) if (models[i].name === name) return models[i]; return null }
+  // The preset's name as the chips say it (Fast, Balanced, Accurate), else the engine's.
+  function modelLabel(name) { var m = modelByName(name); return m && m.label ? m.label : (name || "") }
   function estimateSeconds(durationS, modelName) {
     var m = modelByName(modelName); var rtf = m && m.rtf ? m.rtf : 3
     return Math.ceil((durationS || 0) / rtf)
   }
 
   // ---- loaders ----
-  function refresh() { refreshList(); refreshModels(); refreshConfig(); refreshSetup(); refreshVaults(); refreshDictionary() }
-  function refreshList() { if (!listProc.running) listProc.running = true }
-  function refreshDictionary() { if (!dictProc.running) dictProc.running = true }
-  function refreshModels() { if (!modelsProc.running) modelsProc.running = true }
-  function refreshVaults() { if (!vaultsProc.running) vaultsProc.running = true }
-  function refreshConfig() { if (!configProc.running) configProc.running = true }
-  function refreshSetup() { if (!setupProc.running) setupProc.running = true }
+  function refresh() { reconcile(); refreshList(); refreshModels(); refreshConfig(); refreshSetup(); refreshVaults(); refreshDictionary() }
+  // A refresh asked for while the same loader is still running is remembered and
+  // run again when it exits. Dropping it lost changes that landed mid-read: a
+  // rename during another take's transcription left the transcript pane blank.
+  property var _again: ({})
+  function load(proc, name) { if (proc.running) _again[name] = true; else proc.running = true }
+  function loadAgain(proc, name) { if (_again[name]) { _again[name] = false; Qt.callLater(function() { proc.running = true }) } }
+  function refreshList() { load(listProc, "list") }
+  function refreshDictionary() { load(dictProc, "dictionary") }
+  function refreshModels() { load(modelsProc, "models") }
+  function refreshVaults() { load(vaultsProc, "vaults") }
+  function refreshConfig() { load(configProc, "config") }
+  function refreshSetup() { load(setupProc, "setup") }
 
   // The signature of the last state that caused a re-list (State.stateSig:
   // job shape, per-piece progress and the live recording id, not the
@@ -157,24 +180,25 @@ QtObject {
 
   // ---- actions (fire-and-forget; state.json tells us what happened) ----
   function run(args, onDone) {
-    var proc = actionComponent.createObject(root, { command: [cli].concat(args), callback: onDone || null })
+    var proc = actionComponent.createObject(root, { command: [cli].concat(args), action: args, callback: onDone || null })
     proc.running = true
   }
   function startRecording(source) { run(["record", "start", "--source", source || defaultSource]) }
-  // force skips the long-take confirmation; the popup's Stop button uses it,
-  // a button press being deliberate in a way a keybinding is not.
-  function stopRecording(force) { run(force ? ["record", "stop", "--force"] : ["record", "stop"]) }
+  // A keypress (the popup's r, the toggle) may be a stray one, so it asks
+  // before ending a long take (--guard); the Stop button is deliberate and
+  // stops at once, as a script's plain `record stop` does.
+  function stopRecording(force) { run(force ? ["record", "stop"] : ["record", "stop", "--guard"]) }
   function toggleRecording() { recording ? stopRecording() : startRecording() }
   // download defaults to true. Every surface that offers Transcribe means "and
   // fetch the model if it is missing"; the popup passed no argument at all and
   // so failed with exit 3 where the Library downloaded and chained.
-  function transcribe(id, model, language, download, chunkS) {
+  function transcribe(id, model, language, download, chunkS, onDone) {
     var args = ["transcribe", id]
     if (model) args = args.concat(["--model", model])
     if (language) args = args.concat(["--language", language])
     if (chunkS) args = args.concat(["--chunk-s", String(chunkS)])
     if (download === undefined || download) args.push("--download")
-    run(args)
+    run(args, onDone)
   }
   function cancel(id) { run(["cancel", id]) }
   // A meta edit only bumps the state version; while an unrelated job runs the
@@ -186,7 +210,18 @@ QtObject {
   function download(model) { run(["model", "download", model]) }
   function cancelDownload(model) { run(["model", "cancel", model]) }
   function searchTranscripts(q, onDone) { run(["search", q], onDone) }
-  function importFile(path) { run(["import", path], function(code) { if (code === 0) root.refreshList() }) }
+  // Imports in flight, by path, for the popup's "Importing…" line: converting
+  // a long file takes a while with nothing else on screen to say so.
+  property var importing: []
+  function importFile(path) {
+    importing = importing.concat([path])
+    run(["import", path], function(code) {
+      var left = root.importing.slice(), i = left.indexOf(path)
+      if (i >= 0) left.splice(i, 1)
+      root.importing = left
+      if (code === 0) root.refreshList()
+    })
+  }
   function play(id) { run(["play", id]) }
   function playFrom(id, seconds) { run(["play", id, "--from", String(seconds)]) }
   function stopPlay() { run(["stop-play"]) }
@@ -194,29 +229,78 @@ QtObject {
   function restoreTrim(id) { run(["trim", id, "--restore"]) }
   function openTranscript(id) { Quickshell.execDetached([cli, "open", id]) }
   function openFolder(id) { Quickshell.execDetached([cli, "folder", id]) }
-  // The CLI does the copy (argv only — no shell string is ever built from a title).
+  // The CLI does the copy (argv only: no shell string is ever built from a title).
   function copyTranscript(id, raw, onDone) { run(raw ? ["copy", id, "--raw"] : ["copy", id], onDone) }
   // The CLI picks the vault/folder (config, then the open vault) and opens the note in Obsidian.
   function exportToObsidian(id, raw, onDone) { run(raw ? ["export", id, "--raw"] : ["export", id], onDone) }
-  function setConfig(key, value) { run(["config", "set", key, String(value)], function() { refreshConfig() }) }
+  // onDone(code, out) lets a settings field show its own error in place.
+  // Setup is re-checked too: whether it passes depends on the source and folder.
+  function setConfig(key, value, onDone) {
+    if (key === "defaultSource") { setSource(String(value)); return }
+    run(["config", "set", key, String(value)], function(code, out) { root.refreshConfig(); root.refreshSetup(); if (onDone) onDone(code, out) })
+  }
+  // One source write at a time and the latest pick wins: two quick presses
+  // ran two writes that could land in either order and save the other value.
+  property bool _sourceWriting: false
+  function setSource(v) { pendingSource = v; if (!_sourceWriting) _writeSource() }
+  function _writeSource() {
+    _sourceWriting = true
+    var v = pendingSource
+    run(["config", "set", "defaultSource", v], function(code) {
+      root._sourceWriting = false
+      var next = State.sourceWriteNext(root.pendingSource, v, code === 0)
+      if (next === "write") { root._writeSource(); return }
+      // Saved, so it is the config now. Waiting for a reload to match instead
+      // could pin the pick forever if a change made elsewhere landed between.
+      if (next === "done") root.config = Object.assign({}, root.config, { defaultSource: v })
+      root.pendingSource = ""
+      root.refreshConfig()
+      // Setup passes without a microphone only for system audio, so a source
+      // change can flip it either way; the cached answer would hide that.
+      root.refreshSetup()
+    })
+  }
   // Dictionary actions run through the CLI like everything else; add/import
   // re-read the count so the settings row stays honest.
   function dictAdd(heard, written, onDone) { run(["dictionary", "add", heard, written], function(code, out) { if (code === 0) root.refreshDictionary(); if (onDone) onDone(code, out) }) }
   function dictEdit() { run(["dictionary", "edit"]) }
   function dictCopyPrompt(onDone) { run(["dictionary", "prompt", "--copy"], onDone) }
   function dictImportClipboard(onDone) { run(["dictionary", "import", "--clipboard"], function(code, out) { if (code === 0) root.refreshDictionary(); if (onDone) onDone(code, out) }) }
-  function openLibrary() { Quickshell.execDetached(["omarchy-shell", "shell", "toggle", pluginId]) }
+  // With an id the Library opens on that take; summon rather than toggle, so a
+  // Library that is already open is not closed by it.
+  function openLibrary(id) {
+    if (id) Quickshell.execDetached(["omarchy-shell", "shell", "summon", pluginId, JSON.stringify({ id: String(id) })])
+    else Quickshell.execDetached(["omarchy-shell", "shell", "toggle", pluginId])
+  }
 
   // ---- plumbing ----
   property Component actionComponent: Component {
     Process {
       id: p
       property var callback: null
+      property var action: []   // the CLI arguments, which name the action in the banner
+      property bool done: false
       stdout: StdioCollector { id: aOut; waitForEnd: true }
       stderr: StdioCollector { id: aErr; waitForEnd: true }
+      // A process that never starts sends no exited, so its callback never
+      // ran and anything waiting on it (the "Importing…" line) stayed up for
+      // good. Exited follows the end of a real run within milliseconds; two
+      // seconds without it means the command never ran.
+      property Timer startGuard: Timer {
+        interval: 2000
+        onTriggered: {
+          if (p.done) return
+          p.done = true
+          root.setError(State.actionError(p.action, -1, "the omarecorder command could not be started", ""))
+          if (p.callback) p.callback(-1, "")
+          p.destroy()
+        }
+      }
+      onRunningChanged: if (!running && !done) startGuard.restart()
       onExited: function(code) {
-        if (code !== 0) root.lastError = String(aErr.text || aOut.text || ("exit " + code)).trim()
-        else root.lastError = ""
+        p.done = true
+        if (code !== 0) root.setError(State.actionError(p.action, code, aErr.text, aOut.text))
+        else if (State.errorClears(root.lastErrorKey, State.actionError(p.action, 0, "", "").key)) root.clearError()
         if (callback) callback(code, aOut.text)
         p.destroy()
       }
@@ -227,6 +311,9 @@ QtObject {
     path: root.stateFile
     watchChanges: true
     blockLoading: false
+    // Absent after a boot until the CLI first runs; onLoadFailed covers that,
+    // so the warning it would print on every shell start is noise.
+    printErrors: false
     onFileChanged: reload()
     onLoaded: root.applyState(text())
     onLoadFailed: function(err) { root.state = { recording: null, jobs: [], version: 0 }; root.updateElapsed() }
@@ -264,39 +351,40 @@ QtObject {
   // from an empty library: the Library drew "No recordings yet" and said
   // nothing. A read that fails now names itself in the error banner.
   function applyJson(what, code, text, errText, apply) {
-    if (code !== 0) { root.lastError = what + " failed: " + String(errText || ("exit " + code)).trim(); return false }
-    try { apply(JSON.parse(text)) } catch (e) { root.lastError = what + " returned output this build cannot read"; return false }
+    if (code !== 0) { root.setError(State.loadError(what, code, errText)); return false }
+    try { apply(JSON.parse(text)) } catch (e) { root.setError(State.loadError(what, code, "", true)); return false }
+    if (State.errorClears(root.lastErrorKey, "load:" + what)) root.clearError()
     return true
   }
   property Process listProc: Process {
     command: [root.cli, "list", "--json"]
     stdout: StdioCollector { id: listOut; waitForEnd: true }
     stderr: StdioCollector { id: listErr; waitForEnd: true }
-    onExited: function(code) { root.applyJson("list", code, listOut.text, listErr.text, function(v) { root.recordings = v }) }
+    onExited: function(code) { root.applyJson("list", code, listOut.text, listErr.text, function(v) { root.recordings = v }); root.loadAgain(root.listProc, "list") }
   }
   property Process modelsProc: Process {
     command: [root.cli, "models", "--json"]
     stdout: StdioCollector { id: modelsOut; waitForEnd: true }
     stderr: StdioCollector { id: modelsErr; waitForEnd: true }
-    onExited: function(code) { root.applyJson("models", code, modelsOut.text, modelsErr.text, function(v) { root.models = v }) }
+    onExited: function(code) { root.applyJson("models", code, modelsOut.text, modelsErr.text, function(v) { root.models = v }); root.loadAgain(root.modelsProc, "models") }
   }
   property Process vaultsProc: Process {
     command: [root.cli, "vaults", "--json"]
     stdout: StdioCollector { id: vaultsOut; waitForEnd: true }
     stderr: StdioCollector { id: vaultsErr; waitForEnd: true }
-    onExited: function(code) { root.applyJson("vaults", code, vaultsOut.text, vaultsErr.text, function(v) { root.vaults = v }) }
+    onExited: function(code) { root.applyJson("vaults", code, vaultsOut.text, vaultsErr.text, function(v) { root.vaults = v }); root.loadAgain(root.vaultsProc, "vaults") }
   }
   property Process dictProc: Process {
     command: [root.cli, "dictionary", "--json"]
     stdout: StdioCollector { id: dictOut; waitForEnd: true }
     stderr: StdioCollector { id: dictErr; waitForEnd: true }
-    onExited: function(code) { root.applyJson("dictionary", code, dictOut.text, dictErr.text, function(v) { root.dictionary = v }) }
+    onExited: function(code) { root.applyJson("dictionary", code, dictOut.text, dictErr.text, function(v) { root.dictionary = v }); root.loadAgain(root.dictProc, "dictionary") }
   }
   property Process configProc: Process {
     command: [root.cli, "config", "get", "--json"]
     stdout: StdioCollector { id: configOut; waitForEnd: true }
     stderr: StdioCollector { id: configErr; waitForEnd: true }
-    onExited: function(code) { root.applyJson("config", code, configOut.text, configErr.text, function(v) { root.config = v }) }
+    onExited: function(code) { root.applyJson("config", code, configOut.text, configErr.text, function(v) { root.config = v }); root.loadAgain(root.configProc, "config") }
   }
   property Process setupProc: Process {
     command: [root.cli, "setup", "check", "--json"]
@@ -305,11 +393,21 @@ QtObject {
     // setup check exits non-zero to mean "your setup is incomplete", which is
     // the SetupCard's whole subject and not an error to report: parse either way.
     onExited: function(code) {
-      try { root.setup = JSON.parse(setupOut.text) }
-      catch (e) { if (code !== 0) root.lastError = "setup check failed: " + String(setupErr.text || ("exit " + code)).trim() }
+      try { root.setup = JSON.parse(setupOut.text); if (State.errorClears(root.lastErrorKey, "load:setup")) root.clearError() }
+      catch (e) { if (code !== 0) root.setError(State.loadError("setup", code, setupErr.text)) }
       root.refreshModels()
+      root.loadAgain(root.setupProc, "setup")
     }
   }
+
+  // `status` is the only command that notices a recorder or a worker that died
+  // without saying so. Run it when a surface opens (refresh) and every 30 s while
+  // something is recording or working. It has its own process rather than run(),
+  // so it never touches lastError; a change it finds bumps state.json, and the
+  // watcher above brings the views up to date.
+  property Process statusProc: Process { command: [root.cli, "status"] }
+  function reconcile() { if (!statusProc.running) statusProc.running = true }
+  property Timer reconcileTimer: Timer { interval: 30000; repeat: true; running: root.recording || root.busy; onTriggered: root.reconcile() }
 
   Component.onCompleted: {
     if (!root.runtimeDir) { root.lastError = "XDG_RUNTIME_DIR is not set, so OmaRecorder cannot run"; return }

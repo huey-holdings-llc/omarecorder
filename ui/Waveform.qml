@@ -84,20 +84,22 @@ Item {
       y: 0
       width: parent.hw; height: parent.height
       radius: 3; color: root.accent; z: 3
-      Text { anchors.centerIn: parent; text: "‖"; color: Color.background; font.pixelSize: Style.font.caption; font.bold: true }
+      Text { textFormat: Text.PlainText; anchors.centerIn: parent; text: "‖"; color: Color.background; font.pixelSize: Style.font.caption; font.bold: true }
       Rectangle {   // time badge
         anchors.bottom: parent.top; anchors.bottomMargin: 2; anchors.left: parent.left
         width: fromBadge.implicitWidth + Style.spacing.xs * 2; height: fromBadge.implicitHeight + 2
         radius: 3; color: root.accent
-        Text { id: fromBadge; anchors.centerIn: parent; text: "start " + root.fmt(root.trimFrom); color: Color.background; font.family: root.fontFamily; font.pixelSize: Style.font.caption; font.bold: true }
+        Text { textFormat: Text.PlainText; id: fromBadge; anchors.centerIn: parent; text: "start " + root.fmt(root.trimFrom); color: Color.background; font.family: root.fontFamily; font.pixelSize: Style.font.caption; font.bold: true }
       }
       MouseArea {
         id: fromDrag
         anchors.fill: parent; anchors.margins: -Style.space(6)
         cursorShape: Qt.SizeHorCursor
         drag.target: fromHandle; drag.axis: Drag.XAxis; drag.minimumX: 0; drag.maximumX: toHandle.x - fromHandle.width
-        onPositionChanged: if (drag.active) { root.trimFrom = root.clampT((fromHandle.x + fromHandle.width / 2) / root.pxPerSecond) }
-        onReleased: root.rangeChanged(root.trimFrom, root.trimTo)
+        // Report, never assign: trimFrom and trimTo are the Library's, bound in,
+        // and writing them here would cut that binding for good ([ and ] would
+        // then move the numbers but not the handles).
+        onPositionChanged: if (drag.active) root.rangeChanged(root.clampT((fromHandle.x + fromHandle.width / 2) / root.pxPerSecond), root.trimTo)
       }
     }
     Rectangle {
@@ -111,20 +113,19 @@ Item {
       y: 0
       width: parent.hw; height: parent.height
       radius: 3; color: root.accent; z: 3
-      Text { anchors.centerIn: parent; text: "‖"; color: Color.background; font.pixelSize: Style.font.caption; font.bold: true }
+      Text { textFormat: Text.PlainText; anchors.centerIn: parent; text: "‖"; color: Color.background; font.pixelSize: Style.font.caption; font.bold: true }
       Rectangle {   // time badge
         anchors.bottom: parent.top; anchors.bottomMargin: 2; anchors.right: parent.right
         width: toBadge.implicitWidth + Style.spacing.xs * 2; height: toBadge.implicitHeight + 2
         radius: 3; color: root.accent
-        Text { id: toBadge; anchors.centerIn: parent; text: "end " + root.fmt(root.trimTo); color: Color.background; font.family: root.fontFamily; font.pixelSize: Style.font.caption; font.bold: true }
+        Text { textFormat: Text.PlainText; id: toBadge; anchors.centerIn: parent; text: "end " + root.fmt(root.trimTo); color: Color.background; font.family: root.fontFamily; font.pixelSize: Style.font.caption; font.bold: true }
       }
       MouseArea {
         id: toDrag
         anchors.fill: parent; anchors.margins: -Style.space(6)
         cursorShape: Qt.SizeHorCursor
         drag.target: toHandle; drag.axis: Drag.XAxis; drag.minimumX: fromHandle.x + fromHandle.width; drag.maximumX: root.width - toHandle.width
-        onPositionChanged: if (drag.active) { root.trimTo = root.clampT((toHandle.x + toHandle.width / 2) / root.pxPerSecond) }
-        onReleased: root.rangeChanged(root.trimFrom, root.trimTo)
+        onPositionChanged: if (drag.active) root.rangeChanged(root.trimFrom, root.clampT((toHandle.x + toHandle.width / 2) / root.pxPerSecond))
       }
     }
 
@@ -139,13 +140,16 @@ Item {
 
     // time labels
     Text {
+      textFormat: Text.PlainText
       anchors.left: parent.left; anchors.bottom: parent.bottom; anchors.margins: Style.spacing.xxs
+      anchors.leftMargin: Style.spacing.sm   // clear of the playhead, which sits on the left edge at 0:00
       visible: !root.trimMode   // the badges carry the times in trim mode
       text: root.trimMode ? root.fmt(root.trimFrom) : root.fmt(root.position)
       color: root.foreground; font.family: root.fontFamily; font.pixelSize: Style.font.caption
       style: Text.Outline; styleColor: Util.alpha(Color.background, 0.6)
     }
     Text {
+      textFormat: Text.PlainText
       anchors.right: parent.right; anchors.bottom: parent.bottom; anchors.margins: Style.spacing.xxs
       visible: !root.trimMode
       text: root.trimMode ? root.fmt(root.trimTo) : root.fmt(root.duration)

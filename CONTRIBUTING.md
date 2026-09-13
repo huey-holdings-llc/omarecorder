@@ -18,7 +18,7 @@ to them is easy to merge; one that breaks them will get a conversation first.
    Quickshell and Qt) over anything else, and prefer Omarchy's own commands
    (`omarchy-notification-send`, `omarchy-launch-editor`, `omarchy-shell`) over
    generic ones where they exist.
-2. **Simplicity and efficiency over features.** No daemons, no polling, no
+2. **Simplicity and efficiency over features.** No daemons, nothing running while idle, no
    background work the user did not ask for. The shell watches a few small
    files; everything else happens in the CLI, on demand, and exits. A feature
    that costs idle CPU, a permanent process, or a second copy of the audio
@@ -49,8 +49,8 @@ to them is easy to merge; one that breaks them will get a conversation first.
 
 ## Practical bits
 
-* **Dev loop**: `scripts/dev-install.sh --enable`, then `omarchy-restart-shell`
-  for QML changes. `bash tests/cli.test.sh` (about three minutes, uses the real
+* **Dev loop**: `scripts/dev-sync.sh --enable`, then `omarchy-restart-shell`
+  for QML changes. `bash tests/cli.test.sh` (about eight minutes, uses the real
   microphone and voxtype) and `bash tests/lint.sh` must both pass. No mic or
   voxtype on your machine? `OMARECORDER_TEST_ALLOW_SKIP=1` turns those blocks
   into counted skips; that is how CI runs the suite in an Arch container.
@@ -63,8 +63,10 @@ to them is easy to merge; one that breaks them will get a conversation first.
   (labels) and `ui/state.js` (re-list, filter and selection decisions) has node
   tests in `tests/format.test.js` and `tests/state.test.js`; `tests/lint.sh`
   runs them, and qmllint, when node and the shell's QML modules are on the
-  machine. Logic that can be a pure function belongs in those files, not in
-  QML, so it can be tested.
+  machine. qmllint cannot see the shell's nested tokens (`Style.spacing.*`,
+  `Style.font.*`, `Style.bar.*`), so lint also checks each one the plugin uses
+  against the shell's `Style.qml`. Logic that can be a pure function belongs in
+  those files, not in QML, so it can be tested.
 * **The knobs the tests use.** `OMARECORDER_SYNC=1` runs jobs inline instead of
   under `systemd-run`, `OMARECORDER_RUN_DIR` moves the runtime state out of
   `$XDG_RUNTIME_DIR` so the real user manager stays reachable, and
@@ -74,12 +76,15 @@ to them is easy to merge; one that breaks them will get a conversation first.
   README on purpose, and not part of the CLI's contract.
 * **A skipped check is not a passing one.** `tests/lint.sh` counts what it
   could not run, and `LINT_EXPECT_SKIPS` fails the run when that count moves.
-  CI sets it to 2 (qmllint and omarchy-plugin-validate, neither of which exists
-  in the container). If you add a check that can skip, adjust the number in
+  CI sets it to 3 (qmllint, the kit-token check and omarchy-plugin-validate,
+  none of which has what it needs in the container). The CLI suite does the
+  same with `OMARECORDER_TEST_EXPECT_SKIPS` (3 in CI: no voxtype, no
+  microphone, and the read-only folder check, which cannot run as root;
+  systemd's block sits inside voxtype's and never counts on its own). If you add a check that can skip, adjust the number in
   `.github/workflows/ci.yml` in the same pull request.
-* **Coverage is a local, occasional check, never a gate.** `pacman -S kcov`,
+* **Coverage is a local, occasional check, never a gate.** Install the kcov package,
   then `kcov --include-path=$PWD/bin coverage/ tests/cli.test.sh` writes an
-  HTML report under `coverage/` (the suite takes its usual seven minutes;
+  HTML report under `coverage/` (the suite takes its usual eight minutes;
   kcov follows the CLI as a child process). Read it for branches no test
   reaches; do not wire it into CI or set a threshold. Two things to know
   when reading it: a line kcov marks unhit inside a multi-line `jq` or `awk`
@@ -121,8 +126,53 @@ most needs someone who knows more than its author:
   other Omarchy themes, a vertical bar, more than one monitor, or a high-DPI
   screen are all valuable. So is anything that makes a screen easier to read
   without adding controls.
-* **Accessibility.** Keyboard reach is good; screen reader behaviour and
-  contrast under every theme have not been checked.
+* **Accessibility.** Every control in the popup and the Library has a keyboard
+  route (#70) except two: "Re-transcribe in shorter pieces" under a loop
+  warning, and cancelling a running transcription, which stays mouse-only on
+  purpose so a stray Enter can never stop an hour-long job. Icon buttons carry
+  an accessible name and their shortcut, but a screen reader cannot reach them
+  yet. With Orca 50.2 on Omarchy 4.0.3 (Quickshell 0.3.1), the shell registers
+  on the accessibility bus but exposes no windows at all, so Orca finds no
+  active window and announces nothing in the popup, the Library or the rest of
+  the shell. That needs Quickshell to expose its layer-shell windows; the
+  names are in place for when it does. Contrast was
+  measured in September 2026 across the 22 built-in themes: foreground on
+  background clears 4.5:1 in all of them, but the dimmer secondary text
+  (`Qt.darker(foreground, 1.55)`, the same derivation Omarchy's own panels
+  use) falls short in seven dark themes and comes out darker rather than dimmer
+  on light ones. OmaRecorder matches the kit on purpose; the fix belongs in
+  Omarchy, where it would help every plugin.
+
+  <details><summary>Contrast by theme (WCAG ratio against the background)</summary>
+
+  | Theme | Foreground | Dim text (1.55) | Captions (1.4) |
+  |---|---|---|---|
+  | catppuccin | 11.34 | 4.77 | 5.77 |
+  | catppuccin-latte | 7.06 | 11.17 | 10.18 |
+  | ethereal | 13.67 | 5.69 | 6.93 |
+  | everforest | 7.38 | 3.18 ✗ | 3.79 ✗ |
+  | flexoki-light | 18.62 | 19.35 | 19.24 |
+  | gruvbox | 8.16 | 3.52 ✗ | 4.21 ✗ |
+  | hackerman | 17.45 | 7.09 | 8.66 |
+  | kanagawa | 11.26 | 4.70 | 5.70 |
+  | last-horizon | 19.07 | 7.67 | 9.45 |
+  | lumon | 12.06 | 4.98 | 6.07 |
+  | lupine | 15.43 | 17.50 | 17.18 |
+  | matte-black | 10.08 | 4.36 ✗ | 5.21 |
+  | miasma | 8.82 | 3.82 ✗ | 4.55 |
+  | nord | 9.25 | 3.85 ✗ | 4.65 |
+  | osaka-jade | 9.65 | 4.17 ✗ | 5.03 |
+  | retro-82 | 13.39 | 5.52 | 6.74 |
+  | ristretto | 10.95 | 4.57 | 5.54 |
+  | rose-pine | 6.66 | 10.76 | 9.89 |
+  | solitude | 11.56 | 4.91 | 5.90 |
+  | tokyo-night | 8.10 | 3.60 ✗ | 4.26 ✗ |
+  | vantablack | 21.00 | 8.42 | 10.36 |
+  | white | 21.00 | 21.00 | 21.00 |
+
+  ✗ is below 4.5:1. Reproduce by reading each theme's `colors.toml` and
+  applying Qt's `darker()`, which divides the HSV value by the factor.
+  </details>
 * **Other hardware.** CPU-only machines, CUDA, different microphones and USB
   interfaces. The speed estimates and the clipping detector were tuned on one
   laptop.

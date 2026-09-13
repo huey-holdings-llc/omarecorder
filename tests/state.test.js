@@ -57,6 +57,23 @@ eq("filterRows null rows", filterRows(null, "x", [], ""), [])
 eq("filterRows null rows, empty query", filterRows(null, "", [], ""), [])
 eq("filterRows null hit list", filterRows(rows, "goblin", null, "goblin"), [])
 
+// Notes count too: a note is often what you remember a take by.
+var noted = [
+  { id: "2026-09-10_100000", title: "Weekly sync", created: "2026-09-10T10:00:00-0400", notes: "Budget review with Dana" },
+  { id: "2026-09-11_100000", title: "Standup", created: "2026-09-11T10:00:00-0400" }
+]
+eq("filterRows matches a note", ids(filterRows(noted, "budget", [], "")), ["2026-09-10_100000"])
+eq("filterRows matches a note case-insensitively", ids(filterRows(noted, "DANA", [], "")), ["2026-09-10_100000"])
+eq("filterRows a row without notes still matches its title", ids(filterRows(noted, "standup", [], "")), ["2026-09-11_100000"])
+
+// importingText: the popup's line while imports run.
+eq("importingText nothing running", importingText([]), "")
+eq("importingText one file names it", importingText(["/home/me/Downloads/meeting.m4a"]), "Importing meeting.m4a…")
+eq("importingText two files", importingText(["/a/one.wav", "/b/two.mp3"]), "Importing one.wav and 1 more…")
+eq("importingText three files", importingText(["/a/one.wav", "/b/two.mp3", "/c/three.ogg"]), "Importing one.wav and 2 more…")
+eq("importingText a bare name", importingText(["meeting.m4a"]), "Importing meeting.m4a…")
+eq("importingText null", importingText(null), "")
+
 // indexOfId
 eq("indexOfId found", indexOfId(rows, "2026-09-01_090000"), 1)
 eq("indexOfId missing", indexOfId(rows, "nope"), -1)
@@ -84,6 +101,103 @@ eq("initialSelection requested", initialSelection("r9", rows), "r9")
 eq("initialSelection newest", initialSelection("", rows), "2026-09-07_120000")
 eq("initialSelection empty list", initialSelection("", []), "")
 eq("initialSelection null rows", initialSelection(null, null), "")
+
+// fitHints: which legend items fit the footer. Lowest priority goes first
+// (the later one on a tie), kept items never go, order never changes.
+function hint(width, priority, keep) { return { width: width, priority: priority, keep: !!keep } }
+eq("fitHints everything fits", fitHints([hint(100, 1), hint(100, 2)], 10, 300), { shown: [0, 1], fits: true })
+eq("fitHints counts the separators", fitHints([hint(100, 1), hint(100, 2)], 10, 209), { shown: [1], fits: true })
+eq("fitHints drops the lowest priority and keeps order", fitHints([hint(100, 3), hint(100, 1), hint(100, 2)], 0, 200), { shown: [0, 2], fits: true })
+eq("fitHints on a tie drops the later item", fitHints([hint(100, 2), hint(100, 2), hint(100, 2)], 0, 200), { shown: [0, 1], fits: true })
+eq("fitHints never drops a kept item", fitHints([hint(100, 0, true), hint(100, 5)], 0, 150), { shown: [0], fits: true })
+eq("fitHints drops as many as it takes", fitHints([hint(100, 1), hint(100, 2), hint(100, 3), hint(100, 4)], 10, 210), { shown: [2, 3], fits: true })
+eq("fitHints says when even the kept items do not fit", fitHints([hint(300, 1, true), hint(100, 2)], 0, 200), { shown: [0], fits: false })
+eq("fitHints with no width measured yet shows everything", fitHints([hint(100, 1), hint(100, 2)], 10, 0), { shown: [0, 1], fits: true })
+eq("fitHints empty list", fitHints([], 10, 100), { shown: [], fits: true })
+
+// ctrlHintAction: what a key event does to the hold-Ctrl badges. A held key
+// auto-repeats as release+press pairs flagged isAutoRepeat; reacting to those
+// stopped the reveal timer every time, so the badges never appeared.
+eq("ctrlHintAction first Ctrl press starts the reveal", ctrlHintAction("press", true, false), "start")
+eq("ctrlHintAction auto-repeat Ctrl release is ignored", ctrlHintAction("release", true, true), "none")
+eq("ctrlHintAction auto-repeat Ctrl press is ignored", ctrlHintAction("press", true, true), "none")
+eq("ctrlHintAction letting go of Ctrl hides", ctrlHintAction("release", true, false), "hide")
+eq("ctrlHintAction another key hides (a chord is under way)", ctrlHintAction("press", false, false), "hide")
+eq("ctrlHintAction another key's release does nothing", ctrlHintAction("release", false, false), "none")
+eq("ctrlHintAction another key's auto-repeat does nothing", ctrlHintAction("press", false, true), "none")
+
+// cycleValue: a one-key picker (the popup's source key) steps through a fixed
+// list and wraps at both ends; an unknown current value starts from the ends.
+eq("cycleValue forward", cycleValue(["mic", "system", "both"], "mic", 1), "system")
+eq("cycleValue forward wraps", cycleValue(["mic", "system", "both"], "both", 1), "mic")
+eq("cycleValue backward", cycleValue(["mic", "system", "both"], "system", -1), "mic")
+eq("cycleValue backward wraps", cycleValue(["mic", "system", "both"], "mic", -1), "both")
+eq("cycleValue unknown current, forward, takes the first", cycleValue(["mic", "system", "both"], "gone", 1), "mic")
+eq("cycleValue unknown current, backward, takes the last", cycleValue(["mic", "system", "both"], "gone", -1), "both")
+eq("cycleValue empty list", cycleValue([], "mic", 1), "mic")
+
+// actionError: what a failed CLI action puts in the error banner. The CLI's
+// "omarecorder: " prefix goes, the action is named, and the key says which
+// action owns the message (only that action's next success clears it).
+eq("actionError names the action and drops the prefix", actionError(["import", "/x.m4a"], 1, "omarecorder: file not found: /x.m4a\n", ""),
+   { key: "import", text: "Import failed: file not found: /x.m4a" })
+eq("actionError strips the prefix on every line", actionError(["rename", "id", "t"], 1, "omarecorder: one\nomarecorder: two", "").text, "Rename failed: one\ntwo")
+eq("actionError falls back to stdout", actionError(["trim", "id"], 1, "", "omarecorder: bad range").text, "Trim failed: bad range")
+eq("actionError falls back to the exit code", actionError(["delete", "id"], 3, "", "").text, "Delete failed: exit 3")
+eq("actionError tells a download from a cancel", actionError(["model", "cancel", "small.en"], 1, "omarecorder: nope", "").text, "Cancel download failed: nope")
+eq("actionError model download", actionError(["model", "download", "small.en"], 1, "omarecorder: download already running", "").text, "Model download failed: download already running")
+eq("actionError an unknown action keeps the message plain", actionError(["frobnicate"], 1, "omarecorder: huh", ""), { key: "frobnicate", text: "huh" })
+eq("actionError no args", actionError([], 1, "boom", "").key, "")
+// loadError: a loader (list, models, config...) that fails names itself.
+eq("loadError names the loader", loadError("list", 1, "omarecorder: jq: error\n"), { key: "load:list", text: "Loading the recordings failed: jq: error" })
+eq("loadError unknown loader keeps its name", loadError("widgets", 2, ""), { key: "load:widgets", text: "Loading widgets failed: exit 2" })
+eq("loadError unreadable output", loadError("config", 0, "", true), { key: "load:config", text: "Loading the settings failed: output this build cannot read" })
+// Keys are as fine as the commands: a setting by its name, subcommands apart.
+eq("actionError keys a setting by its name", actionError(["config", "set", "recordingsDir", "/x"], 1, "e", "").key, "config set recordingsDir")
+eq("actionError keys model download and cancel apart",
+   [actionError(["model", "download", "a"], 1, "", "").key, actionError(["model", "cancel", "a"], 1, "", "").key], ["model download", "model cancel"])
+eq("actionError keys record start and stop apart", actionError(["record", "stop"], 1, "", "").key, "record stop")
+eq("errorClears a different setting leaves it",
+   errorClears(actionError(["config", "set", "recordingsDir", "/x"], 1, "", "").key, actionError(["config", "set", "defaultSource", "mic"], 0, "", "").key), false)
+// errorClears: only a success of the action that failed clears its message.
+eq("errorClears same action", errorClears("import", "import"), true)
+eq("errorClears another action leaves it", errorClears("import", "rename"), false)
+eq("errorClears nothing showing", errorClears("", "rename"), false)
+
+// sourceWriteNext: what the Service does when a source write finishes. A newer
+// pick waiting is written next whether this write worked or not (a failed
+// older write used to drop it); otherwise the pick is done, or dropped on failure.
+eq("sourceWriteNext newer pick after a success", sourceWriteNext("both", "system", true), "write")
+eq("sourceWriteNext newer pick after a failure", sourceWriteNext("both", "system", false), "write")
+eq("sourceWriteNext nothing newer, success", sourceWriteNext("system", "system", true), "done")
+eq("sourceWriteNext nothing newer, failure", sourceWriteNext("system", "system", false), "drop")
+
+// exportOpensObsidian mirrors resolve_export_target in the CLI.
+eq("exportOpensObsidian configured vault wins, even over exportDir", exportOpensObsidian({ obsidianVault: "/v", exportDir: "/d" }, 0), true)
+eq("exportOpensObsidian configured vault with no registry", exportOpensObsidian({ obsidianVault: "/v" }, 0), true)
+eq("exportOpensObsidian exportDir beats an autodetected vault", exportOpensObsidian({ exportDir: "/d" }, 2), false)
+eq("exportOpensObsidian autodetected vault", exportOpensObsidian({}, 1), true)
+eq("exportOpensObsidian nothing", exportOpensObsidian({}, 0), false)
+eq("exportOpensObsidian null config", exportOpensObsidian(null, 1), true)
+
+// downloadPercent: a download job's progress for a label; -1 when unknown.
+eq("downloadPercent halfway", downloadPercent({ bytes_done: 50, expected_bytes: 100 }), 50)
+eq("downloadPercent rounds", downloadPercent({ bytes_done: 1, expected_bytes: 3 }), 33)
+eq("downloadPercent never claims 100 before the job ends", downloadPercent({ bytes_done: 120, expected_bytes: 100 }), 99)
+eq("downloadPercent no bytes yet", downloadPercent({ expected_bytes: 100 }), 0)
+eq("downloadPercent unknown size", downloadPercent({ bytes_done: 5 }), -1)
+eq("downloadPercent no job", downloadPercent(null), -1)
+
+// englishOnly: whisper's .en models understand English and nothing else.
+eq("englishOnly base.en", englishOnly("base.en"), true)
+eq("englishOnly large-v3-turbo", englishOnly("large-v3-turbo"), false)
+eq("englishOnly empty", englishOnly(""), false)
+// languageMismatch: an English-only model with any language but English (auto included).
+eq("languageMismatch en model, de", languageMismatch("small.en", "de"), true)
+eq("languageMismatch en model, auto", languageMismatch("small.en", "auto"), true)
+eq("languageMismatch en model, en", languageMismatch("small.en", "en"), false)
+eq("languageMismatch en model, unset language means en", languageMismatch("small.en", ""), false)
+eq("languageMismatch multilingual model, de", languageMismatch("large-v3-turbo", "de"), false)
 
 console.log("state.js: passed " + passed + "  failed " + failed)
 if (failed > 0) process.exit(1)

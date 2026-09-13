@@ -14,6 +14,8 @@ Column {
   readonly property var setup: svc ? svc.setup : ({ ok: true })
   readonly property var dl: svc && setup && setup.defaultModel ? svc.downloadFor(setup.defaultModel) : null
   readonly property var dlModel: svc && setup && setup.defaultModel ? svc.modelByName(setup.defaultModel) : null
+  // The preset's name, as the rest of the UI says it ("Fast"), with the engine name after.
+  readonly property string modelName: dlModel && dlModel.label ? dlModel.label + " · " + dlModel.name : (setup && setup.defaultModel ? setup.defaultModel : "")
 
   visible: setup && setup.ok === false
   width: parent ? parent.width : Style.space(300)
@@ -38,11 +40,24 @@ Column {
   Button {
     visible: !!(root.setup && root.setup.voxtype && root.setup.defaultModel_ok === false && !root.dl)
     width: parent.width
-    text: "Download " + (root.setup ? root.setup.defaultModel : "") + (root.dlModel ? " (" + root.dlModel.size_mb + " MB)" : "")
+    text: "Download " + root.modelName + (root.dlModel ? " (" + root.dlModel.size_mb + " MB)" : "")
     iconText: "󰇚"
     foreground: root.foreground
     fontFamily: root.fontFamily
     onClicked: if (root.svc) root.svc.download(root.setup.defaultModel)
+  }
+
+  // A failed download used to bring the button back with nothing said.
+  Text {
+    visible: !root.dl && !!root.svc && !!root.svc.downloadFailed && !!root.setup
+      && root.svc.downloadFailed.model === root.setup.defaultModel
+    width: parent.width
+    text: "The last download of " + root.modelName + " failed. Check your connection and try again."
+    textFormat: Text.PlainText
+    color: root.urgent
+    wrapMode: Text.Wrap
+    font.family: root.fontFamily
+    font.pixelSize: Style.font.caption
   }
 
   Column {
@@ -50,8 +65,9 @@ Column {
     width: parent.width
     spacing: Style.spacing.xxs
     Text {
+      textFormat: Text.PlainText
       width: parent.width
-      text: "Downloading " + (root.dl ? root.dl.model : "") + "… " + (root.dl && root.dl.expected_bytes ? Math.min(99, Math.round(100 * (root.dl.bytes_done || 0) / root.dl.expected_bytes)) + "%" : "")
+      text: "Downloading " + root.modelName + "… " + (root.dl && root.dl.expected_bytes ? Math.min(99, Math.round(100 * (root.dl.bytes_done || 0) / root.dl.expected_bytes)) + "%" : "")
       color: root.foreground
       font.family: root.fontFamily
       font.pixelSize: Style.font.caption
@@ -75,11 +91,12 @@ Column {
     var miss = s.missing || []
     for (var i = 0; i < miss.length; i++) {
       if (miss[i].tool === "voxtype") continue   // covered above with the Omarchy command
-      out.push(miss[i].tool + " is missing. Install it with: sudo pacman -S " + miss[i].package + (miss[i].required ? "" : " (only needed for " + miss[i]["for"] + ")"))
+      out.push(miss[i].tool + " is missing (install the " + miss[i].package + " package)" + (miss[i].required ? "" : ", only needed for " + miss[i]["for"]))
     }
-    if (!s.mic_ok) out.push("No microphone found. Plug one in or pick 'system' as the source")
+    // Only a problem when the source records a microphone (mic or both).
+    if (!s.mic_ok && s.mic_required !== false) out.push("No microphone found. Plug one in or pick 'system' as the source")
     if (!s.recordingsDir_ok) out.push("Cannot write to " + s.recordingsDir)
-    if (s.voxtype && s.defaultModel_ok === false) out.push("Model " + s.defaultModel + " is not downloaded yet")
+    if (s.voxtype && s.defaultModel_ok === false) out.push("The " + root.modelName + " model is not downloaded yet")
     return out
   }
 }
