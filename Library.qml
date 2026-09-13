@@ -220,7 +220,7 @@ Item {
   // recording's own folder), and only then is there a window to make way for.
   function exportSelected() {
     if (!svc || !selected) return
-    var toVault = svc.vaults.length > 0 && !(svc.config && svc.config.exportDir)
+    var toVault = State.exportOpensObsidian(svc.config, svc.vaults.length)
     svc.exportToObsidian(selected.id, showRaw, function(code) { if (code === 0) { sentFlash.restart(); if (toVault) root.close() } })
   }
   // Ctrl+M walks the preset models (the ones with a label) in catalog order.

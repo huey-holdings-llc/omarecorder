@@ -174,6 +174,17 @@ function importingText(paths) {
   return "Importing " + name + (paths.length > 1 ? " and " + (paths.length - 1) + " more" : "") + "…"
 }
 
+// Whether `export` will open Obsidian, by the CLI's own order: a configured
+// vault first (it opens even if the registry list has not loaded), then a
+// configured exportDir (never opens), then the registry's first vault, else
+// the note sits next to the recording. The Library closes only when a window
+// is about to open under it.
+function exportOpensObsidian(config, vaultCount) {
+  if (config && config.obsidianVault) return true
+  if (config && config.exportDir) return false
+  return (vaultCount || 0) > 0
+}
+
 // After a source write finishes: "write" the newer pick if one is waiting
 // (whether this write worked or not: a failed older write used to drop it),
 // else "done" when it was saved or "drop" when it failed.

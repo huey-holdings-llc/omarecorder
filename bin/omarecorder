@@ -1089,15 +1089,18 @@ cmd_import() {
   # Converted (or copied) under a temporary name and renamed at the end: the
   # crash sweep reads a folder holding only audio.wav as a dead take, and a
   # long conversion could outlast its five-minute guard.
+  # The source outlives every step that can fail: it goes only once the take
+  # has its audio.wav and meta.json (a --move used to remove it before the
+  # part was promoted, and a failure in between lost the recording).
   local part="$dir/.import.part.wav"
   if [[ "$probe" == "pcm_s16le,$RATE,1" ]]; then
-    if (( move )); then mv "$src" "$part"; else cp "$src" "$part"; fi
+    cp -- "$src" "$part" || { rm -rf "$dir"; die "could not copy $src"; }
   else
     ffmpeg -v error -y -i "$src" -ar "$RATE" -ac 1 -c:a pcm_s16le "$part" || { rm -rf "$dir"; die "ffmpeg failed to convert $src"; }
-    (( move )) && rm -f "$src"
   fi
-  mv -f "$part" "$dir/audio.wav"
+  mv -f -- "$part" "$dir/audio.wav" || { rm -rf "$dir"; die "could not place the converted audio in $dir"; }
   write_initial_meta "$dir" "$id" "$title" "import" "$(date -r "$dir/audio.wav" +%FT%T%z)"
+  (( move )) && rm -f -- "$src"
   finalize_audio "$dir"; analyze_levels "$dir"; bump_state
   log "import $src -> $dir"
   echo "$id"

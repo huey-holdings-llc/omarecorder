@@ -286,6 +286,18 @@ eq "meta title" "$(jq -r .title "$D1/meta.json")" "Tone Test"
 eq "meta source" "$(jq -r .source "$D1/meta.json")" "import"
 ID2=$($CLI import "$TMP/speech.wav"); eq "second import id" "$ID2" "2026-01-03_030405"
 eq "title defaults to filename" "$(jq -r .title "$OMARECORDER_DIR/$ID2 speech/meta.json")" "speech"
+# --move removes the source only once the take is complete: with the final
+# step made to fail, the source is still there and nothing half-made is left.
+cp "$TMP/speech.wav" "$TMP/movable.wav"; touch -d "2026-01-04 03:04:05" "$TMP/movable.wav"
+BADMV="$TMP/badmv"; mkdir -p "$BADMV"
+printf '#!/bin/bash\nfor a in "$@"; do :; done; [[ "$a" == */audio.wav ]] && exit 1\nexec /usr/bin/mv "$@"\n' > "$BADMV/mv"; chmod +x "$BADMV/mv"
+fails "import fails when the converted audio cannot be placed" env PATH="$BADMV:$PATH" "$CLI" import "$TMP/movable.wav" --move --title "Movable"
+check "and the --move source is untouched" test -s "$TMP/movable.wav"
+check "and no half-made folder is left" bash -c "! ls -d '$OMARECORDER_DIR'/*Movable >/dev/null 2>&1"
+ID3=$("$CLI" import "$TMP/movable.wav" --move --title "Movable")
+check "a completed --move removes the source" bash -c "! test -e '$TMP/movable.wav'"
+check "and the take has its audio" test -s "$OMARECORDER_DIR/$ID3 Movable/audio.wav"
+"$CLI" delete "$ID3" --yes >/dev/null
 
 }
 

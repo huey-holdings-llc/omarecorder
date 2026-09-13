@@ -172,6 +172,14 @@ eq("sourceWriteNext newer pick after a failure", sourceWriteNext("both", "system
 eq("sourceWriteNext nothing newer, success", sourceWriteNext("system", "system", true), "done")
 eq("sourceWriteNext nothing newer, failure", sourceWriteNext("system", "system", false), "drop")
 
+// exportOpensObsidian mirrors resolve_export_target in the CLI.
+eq("exportOpensObsidian configured vault wins, even over exportDir", exportOpensObsidian({ obsidianVault: "/v", exportDir: "/d" }, 0), true)
+eq("exportOpensObsidian configured vault with no registry", exportOpensObsidian({ obsidianVault: "/v" }, 0), true)
+eq("exportOpensObsidian exportDir beats an autodetected vault", exportOpensObsidian({ exportDir: "/d" }, 2), false)
+eq("exportOpensObsidian autodetected vault", exportOpensObsidian({}, 1), true)
+eq("exportOpensObsidian nothing", exportOpensObsidian({}, 0), false)
+eq("exportOpensObsidian null config", exportOpensObsidian(null, 1), true)
+
 // downloadPercent: a download job's progress for a label; -1 when unknown.
 eq("downloadPercent halfway", downloadPercent({ bytes_done: 50, expected_bytes: 100 }), 50)
 eq("downloadPercent rounds", downloadPercent({ bytes_done: 1, expected_bytes: 3 }), 33)
