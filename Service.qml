@@ -228,11 +228,11 @@ QtObject {
     var v = pendingSource
     run(["config", "set", "defaultSource", v], function(code) {
       root._sourceWriting = false
-      if (code !== 0) { root.pendingSource = ""; root.refreshConfig(); return }
-      if (root.pendingSource !== v) { root._writeSource(); return }
+      var next = State.sourceWriteNext(root.pendingSource, v, code === 0)
+      if (next === "write") { root._writeSource(); return }
       // Saved, so it is the config now. Waiting for a reload to match instead
       // could pin the pick forever if a change made elsewhere landed between.
-      root.config = Object.assign({}, root.config, { defaultSource: v })
+      if (next === "done") root.config = Object.assign({}, root.config, { defaultSource: v })
       root.pendingSource = ""
       root.refreshConfig()
     })

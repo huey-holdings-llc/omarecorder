@@ -166,6 +166,14 @@ function loadError(what, code, errText, unreadable) {
 }
 function errorClears(errorKey, successKey) { return !!errorKey && errorKey === successKey }
 
+// After a source write finishes: "write" the newer pick if one is waiting
+// (whether this write worked or not: a failed older write used to drop it),
+// else "done" when it was saved or "drop" when it failed.
+function sourceWriteNext(pending, written, ok) {
+  if (pending !== written) return "write"
+  return ok ? "done" : "drop"
+}
+
 // A download job's progress for a label, capped at 99 until the job is gone
 // (the file can outgrow the catalog size); -1 when there is nothing to show.
 function downloadPercent(job) {

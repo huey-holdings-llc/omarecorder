@@ -147,6 +147,14 @@ eq("errorClears same action", errorClears("import", "import"), true)
 eq("errorClears another action leaves it", errorClears("import", "rename"), false)
 eq("errorClears nothing showing", errorClears("", "rename"), false)
 
+// sourceWriteNext: what the Service does when a source write finishes. A newer
+// pick waiting is written next whether this write worked or not (a failed
+// older write used to drop it); otherwise the pick is done, or dropped on failure.
+eq("sourceWriteNext newer pick after a success", sourceWriteNext("both", "system", true), "write")
+eq("sourceWriteNext newer pick after a failure", sourceWriteNext("both", "system", false), "write")
+eq("sourceWriteNext nothing newer, success", sourceWriteNext("system", "system", true), "done")
+eq("sourceWriteNext nothing newer, failure", sourceWriteNext("system", "system", false), "drop")
+
 // downloadPercent: a download job's progress for a label; -1 when unknown.
 eq("downloadPercent halfway", downloadPercent({ bytes_done: 50, expected_bytes: 100 }), 50)
 eq("downloadPercent rounds", downloadPercent({ bytes_done: 1, expected_bytes: 3 }), 33)
