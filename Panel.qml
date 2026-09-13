@@ -266,15 +266,19 @@ Panel {
           }
 
           Dropdown {
+            id: sourceDropdown
             visible: root.ready && !root.recording
             width: parent.width
             label: "Source"
-            value: root.ready ? root.svc.defaultSource : "mic"
             // Say what each option captures: a mic on speakers hears the computer too.
             options: root.sources
             foreground: root.foreground
             fontFamily: root.fontFamily
             onChanged: function(v) { root.svc.setConfig("defaultSource", v) }
+            // The kit's Dropdown assigns its own value on a pick, which cut a
+            // plain `value:` binding: after a pick, `c` changed the source but
+            // not what this showed.
+            Binding { target: sourceDropdown; property: "value"; value: root.ready ? root.svc.defaultSource : "mic" }
           }
 
           Button {
@@ -435,14 +439,15 @@ Panel {
         anchors.right: parent.right
         anchors.bottom: parent.bottom
         horizontalAlignment: Text.AlignHCenter
-        // Wraps to a second centered line when the panel is narrow; the
-        // non-breaking spaces keep each key with its word, so a wrap can
-        // only happen at a separator, never between "d" and "dictionary".
+        // Wraps to a second centered line when the panel is narrow. The
+        // non-breaking spaces keep each key with its word and each dot with
+        // the item before it, so a wrap only happens after a dot: never
+        // between "d" and "dictionary", and no line starts with a dot.
         wrapMode: Text.Wrap
-        text: root.settingsOpen ? "↑↓ move · Enter change · d dictionary · s settings · Esc close"
-              : "r record · " + (root.ready && root.svc.resumable && !root.recording ? "u resume · " : "")
-              + (root.ready && !root.recording ? "c source · " : "") + "l library · i import · s settings · d dictionary · "
-              + (root.ready && root.svc.lastError.length > 0 ? "x dismiss · " : "") + "Esc close"
+        text: root.settingsOpen ? "↑↓ move · Enter change · d dictionary · s settings · Esc close"
+              : "r record · " + (root.ready && root.svc.resumable && !root.recording ? "u resume · " : "")
+              + (root.ready && !root.recording ? "c source · " : "") + "l library · i import · s settings · d dictionary · "
+              + (root.ready && root.svc.lastError.length > 0 ? "x dismiss · " : "") + "Esc close"
         color: root.dim
         font.family: root.fontFamily
         font.pixelSize: Style.font.caption
