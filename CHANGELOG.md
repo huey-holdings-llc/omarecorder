@@ -65,7 +65,7 @@ All notable changes to this project are documented here. Format follows
 - The Library's footer lists only the keys that are not Ctrl keys, ends with
   "hold Ctrl for shortcuts", and is measured item by item: on a narrow screen
   it drops its least useful keys first instead of cutting off mid-line.
-- The setup card names the package to install, `(pacman -S <package>)`, the
+- The setup card names the package to install ("install the X package"), the
   way the CLI's own hints do, instead of printing a `sudo` command.
 - The README's development section says where to put the source instead of
   spelling out a clone command.
@@ -81,7 +81,6 @@ All notable changes to this project are documented here. Format follows
   what the README's commands need; Remove lists what stays behind; the privacy
   notes (and SECURITY.md) say exactly what gets deleted, including the source
   of an `import --move`.
-
 - The Library's copy and Send to Obsidian buttons confirm with a tick in the
   icon's place. The "Copied" and "Sent" labels pushed the next button sideways.
 - While a title or note is being typed, the footer says how to finish
