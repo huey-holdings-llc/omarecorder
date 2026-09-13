@@ -3,7 +3,7 @@
 All notable changes to this project are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow SemVer.
 
-## [Unreleased]
+## [1.5.0] - 2026-09-13
 
 ### Added
 - The Obsidian export carries the recording's note as a `note:` property; the
