@@ -42,7 +42,34 @@ All notable changes to this project are documented here. Format follows
   notes (and SECURITY.md) say exactly what gets deleted, including the source
   of an `import --move`.
 
+- The Library's copy and Send to Obsidian buttons confirm with a tick in the
+  icon's place. The "Copied" and "Sent" labels pushed the next button sideways.
+- While a title or note is being typed, the footer says how to finish
+  (`Enter` save, `Esc` cancel). The caption that appeared above the meta line
+  instead, shifting everything below it, is gone.
+- A recording that is not transcribed yet shows an empty circle in the lists.
+  It was a microphone, which read as "recording".
+- The Library's meta line puts warnings (clipped, partial transcript) right
+  after the length, so they are no longer the first thing cut off.
+- A saved note shows in full colour instead of the placeholder's dim grey.
+- The setup card names the default model the way the rest of the UI does
+  ("Fast · base.en").
+- An empty Library names the folder it is looking in, so a changed recordings
+  folder does not look like lost recordings.
+- The popup's note for a switched-off Recent list names the setting to change.
+- The README opens with a quick start.
+- CI pins how many CLI test blocks may skip in its container, as it already
+  did for lint, so a block that goes quiet fails the run.
+
 ### Fixed
+- Renaming a recording to a title whose folder already existed moved the take
+  inside that folder and then failed, leaving it hidden. Rename now refuses.
+- `transcribe --language` took any value. It gets the same check as
+  `config set language`.
+- A title with `&` or `<` in it could break the notification it appeared in.
+- The tidy transcript was rewritten in place, so anything reading it at that
+  moment could get half a file. It is now written beside it and renamed in.
+- The waveform's start time sat on top of the playhead.
 - A model download that failed was only a desktop notification, and the
   Library's button quietly went back to "Download". The Library now says so
   beside the button until the next try.

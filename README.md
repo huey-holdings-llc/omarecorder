@@ -7,6 +7,18 @@ recording, and a note in Obsidian when you want one. Nothing leaves your machine
 
 ![OmaRecorder](preview.png)
 
+## Quick start
+
+1. Install it: `omarchy plugin add https://github.com/huey-holdings-llc/omarecorder --enable`
+2. Click the OmaRecorder icon in the bar. If anything is missing, a "Setup
+   needed" card says what, and downloads a transcription model with one click.
+3. Press `r` (or Start recording) to record, and `r` again to stop.
+4. Press `l` for the Library, pick the recording, and press `Enter` to
+   transcribe it.
+
+The rest of this README covers each step in detail: [Install](#install),
+[Use](#use), and [Privacy and security](#privacy-and-security).
+
 ## About this project
 
 OmaRecorder was built with AI assistance (Claude Code) by a hobbyist, not a
