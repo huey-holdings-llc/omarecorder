@@ -33,7 +33,7 @@ work. OmaRecorder exists because nothing like it fit an Omarchy desktop.
 
 ## Privacy and security
 
-Local first is the rule, not a feature. Everything in 1.0 runs on your machine:
+Local first is the rule, not a feature. Everything runs on your machine:
 
 * Audio and transcripts stay on disk. Transcription runs on your CPU or GPU via
   voxtype. The only network activity is voxtype's model download, and only when
@@ -48,9 +48,12 @@ Local first is the rule, not a feature. Everything in 1.0 runs on your machine:
   inside a shell string, a `jq` filter or a unit body. whisper's stderr (which
   can echo decoded text) goes to a per-job file, not the shared log.
 * It does not edit your Hyprland, Omarchy or Obsidian configuration (Obsidian's
-  `obsidian.json` and `app.json` are only read), does not delete anything
-  outside a recording folder, never `rm -rf`s a recording without
-  `--permanent`, runs no daemon, polls nothing, and uploads nothing.
+  `obsidian.json` and `app.json` are only read), runs no daemon, polls nothing,
+  and uploads nothing.
+* Outside a recording folder it deletes only its own state and runtime files,
+  and the source file of an `import --move` once the recording has it. A whole
+  recording folder goes with `rm -rf` in two cases only: `delete --permanent`,
+  and the folder a failed start or import has just made.
 
 **Local only, by design.** OmaRecorder does everything with tools that ship
 with Omarchy and sends nothing anywhere. That includes the transcript
@@ -141,8 +144,9 @@ omarchy plugin add https://github.com/huey-holdings-llc/omarecorder --enable
 Pick a bar section when asked, or later with
 `omarchy bar move io.github.huey-holdings-llc.omarecorder --section right`.
 
-Optional, and only needed for keybindings, the menu and scripts. The widget and
-the Library call the CLI by its own path and work without this:
+Needed for the `omarecorder` commands in this README, and for keybindings, the
+menu and scripts. The widget and the Library call the CLI by its own path and
+work without it:
 
 ```bash
 ln -s ~/.config/omarchy/plugins/io.github.huey-holdings-llc.omarecorder/bin/omarecorder ~/.local/bin/omarecorder
@@ -156,7 +160,11 @@ the command that fixes it, and downloads the default model with one click.
 
 ```bash
 omarchy plugin update io.github.huey-holdings-llc.omarecorder
+omarchy-restart-shell
 ```
+
+Restart the shell after an update: until it restarts it keeps running the old
+version's QML from its cache.
 
 ## Remove
 
@@ -166,7 +174,14 @@ rm -f ~/.local/bin/omarecorder   # if you made the symlink
 ```
 
 Your recordings in `~/Recordings` and your config in `~/.config/omarecorder`
-are left untouched.
+are left untouched, and so are:
+
+* the log, measured model speeds and any saved engine errors, in
+  `~/.local/state/omarecorder`;
+* the whisper models, in `~/.local/share/voxtype/models`. voxtype's own
+  dictation uses the same folder, so keep any model it still needs.
+
+Delete whichever of these you no longer want.
 
 ## Use
 
@@ -232,11 +247,13 @@ are left untouched.
   note <id> <text>` (empty text clears it). It is stored in the take's
   `meta.json` and travels into the Obsidian note on export. `Ctrl+N` puts the
   cursor in the box (`Enter` saves, `Esc` cancels).
-* **When something fails**: the popup and the Library show the error in red
-  above the content, with a × to dismiss it (`x` in the popup, `Esc` in the
-  Library). A read that fails (the recordings
-  list, the model catalogue) names itself there rather than leaving a surface
-  looking merely empty.
+* **When something fails**: the error shows in red, above the content in the
+  popup and above the list in the Library, and names what failed ("Import
+  failed: file not found: ..."). A × dismisses it (`x` in the popup, `Esc` in
+  the Library); otherwise it stays until that same action succeeds. A read
+  that fails (the recordings list, the model catalogue) names itself there
+  rather than leaving a surface looking merely empty, and a model download that
+  fails is also said beside the Library's button until the next try.
 * **Notifications**: "Recording saved" is clickable and transcribes with your
   default model. "Transcript ready" is clickable and opens the text. A take
   whose recorder died (power loss, shell killed) is repaired and reported as
@@ -251,7 +268,9 @@ are left untouched.
   microphones commonly ship far too hot. 30 to 40 percent is a normal starting
   point, and whisper copes with quiet audio much better than with distorted audio.
 * **Transcribing**: Fast, Balanced or Accurate. A preset you do not have yet
-  shows "N MB download" and fetches in the background with a progress bar. Takes
+  shows its size on its chip (`1.6 GB ↓`) and fetches in the background, with
+  the percentage on the Library's button. Fast and Balanced understand English
+  only (see Models). Takes
   over 30 minutes (`OMARECORDER_CHUNK_S`, default 1800) are cut into equal
   pieces with the seams snapped to the nearest silence, then transcribed one
   after another inside one `systemd-run --user` unit. The Library shows "2/4"
@@ -383,6 +402,11 @@ run `voxtype setup --download` in a `systemd-run --user` unit. Estimates start
 from a default speed and are replaced by what your machine measured the first
 time each model transcribes a take of 60 seconds or more.
 
+Fast and Balanced are English-only models (the `.en` in their names). For any
+other language, or with `language` set to `auto`, use Accurate. The Library
+says so when the language setting and the chosen preset disagree, and
+`transcribe` prints a warning.
+
 ### CLI
 
 ```
@@ -412,8 +436,9 @@ omarecorder setup check [--json] | library | status [--json] | version
 ```
 
 `delete` moves the folder to the trash with `gio` and refuses if it cannot, and
-says `trashed <id>` when it did; `--permanent` is the only path to `rm -rf`, and
-says `deleted <id>`. Without a terminal it needs `--yes`. `setup check --json`
+says `trashed <id>` when it did; `--permanent` is the only command that
+`rm -rf`s a recording, and says `deleted <id>` (the only other `rm -rf` removes
+the folder a failed start or import has just made). Without a terminal it needs `--yes`. `setup check --json`
 returns `tools[]` and `missing[]` with the package for each tool, and exits
 non-zero until everything needed is there. `version` is read from
 `manifest.json`.

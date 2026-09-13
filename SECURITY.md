@@ -26,7 +26,9 @@ other work.
 Anything that lets a recording, transcript or note be read by another user or
 leave the machine; anything that executes code from data (a file name, a
 recording title, transcript text, an imported file); anything that deletes or
-overwrites files outside a recording folder; anything that weakens the file
+overwrites files outside a recording folder, other than the plugin's own config,
+state and runtime files and the source of an `import --move` you asked for; anything
+that weakens the file
 permissions the README promises. The threat model and the promises themselves
 are in the README under "Privacy and security".
 

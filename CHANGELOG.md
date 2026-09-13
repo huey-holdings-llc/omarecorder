@@ -29,8 +29,36 @@ All notable changes to this project are documented here. Format follows
   way the CLI's own hints do, instead of printing a `sudo` command.
 - The README's development section says where to put the source instead of
   spelling out a clone command.
+- An error names the action that failed ("Import failed: ...") without the
+  CLI's `omarecorder:` prefix, sits above the Library's list instead of under
+  the selected take, and stays until it is dismissed or that same action
+  succeeds. Any success used to clear it, often before it could be read.
+- While a model downloads, the Library's button shows the percentage.
+- Fast and Balanced say they understand English only: in the chip tooltip, in
+  a note in the Library when the language setting is not English, as a warning
+  from `transcribe`, and in the README.
+- README: Update says to restart the shell; the CLI symlink is described as
+  what the README's commands need; Remove lists what stays behind; the privacy
+  notes (and SECURITY.md) say exactly what gets deleted, including the source
+  of an `import --move`.
 
 ### Fixed
+- A model download that failed was only a desktop notification, and the
+  Library's button quietly went back to "Download". The Library now says so
+  beside the button until the next try.
+- A second click on Transcribe (a double click, or one because nothing seemed
+  to happen) landed on Cancel and cancelled the job it had just started.
+  Cancel ignores clicks for its first second.
+- `c` and then `r` in quick succession recorded with the previous source, and
+  two quick presses of `c` could save the wrong one. After a pick from the
+  popup's Source dropdown, `c` changed the source but the dropdown kept
+  showing the old one.
+- A quick second click on Transcribe, before the job had started, ran a second
+  transcription that failed as already running.
+- The popup's key legend could wrap with a dot at the start of its second line.
+- After a shell restart the Library's model chips could show Fast while
+  Transcribe used the configured default, until another take was selected.
+  The chips now always show the model Transcribe will use.
 - A background refresh (a transcription piece finishing, a download ticking,
   any CLI command) wiped a title or note you were in the middle of typing in
   the Library.
