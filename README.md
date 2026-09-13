@@ -12,7 +12,9 @@ recording, and a note in Obsidian when you want one. Nothing leaves your machine
 1. Install it: `omarchy plugin add https://github.com/huey-holdings-llc/omarecorder --enable`
 2. Click the OmaRecorder icon in the bar. If anything is missing, a "Setup
    needed" card says what, and downloads a transcription model with one click.
-3. Press `r` (or Start recording) to record, and `r` again to stop.
+3. Press `r` (or Start recording) to record, and `r` again to stop. For a
+   call, press `c` first until the source is Mic + system audio, and wear
+   headphones; [Which source to pick](#which-source-to-pick) says why.
 4. Press `l` for the Library, pick the recording, and press `Enter` to
    transcribe it.
 
@@ -165,7 +167,8 @@ ln -s ~/.config/omarchy/plugins/io.github.huey-holdings-llc.omarecorder/bin/omar
 ```
 
 First run: open the popup. If a requirement is missing (no whisper model yet, a
-tool not installed, no microphone), a "Setup needed" card lists each one with
+tool not installed, no microphone while the source records one), a "Setup
+needed" card lists each one with
 the command that fixes it, and downloads the default model with one click.
 
 ## Update
@@ -225,7 +228,7 @@ Delete whichever of these you no longer want.
   recorder dies mid-resume, the original take is untouched and the segment is
   joined by the normal crash recovery on the next command. This is
   deliberately not general editing; there is no appending to older takes.
-* **Library keys**: type to search titles and transcript text (transcript
+* **Library keys**: type to search titles, notes and transcript text (transcript
   matches join the list a beat later; `Ctrl+U` clears the search, as in every
   Omarchy panel). `Up`/`Down`, `PgUp`/`PgDn`, `Home`/`End` select. `Enter`
   opens the transcript, or transcribes if there is none (`Shift+Enter`
@@ -333,7 +336,8 @@ Delete whichever of these you no longer want.
   afterwards.
 * **Import**: press `i` in the popup and type a path (`~/Downloads/meeting.m4a`),
   or run `omarecorder import <file>`. Anything ffmpeg reads is converted to
-  16 kHz mono, and the id comes from the file's modification time. There is
+  16 kHz mono, and the id comes from the file's modification time. The popup
+  shows "Importing meeting.m4a…" until it is done. There is
   deliberately no graphical file picker: a QtQuick FileDialog crashes Quickshell
   on Omarchy 4.
 

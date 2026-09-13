@@ -63,8 +63,10 @@ to them is easy to merge; one that breaks them will get a conversation first.
   (labels) and `ui/state.js` (re-list, filter and selection decisions) has node
   tests in `tests/format.test.js` and `tests/state.test.js`; `tests/lint.sh`
   runs them, and qmllint, when node and the shell's QML modules are on the
-  machine. Logic that can be a pure function belongs in those files, not in
-  QML, so it can be tested.
+  machine. qmllint cannot see the shell's nested tokens (`Style.spacing.*`,
+  `Style.font.*`, `Style.bar.*`), so lint also checks each one the plugin uses
+  against the shell's `Style.qml`. Logic that can be a pure function belongs in
+  those files, not in QML, so it can be tested.
 * **The knobs the tests use.** `OMARECORDER_SYNC=1` runs jobs inline instead of
   under `systemd-run`, `OMARECORDER_RUN_DIR` moves the runtime state out of
   `$XDG_RUNTIME_DIR` so the real user manager stays reachable, and
@@ -74,8 +76,10 @@ to them is easy to merge; one that breaks them will get a conversation first.
   README on purpose, and not part of the CLI's contract.
 * **A skipped check is not a passing one.** `tests/lint.sh` counts what it
   could not run, and `LINT_EXPECT_SKIPS` fails the run when that count moves.
-  CI sets it to 2 (qmllint and omarchy-plugin-validate, neither of which exists
-  in the container). If you add a check that can skip, adjust the number in
+  CI sets it to 3 (qmllint, the kit-token check and omarchy-plugin-validate,
+  none of which has what it needs in the container). The CLI suite does the
+  same with `OMARECORDER_TEST_EXPECT_SKIPS` (3 in CI: no microphone, voxtype or
+  systemd there). If you add a check that can skip, adjust the number in
   `.github/workflows/ci.yml` in the same pull request.
 * **Coverage is a local, occasional check, never a gate.** `pacman -S kcov`,
   then `kcov --include-path=$PWD/bin coverage/ tests/cli.test.sh` writes an

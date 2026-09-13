@@ -6,6 +6,14 @@ All notable changes to this project are documented here. Format follows
 ## [Unreleased]
 
 ### Added
+- Notes are searchable: the Library's search matches a recording's note as
+  well as its title, date and transcript.
+- While an import runs, the popup says so ("Importing meeting.m4a…"). A long
+  file converts for a while, and nothing on screen said it was working.
+- Lint checks that every nested Omarchy kit token the plugin uses
+  (`Style.spacing.*`, `Style.font.*`, `Style.bar.*`) still exists in the
+  shell. qmllint cannot see those, so a renamed one would only have failed at
+  runtime. CI has no shell and skips it, as it skips qmllint.
 - Every Library action has a Ctrl key, so the F-row is never needed: `Ctrl+N`
   note, `Ctrl+R` rename, `Ctrl+T` trim, `Ctrl+Shift+T` restore the original,
   `Ctrl+D` tidy or raw, `Ctrl+P` previous transcript, `Ctrl+E` open the folder
@@ -62,6 +70,14 @@ All notable changes to this project are documented here. Format follows
   did for lint, so a block that goes quiet fails the run.
 
 ### Fixed
+- A machine with no microphone stayed on "Setup needed" even with System audio
+  as the source. A microphone is now required only when the source records
+  one, and `setup check --json` says whether it is (`mic_required`).
+- On a long recording the Library's model chips were cut off ("Accurat") by
+  the wider time readout. The main button now drops to its icon first, with
+  its label in the tooltip.
+- On a long list, a refresh (a note saved, a transcription finishing) scrolled
+  the Library back to the top and left the selected recording out of sight.
 - Renaming a recording to a title whose folder already existed moved the take
   inside that folder and then failed, leaving it hidden. Rename now refuses.
 - `transcribe --language` took any value. It gets the same check as
