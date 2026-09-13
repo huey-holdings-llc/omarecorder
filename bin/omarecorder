@@ -2262,12 +2262,16 @@ cmd_setup() {
   mkdir -p "$ROOT" 2>/dev/null && [[ -w "$ROOT" ]] && root_ok=true
   for m in $(jq -r '.[].name' <<<"$MODEL_CATALOG"); do model_installed "$m" && installed=$(jq -c --arg m "$m" '. + [$m]' <<<"$installed"); done
   local default_ok=false; model_installed "$(cfg defaultModel)" && default_ok=true
-  local ok=false; [[ $required_ok == true && -n "$mic" && $root_ok == true && $default_ok == true ]] && ok=true
+  # A microphone is required only when the source records one (mic or both):
+  # a machine without one records system audio fine, and used to stay stuck
+  # on "Setup needed" forever.
+  local mic_required=true; [[ $(cfg defaultSource) == "system" ]] && mic_required=false
+  local ok=false; [[ $required_ok == true && ( -n "$mic" || $mic_required == false ) && $root_ok == true && $default_ok == true ]] && ok=true
   local out; out=$(jq -cn --argjson ok "$ok" --argjson v "$voxtype_ok" --arg b "$backend" --argjson tools "$checked" --argjson missing "$missing" \
-    --arg mic "$mic" --arg root "$ROOT" --argjson r "$root_ok" --argjson inst "$installed" --arg dm "$(cfg defaultModel)" --argjson dmok "$default_ok" --arg ver "$VERSION" \
+    --arg mic "$mic" --argjson mr "$mic_required" --arg root "$ROOT" --argjson r "$root_ok" --argjson inst "$installed" --arg dm "$(cfg defaultModel)" --argjson dmok "$default_ok" --arg ver "$VERSION" \
     '{ok:$ok, version:$ver, voxtype:$v, backend:$b, tools:$tools, missing:$missing,
       ffmpeg:($tools | any(.tool=="ffmpeg" and .present)), pw_record:($tools | any(.tool=="pw-record" and .present)),
-      mic:$mic, mic_ok:($mic != ""), recordingsDir:$root, recordingsDir_ok:$r,
+      mic:$mic, mic_ok:($mic != ""), mic_required:$mr, recordingsDir:$root, recordingsDir_ok:$r,
       installed_models:$inst, defaultModel:$dm, defaultModel_ok:$dmok}')
   if (( as_json )); then jq . <<<"$out"; else
     # Scalars as a key/value block, then the tool table: `to_entries` alone

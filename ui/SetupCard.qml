@@ -79,7 +79,8 @@ Column {
       if (miss[i].tool === "voxtype") continue   // covered above with the Omarchy command
       out.push(miss[i].tool + " is missing (pacman -S " + miss[i].package + ")" + (miss[i].required ? "" : ", only needed for " + miss[i]["for"]))
     }
-    if (!s.mic_ok) out.push("No microphone found. Plug one in or pick 'system' as the source")
+    // Only a problem when the source records a microphone (mic or both).
+    if (!s.mic_ok && s.mic_required !== false) out.push("No microphone found. Plug one in or pick 'system' as the source")
     if (!s.recordingsDir_ok) out.push("Cannot write to " + s.recordingsDir)
     if (s.voxtype && s.defaultModel_ok === false) out.push("The " + root.modelName + " model is not downloaded yet")
     return out

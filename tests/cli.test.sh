@@ -1456,6 +1456,22 @@ check "setup check lists tools" bash -c "\"$CLI\" setup check --json | jq -e '.t
 mkdir -p "$TMP/nowl"; ln -s /usr/bin/* "$TMP/nowl/" 2>/dev/null; rm -f "$TMP/nowl/wl-copy"
 ( PATH="$TMP/nowl" "$CLI" setup check --json > "$TMP/setup.json" 2>/dev/null || true )
 eq "missing wl-copy reported with package" "$(jq -r '.missing[] | select(.tool=="wl-copy") | .package' "$TMP/setup.json")" "wl-clipboard"
+# A machine with no microphone at all (a desktop without one) passes setup when
+# the source does not use one; it used to stay "Setup needed" forever.
+NOMIC="$TMP/nomic"; mkdir -p "$NOMIC"; printf '#!/bin/bash\nexit 0\n' > "$NOMIC/pactl"; chmod +x "$NOMIC/pactl"
+cp "$FAKEAUDIO/pw-record" "$NOMIC/pw-record"
+src0=$("$CLI" config get defaultSource)
+"$CLI" config set defaultSource system >/dev/null
+( PATH="$NOMIC:$STUBMODE:$PATH" VOXTYPE_MODELS_DIR="$MODELSOK" "$CLI" setup check --json > "$TMP/setup-nomic.json" 2>/dev/null || true )
+eq "no microphone, system source: the mic is not required" "$(jq -r .mic_required "$TMP/setup-nomic.json")" "false"
+eq "and setup passes" "$(jq -r '.ok' "$TMP/setup-nomic.json") $(jq -c '[.missing[].tool]' "$TMP/setup-nomic.json")" "true []"
+"$CLI" config set defaultSource mic >/dev/null
+( PATH="$NOMIC:$STUBMODE:$PATH" VOXTYPE_MODELS_DIR="$MODELSOK" "$CLI" setup check --json > "$TMP/setup-nomic.json" 2>/dev/null || true )
+eq "no microphone, mic source: required, and setup fails" "$(jq -r '"\(.mic_required) \(.ok)"' "$TMP/setup-nomic.json")" "true false"
+"$CLI" config set defaultSource both >/dev/null
+( PATH="$NOMIC:$STUBMODE:$PATH" VOXTYPE_MODELS_DIR="$MODELSOK" "$CLI" setup check --json > "$TMP/setup-nomic.json" 2>/dev/null || true )
+eq "no microphone, both: required too" "$(jq -r .mic_required "$TMP/setup-nomic.json")" "true"
+"$CLI" config set defaultSource "$src0" >/dev/null
 }
 
 t_stopconfirm() {
