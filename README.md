@@ -642,6 +642,12 @@ matters to you, a comment or a PR moves it up.
 
 Not planned: bundling `whisper-cpp` or `sherpa-onnx`. voxtype is the engine.
 
+## Say thanks
+
+OmaRecorder is free and always will be. If it saved you some time and you feel
+like it, you can [buy us a coffee](https://buymeacoffee.com/hueyholdings).
+No pressure, no perks, no tiers.
+
 ## License
 
 MIT, see `LICENSE`.
