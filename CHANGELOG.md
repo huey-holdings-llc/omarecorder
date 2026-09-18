@@ -3,6 +3,14 @@
 All notable changes to this project are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow SemVer.
 
+## [Unreleased]
+
+### Fixed
+- GitHub shows the license as MIT instead of "Other". The dependency list at
+  the bottom of `LICENSE` defeated its detector; it moved to `THIRD-PARTY.md`,
+  and lint fails if anything is appended to `LICENSE` again. The license
+  itself did not change.
+
 ## [1.5.0] - 2026-09-13
 
 ### Added

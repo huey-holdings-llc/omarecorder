@@ -148,6 +148,7 @@ grep -q '## Remove' README.md && ok "README has a Remove section" || bad "README
 grep -q '## Update' README.md && ok "README has an Update section" || bad "README lacks Update"
 grep -q 'omarchy plugin add' README.md && ok "README has the install command" || bad "README lacks install command"
 [[ -f LICENSE && -f preview.png ]] && ok "LICENSE and preview.png present" || bad "LICENSE/preview.png"
+[[ "$(tail -n1 LICENSE)" == "SOFTWARE." && -f THIRD-PARTY.md ]] && ok "LICENSE is the bare MIT text, so GitHub reads it as MIT" || bad "LICENSE has text after the MIT body; dependency notes belong in THIRD-PARTY.md"
 
 echo
 if [[ -n "${LINT_EXPECT_SKIPS:-}" && "$skips" != "$LINT_EXPECT_SKIPS" ]]; then
