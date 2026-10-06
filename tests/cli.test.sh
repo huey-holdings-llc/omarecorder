@@ -93,6 +93,8 @@ fi
 # Level fixtures: a quiet tone and the same tone driven 20 dB into the rails.
 ffmpeg -v error -y -f lavfi -i "sine=frequency=440:duration=3" -af volume=-12dB -ar 16000 -ac 1 "$TMP/quiet.wav"
 ffmpeg -v error -y -f lavfi -i "sine=frequency=440:duration=3" -af volume=20dB -ar 16000 -ac 1 "$TMP/hot.wav"
+# Peaks at -1 dBFS: clean on its own, past the rails when two of them are summed.
+ffmpeg -v error -y -f lavfi -i "sine=frequency=440:duration=3" -af volume=17dB -ar 16000 -ac 1 "$TMP/loud.wav"
 ffmpeg -v error -y -f lavfi -i "sine=frequency=440:duration=3" -ar 48000 -ac 2 "$TMP/tone48.wav"
 touch -d "2026-01-02 03:04:05" "$TMP/tone48.wav"
 touch -d "2026-01-03 03:04:05" "$TMP/speech.wav"
@@ -120,7 +122,13 @@ cat > "$FAKEAUDIO/pw-record" <<STUBEOF
 # open the device (the race tests park a caller in the file-wait watchdog).
 [ -n "\${PWREC_DELAY:-}" ] && sleep "\$PWREC_DELAY"
 for f in "\$@"; do :; done   # the output file is the last argument
-cp "$TMP/quiet.wav" "\$f"
+# PWREC_MIC / PWREC_SYS pick the fixture for each track of a "both" take.
+src="$TMP/quiet.wav"
+case "\$f" in
+  */mic.wav) src="\${PWREC_MIC:-\$src}" ;;
+  */system.wav) src="\${PWREC_SYS:-\$src}" ;;
+esac
+cp "\$src" "\$f"
 # Stay a process named pw-record (no exec): the CLI checks a recorder pid's name
 # before it signals it. Leave promptly on SIGINT, as the real recorder does.
 trap 'kill "\$c" 2>/dev/null; exit 0' INT TERM
@@ -317,6 +325,20 @@ eq "analyze re-measures" "$($CLI analyze "$IDH" | jq -r .clipped)" "true"
 check "list marks clipped rows" bash -c "$CLI list | grep -q 'clipped.*Hot'"
 check "list shows HH:MM:SS" bash -c "$CLI list | grep -q '00:00:03'"
 $CLI delete "$IDQ" --yes >/dev/null; $CLI delete "$IDH" --yes >/dev/null
+# A "both" take: two clean tracks whose sum would pass the rails. The mix is
+# limited, and the verdict is about the microphone, so neither is flagged.
+BLID=$(PATH="$FAKEPATH" PWREC_MIC="$TMP/loud.wav" PWREC_SYS="$TMP/loud.wav" "$CLI" record start --source both --title "Both Loud")
+( PATH="$FAKEPATH" "$CLI" record stop >/dev/null 2>&1 )
+BLD="$OMARECORDER_DIR/$BLID Both Loud"
+eq "clean tracks that sum hot are not flagged" "$(jq -r '.levels.clipped' "$BLD/meta.json")" "false"
+check "the mix is limited below the rails" bash -c "ffmpeg -nostats -i '$BLD/audio.wav' -af astats=measure_perchannel=none:measure_overall=Peak_level -f null - 2>&1 | awk -F': *' '/Peak level dB/ {p = \$2} END {exit !(p != \"\" && p < -0.5)}'"
+eq "the limited mix keeps the tracks' length" "$(ffprobe -v error -show_entries format=duration -of csv=p=0 "$BLD/audio.wav")" "$(ffprobe -v error -show_entries format=duration -of csv=p=0 "$BLD/mic.wav")"
+$CLI delete "$BLID" --yes >/dev/null
+BHID=$(PATH="$FAKEPATH" PWREC_MIC="$TMP/hot.wav" "$CLI" record start --source both --title "Both Hot")
+( PATH="$FAKEPATH" "$CLI" record stop >/dev/null 2>&1 )
+eq "a hot microphone in a both take is still flagged" "$(jq -r '.levels.clipped' "$OMARECORDER_DIR/$BHID Both Hot/meta.json")" "true"
+eq "and analyze agrees" "$($CLI analyze "$BHID" | jq -r .clipped)" "true"
+$CLI delete "$BHID" --yes >/dev/null
 
 }
 
