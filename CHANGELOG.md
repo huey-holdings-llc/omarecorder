@@ -6,6 +6,12 @@ All notable changes to this project are documented here. Format follows
 ## [Unreleased]
 
 ### Fixed
+- A "both" take no longer reports "the microphone gain is too high" when the
+  microphone is fine. The verdict measured the mix, which carries the call as
+  well; calls often arrive near 0 dBFS, and the two tracks are summed at full
+  level, so talking over someone pushed the sum past the rails while both raw
+  tracks stayed clean. The verdict now measures `mic.wav`, and the mix goes
+  through a limiter at -1 dBFS, so `audio.wav` itself no longer clips either.
 - GitHub shows the license as MIT instead of "Other". The dependency list at
   the bottom of `LICENSE` defeated its detector; it moved to `THIRD-PARTY.md`,
   and lint fails if anything is appended to `LICENSE` again. The license

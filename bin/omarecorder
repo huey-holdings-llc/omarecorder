@@ -851,11 +851,14 @@ record_stop() { # [--guard | --force]
   echo "$id ($(fmt_hms "$dur"))"
 }
 
-# mix_pair <mic> <sys> <out>: two tracks → one mono mix at the whisper rate
+# mix_pair <mic> <sys> <out>: two tracks → one mono mix at the whisper rate.
+# The tracks are summed at full level, so talking over a call that already
+# plays near 0 dBFS would push the sum past the rails; a limiter at -1 dBFS
+# catches those peaks (latency=true keeps the mix aligned with the raw tracks).
 mix_pair() {
   local out="$3"
   ffmpeg -v error -y -i "$1" -i "$2" \
-    -filter_complex "amix=inputs=2:duration=longest:normalize=0" -ar "$RATE" -ac 1 -c:a pcm_s16le "$out.tmp.$$.wav" 2>>"$LOG_FILE" \
+    -filter_complex "amix=inputs=2:duration=longest:normalize=0,alimiter=limit=0.891:level=false:latency=true" -ar "$RATE" -ac 1 -c:a pcm_s16le "$out.tmp.$$.wav" 2>>"$LOG_FILE" \
     && mv -f "$out.tmp.$$.wav" "$out" || { rm -f "$out.tmp.$$.wav"; log "amix failed for $out"; return 1; }
 }
 # mix_both <dir>: mic.wav + system.wav → audio.wav
@@ -994,8 +997,11 @@ repair_wav() {
 # A hard-clipped take sits at ~0 dBFS with many flat (saturated) runs; a
 # healthy one peaks well below that. Cheap (decode only), so run it on every
 # stop and import: it is the only way the user finds out before transcribing.
+# A "both" take is judged on its raw mic.wav: the verdict is advice about the
+# microphone's gain, and the mix also carries the call, which arrives near
+# 0 dBFS from most apps and which no input level can change.
 analyze_levels() {
-  local dir="$1"; local f="$dir/audio.wav"; [[ -f "$f" ]] || return 0
+  local dir="$1"; local f="$dir/audio.wav"; [[ -f "$dir/mic.wav" ]] && f="$dir/mic.wav"; [[ -f "$f" ]] || return 0
   # The ADC rails for the first ~0.7 s after capture starts (settling
   # transient); skip the head so a clean take is not reported as clipped.
   local skip=0 d; d=$(audio_duration "$f"); [[ "${d:-0}" =~ ^[0-9]+$ ]] && (( d > 6 )) && skip=2

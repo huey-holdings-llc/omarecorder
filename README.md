@@ -275,9 +275,12 @@ Delete whichever of these you no longer want.
   same source writes `$XDG_RUNTIME_DIR/omarecorder/level` a few times a second,
   and the popup, the Library and the bar show it. After stop and after import
   every take is measured again; a clipped one gets a warning in the lists and a
-  "mic gain too high" notification. Fix it at the source: lower the input level
-  (Audio popup, Input; or `wpctl set-volume @DEFAULT_AUDIO_SOURCE@ 0.30`) and
-  check a short take with `omarecorder analyze <id>` (`clipped: false`). Laptop
+  "mic gain too high" notification. A "both" take is judged on its microphone
+  track alone, since the call in `system.wav` often arrives near full scale and
+  no input level changes that; its mix goes through a limiter at -1 dBFS, so
+  talking over a loud call does not clip `audio.wav`. Fix it at the source:
+  lower the input level (Audio popup, Input; or
+  `wpctl set-volume @DEFAULT_AUDIO_SOURCE@ 0.30`) and check a short take with `omarecorder analyze <id>` (`clipped: false`). Laptop
   microphones commonly ship far too hot. 30 to 40 percent is a normal starting
   point, and whisper copes with quiet audio much better than with distorted audio.
 * **Transcribing**: Fast, Balanced or Accurate. A preset you do not have yet
