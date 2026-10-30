@@ -139,7 +139,7 @@ of them ship with Omarchy 4 except voxtype, which one command adds.
 | `wl-copy` | `wl-clipboard` | `copy` to the clipboard | yes |
 | `gio` | `glib2` | `delete` moves to the trash | yes |
 | `xdg-open` | `xdg-utils` | open folder, `obsidian://` links | yes |
-| `omarchy-notification-send` (`notify-send` fallback), `omarchy-launch-editor`, `omarchy-shell` | Omarchy | notifications, open transcript, Library toggle | yes |
+| `omarchy-notification-send` (`notify-send` fallback), `omarchy-launch-editor`, `omarchy-shell` | Omarchy | notifications, open transcript and dictionary, Library toggle | yes |
 | Obsidian | `obsidian` | Send to Obsidian (optional; without it the note lands next to the recording) | yes |
 
 Only voxtype, pw-record, pactl, ffmpeg/ffprobe, jq, flock and setsid are

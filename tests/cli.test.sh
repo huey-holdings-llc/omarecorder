@@ -1987,7 +1987,7 @@ for tool in xdg-open omarchy-launch-editor omarchy-shell; do
   printf '#!/bin/bash\nprintf "%%s\\n" "$@" > "%s/%s.args"\n' "$EX" "$tool" > "$EX/$tool"; chmod +x "$EX/$tool"
 done
 eq "dictionary edit prints the file" "$(PATH="$EX:$PATH" "$CLI" dictionary edit)" "$XDG_CONFIG_HOME/omarecorder/dictionary"
-check "and hands it to xdg-open" wait_for 3 grep -qx "$XDG_CONFIG_HOME/omarecorder/dictionary" "$EX/xdg-open.args"
+check "and hands it to the Omarchy editor, like open does" wait_for 3 grep -qx "$XDG_CONFIG_HOME/omarecorder/dictionary" "$EX/omarchy-launch-editor.args"
 # The editor gets a path through a private link named by the id: the folder's
 # title never reaches the terminal's command line.
 check "open hands the transcript to the editor" env PATH="$EX:$PATH" "$CLI" open "$IDS"
