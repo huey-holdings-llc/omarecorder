@@ -194,6 +194,7 @@ if [ "$1" = setup ]; then
   for a in "$@"; do case "$a" in --model) m=next ;; *) [ "${m:-}" = next ] && { m="$a"; break; } ;; esac; done
   head -c 100 /dev/zero > "$VOXTYPE_MODELS_DIR/ggml-${m:-small.en}.bin"; exit 0
 fi
+[ -n "${VOXSTUB_ARGS:-}" ] && printf '%s\n' "$@" > "$VOXSTUB_ARGS"
 n=0; [ -n "${VOXSTUB_COUNT:-}" ] && [ -f "$VOXSTUB_COUNT" ] && n=$(cat "$VOXSTUB_COUNT")
 n=$((n + 1)); [ -n "${VOXSTUB_COUNT:-}" ] && echo "$n" > "$VOXSTUB_COUNT"
 case "${VOXSTUB_MODE:-ok}" in
@@ -720,7 +721,10 @@ jq -c '.transcript = {model:"base.en"}' "$DT/meta.json" > "$DT/meta.json.t" && m
 $CLI trim "$IDT" --from 0 --to 2 >/dev/null
 eq "trim marks the transcript stale" "$(jq -r .transcript.stale "$DT/meta.json")" "true"
 eq "and says why (the Library words its note from it)" "$(jq -r .transcript.stale_reason "$DT/meta.json")" "trim"
-check "transcribe after trim" env PATH="$STUBMODE:$PATH" VOXTYPE_MODELS_DIR="$MODELSOK" "$CLI" transcribe "$IDT" --model base.en
+check "transcribe after trim" env VOXSTUB_ARGS="$TMP/vox.args" PATH="$STUBMODE:$PATH" VOXTYPE_MODELS_DIR="$MODELSOK" "$CLI" transcribe "$IDT" --model base.en
+# A Whisper model name alone does not pick the engine: voxtype keeps whatever
+# engine its own config names, so the call has to ask for whisper itself.
+eq "transcribe asks voxtype for the whisper engine" "$(paste -sd' ' "$TMP/vox.args" | grep -o -- '--engine whisper --model base.en')" "--engine whisper --model base.en"
 eq "new transcript clears stale" "$(jq -r '.transcript.stale // "absent"' "$DT/meta.json")" "absent"
 eq "stale set again by --restore" "$($CLI trim "$IDT" --restore >/dev/null; jq -r .transcript.stale "$DT/meta.json")" "true"
 eq "with restore as the reason" "$(jq -r .transcript.stale_reason "$DT/meta.json")" "restore"

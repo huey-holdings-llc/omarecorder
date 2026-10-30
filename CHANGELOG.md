@@ -6,6 +6,10 @@ All notable changes to this project are documented here. Format follows
 ## [Unreleased]
 
 ### Fixed
+- Transcription asks voxtype for the Whisper engine. A Whisper model name on
+  its own only sets voxtype's `[whisper]` model, so with another engine in
+  voxtype's config (Parakeet, for example) that engine transcribed instead,
+  while the transcript header named the Whisper model.
 - GitHub shows the license as MIT instead of "Other". The dependency list at
   the bottom of `LICENSE` defeated its detector; it moved to `THIRD-PARTY.md`,
   and lint fails if anything is appended to `LICENSE` again. The license
