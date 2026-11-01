@@ -6,6 +6,13 @@ All notable changes to this project are documented here. Format follows
 ## [Unreleased]
 
 ### Fixed
+- Transcription asks voxtype for the Whisper engine. A Whisper model name on
+  its own only sets voxtype's `[whisper]` model, so with another engine in
+  voxtype's config (Parakeet, for example) that engine transcribed instead,
+  while the transcript header named the Whisper model.
+- `dictionary edit` opens the file in the editor chosen in Omarchy
+  (`omarchy-launch-editor`), as opening a transcript already does, instead of
+  whatever app `xdg-open` picks for plain text. `xdg-open` stays the fallback.
 - GitHub shows the license as MIT instead of "Other". The dependency list at
   the bottom of `LICENSE` defeated its detector; it moved to `THIRD-PARTY.md`,
   and lint fails if anything is appended to `LICENSE` again. The license
