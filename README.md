@@ -103,6 +103,13 @@ the plugin's privacy statement remains simple and true.
   service and panel split and its test suite.
 * [anarlog](https://anarlog.so/) for the "session library" shape.
 
+Contributors:
+
+* Horacio ([kansoit](https://github.com/kansoit)) for the first outside
+  contributions: the Whisper engine fix and the dictionary opening in the
+  Omarchy editor ([#83](https://github.com/huey-holdings-llc/omarecorder/pull/83)),
+  the Parakeet testing that shaped multilingual support, and testing Spanish.
+
 ## What it does
 
 * **Bar widget**: record/stop with a running timer and a live input meter that
@@ -423,6 +430,14 @@ Fast and Balanced are English-only models (the `.en` in their names). For any
 other language, or with `language` set to `auto`, use Accurate. The Library
 says so when the language setting and the chosen preset disagree, and
 `transcribe` prints a warning.
+
+Languages: English is tested by the maintainer. Spanish is tested by Horacio
+([kansoit](https://github.com/kansoit)), who records in Spanish every day and
+retests when a new OmaRecorder or voxtype release lands. Their testing found voxtype's
+Parakeet engine handles Spanish better than any Whisper size, and a Parakeet
+preset is being worked on in
+[#80](https://github.com/huey-holdings-llc/omarecorder/issues/80). Every other
+language is untested; if you record in one and want to check it, say so in #80.
 
 ### CLI
 
