@@ -287,7 +287,7 @@ Delete whichever of these you no longer want.
   check a short take with `omarecorder analyze <id>` (`clipped: false`). Laptop
   microphones commonly ship far too hot. 30 to 40 percent is a normal starting
   point, and whisper copes with quiet audio much better than with distorted audio.
-* **Transcribing**: Fast, Balanced or Accurate. A preset you do not have yet
+* **Transcribing**: Fast, Balanced, Accurate or Parakeet. A preset you do not have yet
   shows its size on its chip (`1.6 GB ↓`) and fetches in the background, with
   the percentage on the Library's button. Fast and Balanced understand English
   only (see Models). Takes
@@ -420,23 +420,27 @@ sets the piece length.
 
 ### Models
 
-Three presets, mapped to voxtype's whisper models: Fast = `base.en` (142 MB),
-Balanced = `small.en` (466 MB), Accurate = `large-v3-turbo` (1.6 GB). Downloads
+Four presets. Three run on voxtype's Whisper engine: Fast = `base.en` (142 MB),
+Balanced = `small.en` (466 MB), Accurate = `large-v3-turbo` (1.6 GB). The fourth,
+Parakeet = `parakeet-tdt-0.6b-v3-int8` (670 MB), runs on voxtype's Parakeet
+engine. Each transcription passes its preset's engine to voxtype, so the
+engine in voxtype's own config does not matter. Downloads
 run `voxtype setup --download` in a `systemd-run --user` unit. Estimates start
 from a default speed and are replaced by what your machine measured the first
 time each model transcribes a take of 60 seconds or more.
 
 Fast and Balanced are English-only models (the `.en` in their names). For any
-other language, or with `language` set to `auto`, use Accurate. The Library
+other language, or with `language` set to `auto`, use Accurate or Parakeet.
+Parakeet covers 25 European languages and detects the language itself, so the
+`language` setting has no effect on it. The Library
 says so when the language setting and the chosen preset disagree, and
 `transcribe` prints a warning.
 
 Languages: English is tested by the maintainer. Spanish is tested by Horacio
 ([kansoit](https://github.com/kansoit)), who records in Spanish every day and
 retests when a new OmaRecorder or voxtype release lands. Their testing found voxtype's
-Parakeet engine handles Spanish better than any Whisper size, and a Parakeet
-preset is being worked on in
-[#80](https://github.com/huey-holdings-llc/omarecorder/issues/80). Every other
+Parakeet engine handles Spanish better than any Whisper size, hence the
+Parakeet preset ([#80](https://github.com/huey-holdings-llc/omarecorder/issues/80)). Every other
 language is untested; if you record in one and want to check it, say so in #80.
 
 ### CLI
@@ -534,7 +538,8 @@ voxtype downloading a model you asked for. See Privacy and security above.
 
 **Which model should I use?**
 Fast (`base.en`) for a quick look, Balanced (`small.en`) for most things,
-Accurate (`large-v3-turbo`) when the words matter. The picker shows an estimate
+Accurate (`large-v3-turbo`) when the words matter. For a European language
+other than English, try Parakeet (`parakeet-tdt-0.6b-v3-int8`) too. The picker shows an estimate
 for each, learned from your own machine after the first run.
 
 **Why is a long recording transcribed in pieces?**

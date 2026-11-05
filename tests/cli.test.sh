@@ -192,7 +192,13 @@ cat > "$STUBMODE/voxtype" <<'STUBEOF'
 if [ "$1" = setup ]; then
   [ "${VOXSTUB_MODE:-ok}" = dlhang ] && exec sleep 600
   for a in "$@"; do case "$a" in --model) m=next ;; *) [ "${m:-}" = next ] && { m="$a"; break; } ;; esac; done
-  head -c 100 /dev/zero > "$VOXTYPE_MODELS_DIR/ggml-${m:-small.en}.bin"; exit 0
+  # Parakeet is a directory that voxtype finishes with its manifest; Whisper one ggml file.
+  case "${m:-}" in
+    parakeet-*) mkdir -p "$VOXTYPE_MODELS_DIR/$m"; head -c 100 /dev/zero > "$VOXTYPE_MODELS_DIR/$m/encoder-model.int8.onnx"
+                echo '{"version":1}' > "$VOXTYPE_MODELS_DIR/$m/.voxtype-manifest.json" ;;
+    *) head -c 100 /dev/zero > "$VOXTYPE_MODELS_DIR/ggml-${m:-small.en}.bin" ;;
+  esac
+  exit 0
 fi
 [ -n "${VOXSTUB_ARGS:-}" ] && printf '%s\n' "$@" > "$VOXSTUB_ARGS"
 n=0; [ -n "${VOXSTUB_COUNT:-}" ] && [ -f "$VOXSTUB_COUNT" ] && n=$(cat "$VOXSTUB_COUNT")
@@ -914,6 +920,22 @@ ensure_base
 check "models --json lists base.en" bash -c "$CLI models --json | jq -e '.[] | select(.name==\"base.en\")'"
 eq "estimate uses default rtf" "$($CLI estimate "$ID1" --model base.en | jq -r '.rtf, .source' | paste -sd,)" "10,default"
 fails "estimate rejects unknown model" "$CLI" estimate "$ID1" --model nope
+# Parakeet: one catalog entry, run on voxtype's parakeet engine.
+PK=parakeet-tdt-0.6b-v3-int8
+eq "models --json lists Parakeet on its own engine" "$($CLI models --json | jq -r --arg m "$PK" '.[] | select(.name==$m) | "\(.engine) \(.label)"')" "parakeet Parakeet"
+eq "every preset names its engine" "$($CLI models --json | jq -r 'map(select(.engine == null)) | length')" "0"
+# Installed means voxtype finished the model directory (it writes the manifest last).
+PKM="$TMP/pkmodels"; mkdir -p "$PKM/$PK"; head -c 100 /dev/zero > "$PKM/$PK/encoder-model.int8.onnx"
+eq "a Parakeet directory without its manifest is not installed" "$(VOXTYPE_MODELS_DIR="$PKM" $CLI models --json | jq -r --arg m "$PK" '.[] | select(.name==$m) | .installed')" "false"
+check "model download fetches Parakeet" env PATH="$STUBMODE:$PATH" VOXTYPE_MODELS_DIR="$PKM" "$CLI" model download "$PK"
+eq "and then it counts as installed" "$(VOXTYPE_MODELS_DIR="$PKM" $CLI models --json | jq -r --arg m "$PK" '.[] | select(.name==$m) | .installed')" "true"
+# A transcription asks voxtype for the parakeet engine, and a non-English
+# language gets no English-only warning (Parakeet is multilingual).
+run_cli env VOXSTUB_ARGS="$TMP/vox.pk.args" PATH="$STUBMODE:$PATH" VOXTYPE_MODELS_DIR="$PKM" "$CLI" transcribe "$ID1" --model "$PK" --language es
+eq "transcribe with Parakeet succeeds" "$RC" "0"
+eq "it asks voxtype for the parakeet engine" "$(paste -sd' ' "$TMP/vox.pk.args" | grep -o -- "--engine parakeet --model $PK")" "--engine parakeet --model $PK"
+eq "no English-only warning for Parakeet" "$(grep -c 'only understands English' <<<"$ERR")" "0"
+eq "the transcript header names the Parakeet model" "$(head -1 "$($CLI show "$ID1" --json | jq -r .dir)/transcript.md" | grep -o "model=$PK")" "model=$PK"
 
 }
 

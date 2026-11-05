@@ -1041,8 +1041,8 @@ Item {
                 visible: !root.selectedJob && !root.selectedLive && !!root.selected && State.languageMismatch(root.modelForRun, languageHint.lang)
                 width: parent.width
                 text: languageHint.lang === "auto"
-                  ? "Fast and Balanced only understand English and cannot detect a language. Pick Accurate for anything else."
-                  : "Fast and Balanced only understand English, and the language setting is \"" + languageHint.lang + "\". Pick Accurate for other languages."
+                  ? "Fast and Balanced only understand English and cannot detect a language. Pick Accurate or Parakeet for anything else."
+                  : "Fast and Balanced only understand English, and the language setting is \"" + languageHint.lang + "\". Pick Accurate or Parakeet for other languages."
                 color: Color.accent
                 wrapMode: Text.Wrap
                 font.family: root.fontFamily
