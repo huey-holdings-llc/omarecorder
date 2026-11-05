@@ -52,14 +52,18 @@ CHUNK_S="${OMARECORDER_CHUNK_S:-1800}"
 STOP_CONFIRM_S="${OMARECORDER_STOP_CONFIRM_S:-3600}"
 [[ "$STOP_CONFIRM_S" =~ ^[0-9]+$ ]] || STOP_CONFIRM_S=3600
 
-# The three presets OmaRecorder offers (voxtype can download more, but three
-# clear choices beat a list of eight). size_mb from ggml file sizes; rtf =
-# default realtime factor (audio seconds per wall second), replaced by
-# measured values in bench.json after the first run on this machine.
+# The presets OmaRecorder offers (voxtype can download more, but a few clear
+# choices beat a list of eight). engine = the voxtype engine each one runs on,
+# passed per run with --engine. size_mb from the downloaded files (ggml for
+# Whisper, the model directory for Parakeet); rtf = default realtime factor
+# (audio seconds per wall second), replaced by measured values in bench.json
+# after the first run on this machine. Parakeet v3 is multilingual (25
+# European languages) and detects the language itself.
 MODEL_CATALOG='[
-  {"name":"base.en","size_mb":142,"rtf":10,"label":"Fast"},
-  {"name":"small.en","size_mb":466,"rtf":4,"label":"Balanced"},
-  {"name":"large-v3-turbo","size_mb":1600,"rtf":3,"label":"Accurate"}
+  {"name":"base.en","engine":"whisper","size_mb":142,"rtf":10,"label":"Fast"},
+  {"name":"small.en","engine":"whisper","size_mb":466,"rtf":4,"label":"Balanced"},
+  {"name":"large-v3-turbo","engine":"whisper","size_mb":1600,"rtf":3,"label":"Accurate"},
+  {"name":"parakeet-tdt-0.6b-v3-int8","engine":"parakeet","size_mb":670,"rtf":8,"label":"Parakeet"}
 ]'
 
 # -------------------------------------------------------------- helpers -----
@@ -1805,7 +1809,26 @@ cmd_tidy() { # tidy <id>: (re)build transcript.tidy.md
 transcript_file() { if [[ "${2:-}" != "raw" && -s "$1/transcript.tidy.md" ]]; then echo "$1/transcript.tidy.md"; else echo "$1/transcript.md"; fi; }
 
 # --------------------------------------------------------------- models ----
-model_installed() { [[ -f "$VOXTYPE_MODELS_DIR/ggml-$1.bin" ]]; }
+# The engine a catalog model runs on; whisper for anything the catalog does not name.
+model_engine() {
+  local e; e=$(jq -r --arg m "$1" '.[] | select(.name==$m) | .engine // empty' <<<"$MODEL_CATALOG")
+  echo "${e:-whisper}"
+}
+# Whisper models are one ggml file. Other engines download a directory, and
+# voxtype writes its manifest there once every file is in place, so a
+# half-finished download does not count as installed.
+model_installed() {
+  if [[ $(model_engine "$1") == whisper ]]; then [[ -f "$VOXTYPE_MODELS_DIR/ggml-$1.bin" ]]
+  else [[ -f "$VOXTYPE_MODELS_DIR/$1/.voxtype-manifest.json" ]]; fi
+}
+# Bytes of a model on disk so far, finished or partial (download progress).
+model_bytes() {
+  local f="$VOXTYPE_MODELS_DIR/ggml-$1.bin" d="$VOXTYPE_MODELS_DIR/$1"
+  if [[ $(model_engine "$1") == whisper ]]; then
+    if [[ -f "$f" ]]; then file_size "$f"; elif [[ -f "$f.part" ]]; then file_size "$f.part"; else echo 0; fi
+  elif [[ -d "$d" ]]; then du -sb "$d" 2>/dev/null | cut -f1
+  else echo 0; fi
+}
 model_label() { # "Fast (base.en)" or just the name
   local l; l=$(jq -r --arg m "$1" '.[] | select(.name==$m) | .label' <<<"$MODEL_CATALOG")
   [[ -n "$l" ]] && echo "$l ($1)" || echo "$1"
@@ -1903,7 +1926,7 @@ run_detached() {
 }
 
 _dl_worker() {
-  local name="$1" b; local f="$VOXTYPE_MODELS_DIR/ggml-$name.bin"
+  local name="$1" b
   # model cancel stops the unit and owns the job removal; a TERM here is a
   # clean exit, not a failure (mirrors _tx_worker's trap contract).
   trap 'exit 0' TERM INT HUP
@@ -1912,7 +1935,7 @@ _dl_worker() {
   # Progress = bytes on disk, published into the job entry every 2 s (the UI
   # only watches state.json; nothing polls the model directory).
   while pid_alive "$child"; do
-    sleep 2; b=0; [[ -f "$f" ]] && b=$(file_size "$f"); [[ -f "$f.part" ]] && b=$(file_size "$f.part")
+    sleep 2; b=$(model_bytes "$name"); [[ "$b" =~ ^[0-9]+$ ]] || b=0
     state_set --arg m "$name" --argjson b "$b" '.jobs |= map(if .type=="download" and .model==$m then .bytes_done=$b else . end)' || true
   done
   local ok=0; wait "$child" && model_installed "$name" && ok=1
@@ -2005,7 +2028,7 @@ cmd_transcribe() {
   # notification (first stderr line only) showed it instead of the error.
   local langwarn=""
   [[ "$model" == *.en && -n "$lang" && "$lang" != "en" ]] \
-    && langwarn="omarecorder: warning: $model only understands English, so language $lang has no effect; Accurate (large-v3-turbo) handles other languages"
+    && langwarn="omarecorder: warning: $model only understands English, so language $lang has no effect; Accurate (large-v3-turbo) and Parakeet handle other languages"
   if ! model_installed "$model"; then
     if (( dl )); then
       # All the recording validations above already passed, so the intent is
@@ -2160,10 +2183,10 @@ _tx_worker() {
       log "enhance failed for $id; transcribing the original audio"
     fi
   fi
-  # A Whisper name passed with --model only sets voxtype's [whisper] model, so
-  # without --engine a user whose voxtype config says parakeet (or any other
-  # engine) would get that engine instead. OmaRecorder's catalog is Whisper's.
-  local -a opts=(--engine whisper --model "$model" --language "$lang")
+  # A model name passed with --model only sets that engine's model in voxtype,
+  # so without --engine voxtype would run whatever engine its own config names.
+  # Each catalog entry says which engine it runs on.
+  local -a opts=(--engine "$(model_engine "$model")" --model "$model" --language "$lang")
   [[ "$threads" =~ ^[1-9][0-9]*$ ]] && opts+=(--threads "$threads")
   local -a plan; mapfile -t plan < <(plan_chunks "$input" "$dur")
   local n=${#plan[@]} i=0 piece s e cwav="$input" ctxt="$RUN_DIR/tx-$id.chunk.txt" rc=0 prev_kept=0 why=""

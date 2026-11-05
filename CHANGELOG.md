@@ -5,6 +5,15 @@ All notable changes to this project are documented here. Format follows
 
 ## [Unreleased]
 
+### Added
+- A fourth preset, Parakeet (`parakeet-tdt-0.6b-v3-int8`, 670 MB), on
+  voxtype's Parakeet engine. It covers 25 European languages and detects the
+  language itself, so it gets no English-only warning. Each preset in the
+  catalog names its engine, and transcription passes it to voxtype with
+  `--engine`. Parakeet's model is a directory rather than one ggml file: it
+  counts as installed once voxtype has written its manifest, and the download
+  progress counts the directory (#80).
+
 ### Changed
 - README credits contributors, and lists which languages are tested and by
   whom: English by the maintainer, Spanish by Horacio (kansoit).
