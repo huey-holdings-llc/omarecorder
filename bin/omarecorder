@@ -2331,7 +2331,7 @@ cmd_setup() {
   # Every external tool we call, with the package that provides it. "required"
   # tools block recording/transcribing; the rest only disable one feature.
   local tools='[
-    {"tool":"voxtype","package":"omarchy install dictation","required":true,"for":"transcription"},
+    {"tool":"voxtype","package":"omarchy pkg add voxtype-bin","required":true,"for":"transcription"},
     {"tool":"pw-record","package":"pipewire","required":true,"for":"recording"},
     {"tool":"pactl","package":"libpulse","required":true,"for":"finding the microphone"},
     {"tool":"ffmpeg","package":"ffmpeg","required":true,"for":"import, mixing, levels"},
