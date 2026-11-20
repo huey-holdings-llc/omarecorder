@@ -1,8 +1,8 @@
 # OmaRecorder
 
 Record conversations and meetings from the Omarchy bar, keep the audio, and
-transcribe it locally, later, with the voxtype/whisper engine Omarchy already
-ships. One click to record, a library to browse, a transcript beside every
+transcribe it locally, later, with voxtype, the whisper engine Omarchy offers
+for dictation. One click to record, a library to browse, a transcript beside every
 recording, and a note in Obsidian when you want one. Nothing leaves your machine.
 
 ![OmaRecorder](preview.png)
@@ -130,12 +130,16 @@ Contributors:
 ## Requirements
 
 Every external tool the CLI calls, with the Arch package that provides it. All
-of them ship with Omarchy 4 except voxtype, which one command adds.
+of them ship with Omarchy 4 except voxtype, which one command adds. Since
+Omarchy 4.5 the default dictation app is Superwhisper, so voxtype is no longer
+there unless you chose it. `omarchy pkg add voxtype-bin` installs it without
+touching your dictation setup. If you want voxtype for dictation as well, run
+`omarchy install dictation voxtype` instead (it replaces Superwhisper).
 `omarecorder setup check` tells you what is missing.
 
 | Tool | Package | Used for | In Omarchy 4 |
 |---|---|---|---|
-| `voxtype` | `omarchy install dictation` | transcription engine, model downloads | one command away |
+| `voxtype` | `omarchy pkg add voxtype-bin` | transcription engine, model downloads | one command away |
 | `pw-record`, `pw-play` | `pipewire` | recording; playback fallback | yes |
 | `pactl` | `libpulse` | finding the microphone and monitor | yes (with pipewire-pulse) |
 | `ffmpeg`, `ffprobe` | `ffmpeg` | import, mixing, levels, live meter, waveform, trim, chunking | yes |
@@ -511,7 +515,7 @@ script; `record stop --guard` asks first, the way the toggle does.
 
 ## FAQ
 
-**How is this different from voxtype, which Omarchy already ships?**
+**How is this different from voxtype, which Omarchy offers for dictation?**
 Same engine, different job. voxtype is dictation: hold a key, speak, and the
 text is typed into whatever window has focus, right away. OmaRecorder is for
 recordings you want to keep: meetings, calls, game sessions, lectures. It adds

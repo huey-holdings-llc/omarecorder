@@ -5,6 +5,17 @@ All notable changes to this project are documented here. Format follows
 
 ## [Unreleased]
 
+## [1.5.1] - 2026-11-20
+
+### Fixed
+- The setup card, `setup check` and the README told you to run
+  `omarchy install dictation`, which no longer exists on Omarchy 4.5. They now
+  say `omarchy pkg add voxtype-bin`, which installs the transcription engine
+  and leaves your dictation app alone, and mention
+  `omarchy install dictation voxtype` for people who want voxtype for
+  dictation too. Omarchy 4.5 ships Superwhisper as its default dictation app,
+  so voxtype is usually missing on a new install.
+
 ### Changed
 - README credits contributors, and lists which languages are tested and by
   whom: English by the maintainer, Spanish by Horacio (kansoit).

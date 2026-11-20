@@ -86,7 +86,10 @@ Column {
   function issues() {
     var s = root.setup, out = []
     if (!s || s.ok !== false) return out
-    if (!s.voxtype) out.push("voxtype is not installed. Run: omarchy install dictation")
+    if (!s.voxtype) {
+      out.push("voxtype is not installed. Run: omarchy pkg add voxtype-bin")
+      out.push("To use voxtype for dictation too, run omarchy install dictation voxtype instead (it replaces your current dictation app).")
+    }
     // Every tool the CLI could not find, with the package that provides it.
     var miss = s.missing || []
     for (var i = 0; i < miss.length; i++) {

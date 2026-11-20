@@ -1545,6 +1545,10 @@ check "setup check lists tools" bash -c "\"$CLI\" setup check --json | jq -e '.t
 mkdir -p "$TMP/nowl"; ln -s /usr/bin/* "$TMP/nowl/" 2>/dev/null; rm -f "$TMP/nowl/wl-copy"
 ( PATH="$TMP/nowl" "$CLI" setup check --json > "$TMP/setup.json" 2>/dev/null || true )
 eq "missing wl-copy reported with package" "$(jq -r '.missing[] | select(.tool=="wl-copy") | .package' "$TMP/setup.json")" "wl-clipboard"
+# Omarchy 4.5 dropped `omarchy install dictation`; the hint must name a command that exists.
+mkdir -p "$TMP/novoxtype"; ln -s /usr/bin/* "$TMP/novoxtype/" 2>/dev/null; rm -f "$TMP/novoxtype/voxtype"
+( PATH="$TMP/novoxtype" "$CLI" setup check --json > "$TMP/setup-novox.json" 2>/dev/null || true )
+eq "missing voxtype names the package command" "$(jq -r '.missing[] | select(.tool=="voxtype") | .package' "$TMP/setup-novox.json")" "omarchy pkg add voxtype-bin"
 # A machine with no microphone at all (a desktop without one) passes setup when
 # the source does not use one; it used to stay "Setup needed" forever.
 NOMIC="$TMP/nomic"; mkdir -p "$NOMIC"; printf '#!/bin/bash\nexit 0\n' > "$NOMIC/pactl"; chmod +x "$NOMIC/pactl"
